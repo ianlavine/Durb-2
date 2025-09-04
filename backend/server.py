@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
@@ -13,7 +14,7 @@ from .state import GraphState
 GRAPH_PATH: Path = Path(__file__).resolve().parent.parent / "graph.json"
 TICK_INTERVAL_SECONDS: float = 0.1
 WEBSOCKET_HOST: str = "0.0.0.0"
-WEBSOCKET_PORT: int = 8765
+WEBSOCKET_PORT: int = int(os.environ.get("PORT", 8765))
 
 
 class WebSocketServer:

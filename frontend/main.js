@@ -1,6 +1,12 @@
 (() => {
+  // Dynamic WebSocket URL - works locally and when hosted
   const HOST = location.hostname || 'localhost';
-  const WS_URL = `ws://${HOST}:8765`;
+  const isLocal = HOST === 'localhost' || HOST === '127.0.0.1' || HOST.startsWith('192.168.') || HOST.startsWith('10.');
+  const WS_PORT = isLocal ? ':8765' : '';
+  const WS_PROTOCOL = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const WS_URL = `${WS_PROTOCOL}//${HOST}${WS_PORT}`;
+  
+  console.log('Connecting to WebSocket:', WS_URL);
 
   const config = {
     type: Phaser.AUTO,
