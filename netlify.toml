@@ -1,0 +1,6 @@
+[build]
+  publish = "frontend"
+  ignore = "git diff --quiet $CACHED_COMMIT_REF $COMMIT_REF ."
+
+[build.environment]
+  # No Python needed for frontend

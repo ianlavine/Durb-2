@@ -1,10 +1,7 @@
 (() => {
-  // Dynamic WebSocket URL - works locally and when hosted
-  const HOST = location.hostname || 'localhost';
-  const isLocal = HOST === 'localhost' || HOST === '127.0.0.1' || HOST.startsWith('192.168.') || HOST.startsWith('10.');
-  const WS_PORT = isLocal ? ':8765' : '';
-  const WS_PROTOCOL = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const WS_URL = `${WS_PROTOCOL}//${HOST}${WS_PORT}`;
+  // For now, always connect to localhost backend for testing
+  // TODO: Replace with your deployed backend URL once it's ready
+  const WS_URL = 'ws://localhost:8765';
   
   console.log('Connecting to WebSocket:', WS_URL);
 
