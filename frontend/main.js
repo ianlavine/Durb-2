@@ -1,7 +1,6 @@
 (() => {
-  // For now, always connect to localhost backend for testing
-  // TODO: Replace with your deployed backend URL once it's ready
-  const WS_URL = 'ws://localhost:8765';
+  // Connect to deployed backend on Render
+  const WS_URL = 'wss://durb-2.onrender.com';
   
   console.log('Connecting to WebSocket:', WS_URL);
 
