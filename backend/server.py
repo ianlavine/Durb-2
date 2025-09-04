@@ -256,6 +256,184 @@ class WebSocketServer:
                 init2["myPlayerId"] = 2
                 init2["token"] = tok
                 await websocket.send(json.dumps(init2))
+        elif mtype == "buildBridge":
+            # Handle bridge building ability
+            from_node_id = msg.get("fromNodeId")
+            to_node_id = msg.get("toNodeId")
+            bidirectional = msg.get("bidirectional", False)
+            cost = msg.get("cost", 0)
+            
+            # Validate basic parameters
+            if token is None or from_node_id is None or to_node_id is None:
+                await websocket.send(json.dumps({"type": "bridgeError", "message": "Invalid parameters"}))
+                return
+            
+            player_id = self.token_to_player_id.get(token)
+            if player_id is None:
+                await websocket.send(json.dumps({"type": "bridgeError", "message": "Invalid player"}))
+                return
+                
+            # Only allow during playing phase
+            if getattr(self.state, "phase", "picking") != "playing":
+                await websocket.send(json.dumps({"type": "bridgeError", "message": "Not in playing phase"}))
+                return
+                
+            # Validate nodes exist and are different
+            from_node = self.state.nodes.get(from_node_id)
+            to_node = self.state.nodes.get(to_node_id)
+            if from_node is None or to_node is None:
+                await websocket.send(json.dumps({"type": "bridgeError", "message": "Invalid nodes"}))
+                return
+            if from_node_id == to_node_id:
+                await websocket.send(json.dumps({"type": "bridgeError", "message": "Cannot connect node to itself"}))
+                return
+                
+            # Validate player ownership: from_node must be owned by player
+            if from_node.owner != player_id:
+                await websocket.send(json.dumps({"type": "bridgeError", "message": "You must own the starting node"}))
+                return
+                
+            # Note: to_node can be owned by anyone (player, opponent, or unowned)
+                
+            # Check if player has enough gold
+            player_gold = self.state.player_gold.get(player_id, 0.0)
+            if player_gold < cost:
+                await websocket.send(json.dumps({"type": "bridgeError", "message": "Not enough gold"}))
+                return
+                
+            # Check if edge already exists between these nodes
+            edge_exists = False
+            for edge in self.state.edges.values():
+                if ((edge.source_node_id == from_node_id and edge.target_node_id == to_node_id) or
+                    (edge.source_node_id == to_node_id and edge.target_node_id == from_node_id)):
+                    edge_exists = True
+                    break
+                    
+            if edge_exists:
+                await websocket.send(json.dumps({"type": "bridgeError", "message": "Edge already exists between these nodes"}))
+                return
+                
+            # Check for edge intersections with existing edges
+            if self._edges_would_intersect(from_node, to_node):
+                await websocket.send(json.dumps({"type": "bridgeError", "message": "Bridge would intersect existing edge"}))
+                return
+                
+            # All validations passed - create the edge
+            new_edge_id = max(self.state.edges.keys(), default=0) + 1
+            from .models import Edge
+            new_edge = Edge(
+                id=new_edge_id,
+                source_node_id=from_node_id,
+                target_node_id=to_node_id,
+                bidirectional=bidirectional,
+                forward=True,
+                on=False,
+                flowing=False
+            )
+            
+            # Add edge to state
+            self.state.edges[new_edge_id] = new_edge
+            from_node.attached_edge_ids.append(new_edge_id)
+            to_node.attached_edge_ids.append(new_edge_id)
+            
+            # Deduct gold cost
+            self.state.player_gold[player_id] = max(0.0, player_gold - cost)
+            
+            # Broadcast successful edge creation to all clients
+            edge_data = {
+                "type": "newEdge",
+                "edge": {
+                    "id": new_edge_id,
+                    "source": from_node_id,
+                    "target": to_node_id,
+                    "bidirectional": bidirectional,
+                    "forward": True,
+                    "on": False,
+                    "flowing": False
+                }
+            }
+            for client_ws in self.game_clients.values():
+                try:
+                    await client_ws.send(json.dumps(edge_data))
+                except Exception:
+                    pass
+                    
+        elif mtype == "createCapital":
+            # Handle capital creation ability
+            node_id = msg.get("nodeId")
+            cost = msg.get("cost", 0)
+            
+            # Validate basic parameters
+            if token is None or node_id is None:
+                await websocket.send(json.dumps({"type": "capitalError", "message": "Invalid parameters"}))
+                return
+            
+            player_id = self.token_to_player_id.get(token)
+            if player_id is None:
+                await websocket.send(json.dumps({"type": "capitalError", "message": "Invalid player"}))
+                return
+                
+            # Only allow during playing phase
+            if getattr(self.state, "phase", "picking") != "playing":
+                await websocket.send(json.dumps({"type": "capitalError", "message": "Not in playing phase"}))
+                return
+                
+            # Validate node exists
+            node = self.state.nodes.get(node_id)
+            if node is None:
+                await websocket.send(json.dumps({"type": "capitalError", "message": "Invalid node"}))
+                return
+                
+            # Validate player ownership: node must be owned by player
+            if node.owner != player_id:
+                await websocket.send(json.dumps({"type": "capitalError", "message": "You must own this node"}))
+                return
+                
+            # Check if player has enough gold
+            player_gold = self.state.player_gold.get(player_id, 0.0)
+            if player_gold < cost:
+                await websocket.send(json.dumps({"type": "capitalError", "message": "Not enough gold"}))
+                return
+                
+            # Check if node is already a capital
+            if hasattr(self.state, 'capital_nodes') and node_id in self.state.capital_nodes:
+                await websocket.send(json.dumps({"type": "capitalError", "message": "Node is already a capital"}))
+                return
+                
+            # All validations passed - create the capital
+            if not hasattr(self.state, 'capital_nodes'):
+                self.state.capital_nodes = set()
+            self.state.capital_nodes.add(node_id)
+            
+            # Deduct gold cost
+            self.state.player_gold[player_id] = max(0.0, player_gold - cost)
+            
+            # Broadcast successful capital creation to all clients
+            capital_data = {
+                "type": "newCapital",
+                "nodeId": node_id
+            }
+            for client_ws in self.game_clients.values():
+                try:
+                    await client_ws.send(json.dumps(capital_data))
+                except Exception:
+                    pass
+                    
+            # Check for capital victory condition immediately after capital creation
+            winner_id = self.state.check_capital_victory()
+            if winner_id is not None:
+                # Game ended due to capital victory
+                victory_msg = json.dumps({"type": "gameOver", "winnerId": winner_id})
+                for client_ws in self.game_clients.values():
+                    try:
+                        await client_ws.send(victory_msg)
+                    except Exception:
+                        pass
+                # Stop the game
+                self.token_to_player_id.clear()
+                self.game_clients.clear()
+                self.ws_to_token.clear()
+            
         elif mtype == "quitGame":
             if token not in self.token_to_player_id:
                 return
@@ -309,8 +487,86 @@ class WebSocketServer:
             if not self.game_clients:
                 continue
             self.state.simulate_tick(TICK_INTERVAL_SECONDS)
+            
+            # Check for capital victory condition
+            winner_id = self.state.check_capital_victory()
+            if winner_id is not None:
+                # Game ended due to capital victory
+                victory_msg = json.dumps({"type": "gameOver", "winnerId": winner_id})
+                for client_ws in self.game_clients.values():
+                    try:
+                        await client_ws.send(victory_msg)
+                    except Exception:
+                        pass
+                # Stop the game
+                self.token_to_player_id.clear()
+                self.game_clients.clear()
+                self.ws_to_token.clear()
+                return
+                
             msg = json.dumps(self.state.to_tick_message())
             await self._broadcast(msg)
+
+    def _edges_would_intersect(self, from_node, to_node) -> bool:
+        """Check if a new edge from from_node to to_node would intersect any existing edges."""
+        # Get coordinates of the new edge
+        x1, y1 = from_node.x, from_node.y
+        x2, y2 = to_node.x, to_node.y
+        
+        # Check intersection with all existing edges
+        for edge in self.state.edges.values():
+            source_node = self.state.nodes.get(edge.source_node_id)
+            target_node = self.state.nodes.get(edge.target_node_id)
+            if source_node is None or target_node is None:
+                continue
+                
+            x3, y3 = source_node.x, source_node.y
+            x4, y4 = target_node.x, target_node.y
+            
+            # Skip if edges share a node (they're allowed to connect at endpoints)
+            if (from_node.id == source_node.id or from_node.id == target_node.id or 
+                to_node.id == source_node.id or to_node.id == target_node.id):
+                continue
+                
+            # Check if line segments intersect
+            if self._line_segments_intersect(x1, y1, x2, y2, x3, y3, x4, y4):
+                return True
+                
+        return False
+        
+    def _line_segments_intersect(self, x1, y1, x2, y2, x3, y3, x4, y4) -> bool:
+        """Check if two line segments intersect using the orientation method."""
+        def orientation(px, py, qx, qy, rx, ry):
+            """Find orientation of ordered triplet (p, q, r).
+            Returns 0 if collinear, 1 if clockwise, 2 if counterclockwise."""
+            val = (qy - py) * (rx - qx) - (qx - px) * (ry - qy)
+            if abs(val) < 1e-10:  # Use small epsilon for floating point comparison
+                return 0
+            return 1 if val > 0 else 2
+            
+        def on_segment(px, py, qx, qy, rx, ry):
+            """Check if point q lies on line segment pr."""
+            return (qx <= max(px, rx) and qx >= min(px, rx) and
+                    qy <= max(py, ry) and qy >= min(py, ry))
+        
+        # Find the four orientations needed for general and special cases
+        o1 = orientation(x1, y1, x2, y2, x3, y3)
+        o2 = orientation(x1, y1, x2, y2, x4, y4)
+        o3 = orientation(x3, y3, x4, y4, x1, y1)
+        o4 = orientation(x3, y3, x4, y4, x2, y2)
+        
+        # General case
+        if o1 != o2 and o3 != o4:
+            return True
+            
+        # Special cases for collinear points
+        if (o1 == 0 and on_segment(x1, y1, x3, y3, x2, y2) or
+            o2 == 0 and on_segment(x1, y1, x4, y4, x2, y2) or
+            o3 == 0 and on_segment(x3, y3, x1, y1, x4, y4) or
+            o4 == 0 and on_segment(x3, y3, x2, y2, x4, y4)):
+            return True
+            
+        return False
 
     async def _broadcast(self, message: str) -> None:
         to_remove: List[websockets.WebSocketServerProtocol] = []

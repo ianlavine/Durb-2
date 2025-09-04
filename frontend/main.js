@@ -30,10 +30,21 @@
   let myPlayerId = null;
   let phase = 'picking';
   let myPicked = false;
-  let goldValue = 0; // 0..5
+  let goldValue = 0; // 0..10
   let nodeMaxJuice = 50;
   let hoveredNodeId = null;
   let hoveredEdgeId = null;
+  
+  // Abilities system
+  let abilitiesContainer = null;
+  let activeAbility = null; // null, 'bridge2way', 'bridge1way'
+  let bridgeFirstNode = null; // first selected node for bridge building
+  let abilityButtons = {}; // ability name -> button element
+  let mouseWorldX = 0; // current mouse position in world coordinates
+  let mouseWorldY = 0;
+  let capitalNodes = new Set(); // node IDs that are capitals
+  let player1Capitals = 0; // capital count from backend
+  let player2Capitals = 0; // capital count from backend
 
   function preload() {}
 
@@ -77,6 +88,9 @@
         if (overlayMsg) overlayMsg.style.display = 'none';
         // Hide HUD when returning to menu
         if (hudContainer) hudContainer.style.display = 'none';
+        if (abilitiesContainer) abilitiesContainer.style.visibility = 'hidden';
+        const capitalCounter = document.querySelector('div[style*="top: 20px"][style*="right: 20px"]');
+        if (capitalCounter) capitalCounter.style.display = 'none';
         nodes.clear();
         edges.clear();
         redrawStatic();
@@ -117,10 +131,9 @@
     Object.assign(gold.style, {
       position: 'absolute',
       right: '20px',
-      top: '50%',
-      transform: 'translateY(-50%)',
+      bottom: '20px',
       width: '48px',
-      height: '420px',
+      height: '500px', // Much taller gold bar
       background: '#1a1a1a',
       border: '1px solid #444',
       borderRadius: '10px',
@@ -140,9 +153,9 @@
       gap: '6px',
     });
     gold.appendChild(stack);
-    // Create 5 segments
+    // Create 10 segments
     goldSegments = [];
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 10; i++) {
       const segment = document.createElement('div');
       Object.assign(segment.style, {
         position: 'relative',
@@ -168,6 +181,188 @@
     }
     document.body.appendChild(gold);
     hudContainer = gold;
+
+    // Abilities container (left of gold bar)
+    abilitiesContainer = document.createElement('div');
+    Object.assign(abilitiesContainer.style, {
+      position: 'absolute',
+      right: '100px', // to the left of gold bar (20px + 48px + 32px margin)
+      bottom: '20px', // aligned with gold bar bottom
+      width: '124px',
+      height: '500px', // match gold bar height
+      display: 'flex',
+      visibility: 'hidden', // initially hidden
+      zIndex: 8,
+      boxSizing: 'border-box',
+      flexDirection: 'column',
+      justifyContent: 'flex-end', // align abilities to bottom
+    });
+
+    // Create ability buttons
+    const abilities = [
+      { name: 'bridge2way', label: '2W', cost: 2, key: 'Q', description: '2-Way Bridge (2 gold)' },
+      { name: 'bridge1way', label: '1W', cost: 3, key: 'A', description: '1-Way Bridge (3 gold)' },
+      { name: 'capital', label: '★', cost: 4, key: 'C', description: 'Capital (4 gold)' }
+    ];
+
+    abilities.forEach((ability, index) => {
+      const button = document.createElement('div');
+      Object.assign(button.style, {
+        width: '120px',
+        height: '120px',
+        background: '#2a2a2a',
+        border: '3px solid #555',
+        borderRadius: '16px',
+        marginBottom: '16px',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        cursor: 'pointer',
+        position: 'relative',
+        transition: 'all 0.2s ease',
+        boxSizing: 'border-box',
+      });
+
+      // Ability label
+      const label = document.createElement('div');
+      label.textContent = ability.label;
+      Object.assign(label.style, {
+        fontSize: '32px',
+        fontWeight: 'bold',
+        color: '#ccc',
+        lineHeight: '1',
+      });
+
+      // Cost indicator
+      const cost = document.createElement('div');
+      cost.textContent = ability.cost;
+      Object.assign(cost.style, {
+        fontSize: '20px',
+        color: '#ffd700',
+        lineHeight: '1',
+        marginTop: '6px',
+      });
+
+      // Key indicator
+      const keyIndicator = document.createElement('div');
+      keyIndicator.textContent = ability.key;
+      Object.assign(keyIndicator.style, {
+        position: 'absolute',
+        top: '8px',
+        right: '12px',
+        fontSize: '16px',
+        color: '#888',
+        lineHeight: '1',
+      });
+
+      button.appendChild(keyIndicator);
+      button.appendChild(label);
+      button.appendChild(cost);
+
+      // Click handler
+      button.addEventListener('click', () => handleAbilityClick(ability.name));
+
+      // Hover effects
+      button.addEventListener('mouseenter', () => {
+        button.style.borderColor = '#777';
+        button.style.background = '#333';
+      });
+      button.addEventListener('mouseleave', () => {
+        if (activeAbility !== ability.name) {
+          button.style.borderColor = '#555';
+          button.style.background = '#2a2a2a';
+        }
+      });
+
+      // Title for tooltip
+      button.title = ability.description;
+
+      abilitiesContainer.appendChild(button);
+      abilityButtons[ability.name] = button;
+    });
+
+    document.body.appendChild(abilitiesContainer);
+
+    // Capital counter display (top right)
+    const capitalCounter = document.createElement('div');
+    Object.assign(capitalCounter.style, {
+      position: 'absolute',
+      top: '20px',
+      right: '20px',
+      width: '280px',
+      background: 'rgba(0, 0, 0, 0.8)',
+      border: '3px solid #444',
+      borderRadius: '16px',
+      padding: '20px',
+      zIndex: 10,
+      textAlign: 'center',
+      display: 'none',
+      boxSizing: 'border-box',
+    });
+
+    // "Capitals" title
+    const capitalTitle = document.createElement('div');
+    capitalTitle.textContent = 'Capitals';
+    Object.assign(capitalTitle.style, {
+      fontSize: '24px',
+      fontWeight: 'bold',
+      color: '#fff',
+      marginBottom: '16px',
+    });
+    capitalCounter.appendChild(capitalTitle);
+
+    // Container for side-by-side numbers
+    const numbersContainer = document.createElement('div');
+    Object.assign(numbersContainer.style, {
+      display: 'flex',
+      justifyContent: 'space-around',
+      alignItems: 'center',
+      marginBottom: '16px',
+    });
+    capitalCounter.appendChild(numbersContainer);
+
+    // Player capital counts
+    const player1Count = document.createElement('div');
+    player1Count.id = 'player1-capitals';
+    Object.assign(player1Count.style, {
+      fontSize: '48px',
+      fontWeight: 'bold',
+      color: '#ff3333', // red player color
+      lineHeight: '1',
+    });
+    numbersContainer.appendChild(player1Count);
+
+    const vsText = document.createElement('div');
+    vsText.textContent = 'vs';
+    Object.assign(vsText.style, {
+      fontSize: '20px',
+      color: '#888',
+      fontWeight: 'bold',
+    });
+    numbersContainer.appendChild(vsText);
+
+    const player2Count = document.createElement('div');
+    player2Count.id = 'player2-capitals';
+    Object.assign(player2Count.style, {
+      fontSize: '48px',
+      fontWeight: 'bold',
+      color: '#3388ff', // blue player color
+      lineHeight: '1',
+    });
+    numbersContainer.appendChild(player2Count);
+
+    // Win condition text
+    const winCondition = document.createElement('div');
+    winCondition.textContent = 'First to 5 wins';
+    Object.assign(winCondition.style, {
+      fontSize: '18px',
+      color: '#ccc',
+    });
+    capitalCounter.appendChild(winCondition);
+
+    document.body.appendChild(capitalCounter);
+
     window.addEventListener('resize', () => {
       this.scale.resize(window.innerWidth, window.innerHeight);
       computeTransform(this.scale.gameSize.width, this.scale.gameSize.height);
@@ -202,6 +397,10 @@
       else if (msg.type === 'tick') handleTick(msg);
       else if (msg.type === 'lobbyJoined') handleLobby(msg);
       else if (msg.type === 'gameOver') handleGameOver(msg);
+      else if (msg.type === 'newEdge') handleNewEdge(msg);
+      else if (msg.type === 'bridgeError') handleBridgeError(msg);
+      else if (msg.type === 'newCapital') handleNewCapital(msg);
+      else if (msg.type === 'capitalError') handleCapitalError(msg);
     };
   }
 
@@ -247,7 +446,14 @@
     goldValue = 0;
     if (Array.isArray(msg.gold)) {
       for (const [pid, val] of msg.gold) {
-        if (Number(pid) === myPlayerId) goldValue = Math.max(0, Math.min(5, Number(val) || 0));
+        if (Number(pid) === myPlayerId) goldValue = Math.max(0, Math.min(10, Number(val) || 0));
+      }
+    }
+    // Capital counts from backend
+    if (Array.isArray(msg.capitals)) {
+      for (const [pid, count] of msg.capitals) {
+        if (Number(pid) === 1) player1Capitals = Number(count) || 0;
+        if (Number(pid) === 2) player2Capitals = Number(count) || 0;
       }
     }
     computeTransform(game.scale.gameSize.width, game.scale.gameSize.height);
@@ -263,6 +469,7 @@
       statusText.setVisible(phase === 'picking' && !myPicked);
     }
     updateGoldBar();
+    updateAbilityButtonStates();
   }
 
   function handleLobby(msg) {
@@ -336,7 +543,14 @@
     }
     if (Array.isArray(msg.gold)) {
       for (const [pid, val] of msg.gold) {
-        if (Number(pid) === myPlayerId) goldValue = Math.max(0, Math.min(5, Number(val) || 0));
+        if (Number(pid) === myPlayerId) goldValue = Math.max(0, Math.min(10, Number(val) || 0));
+      }
+    }
+    // Capital counts from backend
+    if (Array.isArray(msg.capitals)) {
+      for (const [pid, count] of msg.capitals) {
+        if (Number(pid) === 1) player1Capitals = Number(count) || 0;
+        if (Number(pid) === 2) player2Capitals = Number(count) || 0;
       }
     }
     if (statusText) {
@@ -347,7 +561,81 @@
       statusText.setVisible(phase === 'picking' && !myPicked);
     }
     updateGoldBar();
+    updateAbilityButtonStates();
+    updateCapitalCounter();
     redrawStatic();
+  }
+
+  function handleNewEdge(msg) {
+    // Add new edge to the frontend map
+    if (msg.edge) {
+      const edge = msg.edge;
+      edges.set(edge.id, {
+        source: edge.source,
+        target: edge.target,
+        bidir: edge.bidirectional,
+        bidirectional: edge.bidirectional,
+        forward: edge.forward,
+        on: edge.on,
+        flowing: edge.flowing
+      });
+      redrawStatic();
+    }
+  }
+
+  function handleBridgeError(msg) {
+    // Show error message to the player
+    showErrorMessage(msg.message || "Invalid Edge!");
+  }
+
+  function handleNewCapital(msg) {
+    // Add new capital to the frontend for visual rendering
+    if (msg.nodeId) {
+      capitalNodes.add(msg.nodeId);
+      redrawStatic();
+      // Capital counter will be updated by next tick message from backend
+    }
+  }
+
+  function handleCapitalError(msg) {
+    // Show error message to the player
+    showErrorMessage(msg.message || "Invalid Capital!");
+  }
+
+  function showErrorMessage(message) {
+    // Create or update error message element
+    let errorMsg = document.getElementById('errorMessage');
+    if (!errorMsg) {
+      errorMsg = document.createElement('div');
+      errorMsg.id = 'errorMessage';
+      Object.assign(errorMsg.style, {
+        position: 'absolute',
+        top: '50%',
+        left: '50%',
+        transform: 'translate(-50%, -50%)',
+        background: 'rgba(255, 0, 0, 0.9)',
+        color: 'white',
+        padding: '12px 20px',
+        borderRadius: '8px',
+        fontSize: '18px',
+        fontWeight: 'bold',
+        zIndex: 15,
+        textAlign: 'center',
+        border: '2px solid #ff0000',
+        boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+        pointerEvents: 'none',
+        display: 'none'
+      });
+      document.body.appendChild(errorMsg);
+    }
+    
+    errorMsg.textContent = message;
+    errorMsg.style.display = 'block';
+    
+    // Auto-hide after 2 seconds
+    setTimeout(() => {
+      errorMsg.style.display = 'none';
+    }, 2000);
   }
 
   function redrawStatic() {
@@ -358,12 +646,23 @@
       graphicsNodes.clear();
       // Hide HUD when menu is visible (graph is not drawn)
       if (hudContainer) hudContainer.style.display = 'none';
+      if (abilitiesContainer) abilitiesContainer.style.visibility = 'hidden';
+      const capitalCounter = document.querySelector('div[style*="top: 20px"][style*="right: 20px"]');
+      if (capitalCounter) capitalCounter.style.display = 'none';
       return; // Do not draw game under menu
     }
     
-    // Show gold bar when graph is being drawn and we have nodes/game data
+    // Show gold bar and abilities when graph is being drawn and we have nodes/game data
     if (hudContainer && nodes.size > 0) {
       hudContainer.style.display = 'block';
+    }
+    if (abilitiesContainer && nodes.size > 0) {
+      abilitiesContainer.style.visibility = 'visible';
+    }
+    // Show capital counter during game
+    const capitalCounter = document.querySelector('div[style*="top: 20px"][style*="right: 20px"]');
+    if (capitalCounter && nodes.size > 0) {
+      capitalCounter.style.display = 'block';
     }
     for (const [id, e] of edges.entries()) {
       const s = nodes.get(e.source);
@@ -395,6 +694,67 @@
         graphicsNodes.lineStyle(3, myColor, 1);
         graphicsNodes.strokeCircle(nx, ny, r + 3);
       }
+      
+      // Bridge building highlight: selected first node
+      if (bridgeFirstNode === id && (activeAbility === 'bridge2way' || activeAbility === 'bridge1way')) {
+        graphicsNodes.lineStyle(4, 0xffd700, 1); // gold color
+        graphicsNodes.strokeCircle(nx, ny, r + 4);
+      }
+      
+      // Bridge building hover: show gold highlight for valid nodes
+      if (hoveredNodeId === id && (activeAbility === 'bridge2way' || activeAbility === 'bridge1way')) {
+        if (bridgeFirstNode === null) {
+          // Before selecting first node: highlight owned nodes
+          if (n.owner === myPlayerId) {
+            graphicsNodes.lineStyle(3, 0xffd700, 0.8); // gold highlight
+            graphicsNodes.strokeCircle(nx, ny, r + 3);
+          }
+        } else if (bridgeFirstNode !== id) {
+          // After selecting first node: highlight any other node as valid target
+          graphicsNodes.lineStyle(3, 0xffd700, 0.7); // semi-transparent gold
+          graphicsNodes.strokeCircle(nx, ny, r + 3);
+        }
+      }
+      
+      // Capital creation hover: show player color highlight for owned nodes
+      if (hoveredNodeId === id && activeAbility === 'capital' && n.owner === myPlayerId) {
+        const playerColor = ownerToColor(myPlayerId);
+        graphicsNodes.lineStyle(3, playerColor, 0.8);
+        graphicsNodes.strokeCircle(nx, ny, r + 3);
+      }
+      
+      // Draw star for capital nodes
+      if (capitalNodes.has(id)) {
+        const starColor = n.owner === 1 ? 0xffa500 : 0x9932cc; // orange for player 1, purple for player 2
+        drawStar(nx, ny, r * 0.6, starColor);
+      }
+    }
+    
+    // Draw bridge preview using actual edge drawing logic
+    if (bridgeFirstNode !== null && (activeAbility === 'bridge2way' || activeAbility === 'bridge1way')) {
+      const firstNode = nodes.get(bridgeFirstNode);
+      if (firstNode) {
+        // Create a temporary "mouse node" for the preview
+        const mouseNode = {
+          x: mouseWorldX,
+          y: mouseWorldY,
+          juice: 2.0, // small default size for consistent radius calculation
+          size: 2.0,
+          owner: null
+        };
+        
+        // Create a temporary edge object for preview
+        const previewEdge = {
+          forward: true,
+          bidir: activeAbility === 'bridge2way',
+          bidirectional: activeAbility === 'bridge2way',
+          flowing: false, // preview shows as non-flowing (outlined)
+          on: false
+        };
+        
+        // Draw the preview edge using the same logic as real edges
+        drawBridgePreview(previewEdge, firstNode, mouseNode);
+      }
     }
   }
 
@@ -403,7 +763,7 @@
     let minX = 0, minY = 0, maxX = 100, maxY = 100;
     // Nodes are already in 0..100 logical space; fit that rect to screen
     const padding = 60; // top/bottom padding
-    const rightReservedPx = 96; // space for gold bar and margin
+    const rightReservedPx = 220; // space for gold bar, abilities closer together, and margins
     const width = Math.max(1, maxX - minX);
     const height = Math.max(1, maxY - minY);
     const scaleX = (viewW - padding * 2 - rightReservedPx) / width;
@@ -437,7 +797,83 @@
     if (gameEnded) return;
     const [wx, wy] = screenToWorld(ev.clientX, ev.clientY);
     const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
-    // Determine hover eligibility by phase and ownership
+    
+    // Handle bridge building mode
+    if (activeAbility === 'bridge2way' || activeAbility === 'bridge1way') {
+      const candidateNodeId = pickNearestNode(wx, wy, 18 / baseScale);
+      if (candidateNodeId != null) {
+        const node = nodes.get(candidateNodeId);
+        if (node) {
+          if (bridgeFirstNode === null) {
+            // Select first node (must be owned by player)
+            if (node.owner === myPlayerId) {
+              bridgeFirstNode = candidateNodeId;
+            }
+          } else if (bridgeFirstNode !== candidateNodeId) {
+            // Select second node and create bridge (can connect to any node)
+            {
+              const abilities = {
+                'bridge2way': { cost: 2 },
+                'bridge1way': { cost: 3 },
+                'capital': { cost: 4 }
+              };
+              const ability = abilities[activeAbility];
+              
+              if (goldValue >= ability.cost && ws && ws.readyState === WebSocket.OPEN) {
+                const token = localStorage.getItem('token');
+                const bidirectional = activeAbility === 'bridge2way';
+                ws.send(JSON.stringify({
+                  type: 'buildBridge',
+                  fromNodeId: bridgeFirstNode,
+                  toNodeId: candidateNodeId,
+                  bidirectional: bidirectional,
+                  cost: ability.cost,
+                  token: token
+                }));
+              }
+              
+              // Reset bridge building state
+              activeAbility = null;
+              bridgeFirstNode = null;
+              updateAbilityButtonStates();
+            }
+          } else {
+            // Clicked same node, cancel selection
+            bridgeFirstNode = null;
+          }
+        }
+      }
+      return; // Don't handle normal clicks in bridge mode
+    }
+    
+    // Handle capital creation mode
+    if (activeAbility === 'capital') {
+      const candidateNodeId = pickNearestNode(wx, wy, 18 / baseScale);
+      if (candidateNodeId != null) {
+        const node = nodes.get(candidateNodeId);
+        if (node && node.owner === myPlayerId) {
+          // Create capital on owned node
+          const ability = { cost: 4 };
+          if (goldValue >= ability.cost && ws && ws.readyState === WebSocket.OPEN) {
+            const token = localStorage.getItem('token');
+            ws.send(JSON.stringify({
+              type: 'createCapital',
+              nodeId: candidateNodeId,
+              cost: ability.cost,
+              token: token
+            }));
+          }
+          
+          // Reset capital creation state
+          activeAbility = null;
+          bridgeFirstNode = null;
+          updateAbilityButtonStates();
+        }
+      }
+      return; // Don't handle normal clicks in capital mode
+    }
+    
+    // Normal click handling
     let nodeId = null;
     let edgeId = null;
     if (phase === 'picking' && !myPicked) {
@@ -447,14 +883,19 @@
         if (cn && (cn.owner == null)) nodeId = candidateNodeId;
       }
     } else if (phase === 'playing') {
-      const candidateEdgeId = pickEdgeNear(wx, wy, 14 / baseScale);
-      if (candidateEdgeId != null) {
-        const e = edges.get(candidateEdgeId);
-        if (e) {
-          const fromId = e.forward ? e.source : e.target;
-          const fromNode = nodes.get(fromId);
-          // Only eligible if you own the from-node
-          if (fromNode && fromNode.owner === myPlayerId) edgeId = candidateEdgeId;
+      const candidateNodeId = pickNearestNode(wx, wy, 18 / baseScale);
+      if (candidateNodeId != null) {
+        nodeId = candidateNodeId;
+      } else {
+        const candidateEdgeId = pickEdgeNear(wx, wy, 14 / baseScale);
+        if (candidateEdgeId != null) {
+          const e = edges.get(candidateEdgeId);
+          if (e) {
+            const fromId = e.forward ? e.source : e.target;
+            const fromNode = nodes.get(fromId);
+            // Only eligible if you own the from-node
+            if (fromNode && fromNode.owner === myPlayerId) edgeId = candidateEdgeId;
+          }
         }
       }
     }
@@ -492,6 +933,36 @@
     }
   });
 
+  // Keyboard shortcuts for abilities
+  window.addEventListener('keydown', (ev) => {
+    if (gameEnded) return;
+    const menuVisible = !document.getElementById('menu')?.classList.contains('hidden');
+    if (menuVisible) return;
+    
+    switch (ev.key.toLowerCase()) {
+      case 'q':
+        ev.preventDefault();
+        handleAbilityClick('bridge2way');
+        break;
+      case 'a':
+        ev.preventDefault();
+        handleAbilityClick('bridge1way');
+        break;
+      case 'c':
+        ev.preventDefault();
+        handleAbilityClick('capital');
+        break;
+      case 'escape':
+        // Cancel active ability
+        if (activeAbility) {
+          activeAbility = null;
+          bridgeFirstNode = null;
+          updateAbilityButtonStates();
+        }
+        break;
+    }
+  });
+
   // Mouse move: handle hover effects
   window.addEventListener('mousemove', (ev) => {
     if (gameEnded) return;
@@ -499,24 +970,49 @@
     if (menuVisible) return; // Don't handle hover when menu is visible
     
     const [wx, wy] = screenToWorld(ev.clientX, ev.clientY);
-    const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
+    mouseWorldX = wx;
+    mouseWorldY = wy;
     
-    // Check for node hover first (nodes take priority over edges)
-    const nodeId = pickNearestNode(wx, wy, 18 / baseScale);
-    const edgeId = nodeId ? null : pickEdgeNear(wx, wy, 14 / baseScale);
+    const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
     
     let needsRedraw = false;
     
-    // Update hovered node
-    if (hoveredNodeId !== nodeId) {
-      hoveredNodeId = nodeId;
-      needsRedraw = true;
-    }
-    
-    // Update hovered edge
-    if (hoveredEdgeId !== edgeId) {
-      hoveredEdgeId = edgeId;
-      needsRedraw = true;
+    // In bridge building or capital mode, only check for node hover, not edge hover
+    if (activeAbility === 'bridge2way' || activeAbility === 'bridge1way' || activeAbility === 'capital') {
+      const nodeId = pickNearestNode(wx, wy, 18 / baseScale);
+      
+      // Update hovered node
+      if (hoveredNodeId !== nodeId) {
+        hoveredNodeId = nodeId;
+        needsRedraw = true;
+      }
+      
+      // Clear edge hover during bridge mode
+      if (hoveredEdgeId !== null) {
+        hoveredEdgeId = null;
+        needsRedraw = true;
+      }
+      
+      // Always redraw during bridge mode to update the preview line (but not for capital mode)
+      if (activeAbility === 'bridge2way' || activeAbility === 'bridge1way') {
+        needsRedraw = true;
+      }
+    } else {
+      // Normal hover behavior
+      const nodeId = pickNearestNode(wx, wy, 18 / baseScale);
+      const edgeId = nodeId ? null : pickEdgeNear(wx, wy, 14 / baseScale);
+      
+      // Update hovered node
+      if (hoveredNodeId !== nodeId) {
+        hoveredNodeId = nodeId;
+        needsRedraw = true;
+      }
+      
+      // Update hovered edge
+      if (hoveredEdgeId !== edgeId) {
+        hoveredEdgeId = edgeId;
+        needsRedraw = true;
+      }
     }
     
     if (needsRedraw) {
@@ -529,8 +1025,86 @@
     return [(px - view.offsetX) / view.scaleX, (py - view.offsetY) / view.scaleY];
   }
 
+  function handleAbilityClick(abilityName) {
+    if (phase !== 'playing') return; // Only allow abilities during playing phase
+    
+    const abilities = {
+      'bridge2way': { cost: 2 },
+      'bridge1way': { cost: 3 },
+      'capital': { cost: 4 }
+    };
+    
+    const ability = abilities[abilityName];
+    if (!ability) return;
+    
+    // Check if player has enough gold
+    if (goldValue < ability.cost) {
+      return; // Not enough gold, do nothing (could add visual feedback later)
+    }
+    
+    // Toggle ability activation
+    if (activeAbility === abilityName) {
+      // Deactivate
+      activeAbility = null;
+      bridgeFirstNode = null;
+      updateAbilityButtonStates();
+    } else if (abilityName === 'bridge2way' || abilityName === 'bridge1way') {
+      // Activate bridge building
+      activeAbility = abilityName;
+      bridgeFirstNode = null;
+      updateAbilityButtonStates();
+    } else if (abilityName === 'capital') {
+      // Activate capital creation
+      activeAbility = abilityName;
+      bridgeFirstNode = null; // reuse for capital node selection
+      updateAbilityButtonStates();
+    }
+    // Placeholder abilities do nothing for now
+  }
+
+  function updateAbilityButtonStates() {
+    const abilities = {
+      'bridge2way': { cost: 2 },
+      'bridge1way': { cost: 3 },
+      'capital': { cost: 4 }
+    };
+    
+    Object.keys(abilityButtons).forEach(abilityName => {
+      const button = abilityButtons[abilityName];
+      const ability = abilities[abilityName];
+      if (!button || !ability) return;
+      
+      const canAfford = goldValue >= ability.cost;
+      const isActive = activeAbility === abilityName;
+      
+      if (isActive) {
+        button.style.background = '#4a4a00';
+        button.style.borderColor = '#ffd700';
+      } else if (canAfford) {
+        button.style.background = '#2a2a2a';
+        button.style.borderColor = '#555';
+      } else {
+        button.style.background = '#1a1a1a';
+        button.style.borderColor = '#333';
+      }
+      
+      // Update opacity and cursor
+      button.style.opacity = canAfford ? '1' : '0.5';
+      button.style.cursor = canAfford ? 'pointer' : 'not-allowed';
+    });
+  }
+
+  function updateCapitalCounter() {
+    // Simply display the capital counts received from backend
+    const player1Element = document.getElementById('player1-capitals');
+    const player2Element = document.getElementById('player2-capitals');
+    
+    if (player1Element) player1Element.textContent = player1Capitals.toString();
+    if (player2Element) player2Element.textContent = player2Capitals.toString();
+  }
+
   function updateGoldBar() {
-    const val = Math.max(0, Math.min(5, goldValue || 0));
+    const val = Math.max(0, Math.min(10, goldValue || 0));
     const full = Math.floor(val);
     const frac = val - full;
     for (let i = 0; i < goldSegments.length; i++) {
@@ -591,6 +1165,113 @@
     return (px - bx) ** 2 + (py - by) ** 2;
   }
 
+  function drawBridgePreview(e, sNode, tNode) {
+    // Similar to drawEdge but draws in gold for preview
+    const from = e.forward ? sNode : tNode;
+    const to = e.forward ? tNode : sNode;
+    
+    // Offset start/end by node radius so edges don't overlap nodes visually
+    const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
+    const fromR = Math.max(1, (0.5 * Math.sqrt(Math.max(0, from.juice ?? from.size ?? 0.3))) * baseScale) + 1;
+    const toR = Math.max(1, (0.5 * Math.sqrt(Math.max(0, to.juice ?? to.size ?? 0.3))) * baseScale) + 1;
+    const [sx0, sy0] = worldToScreen(from.x, from.y);
+    const [tx0, ty0] = worldToScreen(to.x, to.y);
+    const dx0 = tx0 - sx0;
+    const dy0 = ty0 - sy0;
+    const len0 = Math.max(1, Math.hypot(dx0, dy0));
+    const ux0 = dx0 / len0;
+    const uy0 = dy0 / len0;
+    const sx = sx0 + ux0 * fromR;
+    const sy = sy0 + uy0 * fromR;
+    const tx = tx0 - ux0 * toR;
+    const ty = ty0 - uy0 * toR;
+
+    const dx = tx - sx;
+    const dy = ty - sy;
+    const len = Math.max(1, Math.hypot(dx, dy));
+    const ux = dx / len;
+    const uy = dy / len;
+    const angle = Math.atan2(uy, ux);
+
+    const previewColor = 0xffd700; // gold color for preview
+
+    if (!e.bidir && !e.bidirectional) {
+      // One-way: chain of larger triangles pointing to 'to'
+      const triH = 16;
+      const triW = 12;
+      const packedSpacing = triH; // packed: tip touches base of next
+      const packedCount = Math.max(1, Math.floor(len / packedSpacing));
+      
+      // Calculate actual spacing to ensure last triangle tip touches node edge
+      const actualSpacing = len / packedCount;
+      
+      for (let i = 0; i < packedCount; i++) {
+        const cx = sx + (i + 0.5) * actualSpacing * ux;
+        const cy = sy + (i + 0.5) * actualSpacing * uy;
+        drawPreviewTriangle(cx, cy, triW, triH, angle, previewColor);
+      }
+    } else {
+      // Two-way: circles along path and a head triangle showing current direction
+      const radius = 4; // keep current size
+      const packedSpacing = radius * 2; // packed circles
+      const packedCount = Math.max(2, Math.floor(len / packedSpacing));
+      
+      // Calculate actual spacing to ensure proper distribution
+      const actualSpacing = len / (packedCount - 1);
+      
+      for (let i = 1; i < packedCount - 1; i++) {
+        const cx = sx + i * actualSpacing * ux;
+        const cy = sy + i * actualSpacing * uy;
+        // Draw outlined circles for preview
+        graphicsEdges.lineStyle(2, previewColor, 0.7);
+        graphicsEdges.strokeCircle(cx, cy, radius);
+      }
+      // Head triangle near 'to'
+      const headDist = Math.min(len - 10, Math.max(10, len - 16));
+      const hx = sx + headDist * ux;
+      const hy = sy + headDist * uy;
+      drawPreviewTriangle(hx, hy, 18, 14, angle, previewColor);
+    }
+  }
+
+  function drawStar(cx, cy, radius, color) {
+    // Draw a 5-pointed star
+    const spikes = 5;
+    const outerRadius = radius;
+    const innerRadius = radius * 0.4;
+    
+    graphicsNodes.fillStyle(color, 1);
+    graphicsNodes.beginPath();
+    
+    for (let i = 0; i < spikes * 2; i++) {
+      const angle = (i * Math.PI) / spikes;
+      const r = i % 2 === 0 ? outerRadius : innerRadius;
+      const x = cx + Math.cos(angle - Math.PI / 2) * r;
+      const y = cy + Math.sin(angle - Math.PI / 2) * r;
+      
+      if (i === 0) {
+        graphicsNodes.moveTo(x, y);
+      } else {
+        graphicsNodes.lineTo(x, y);
+      }
+    }
+    
+    graphicsNodes.closePath();
+    graphicsNodes.fillPath();
+  }
+
+  function drawPreviewTriangle(cx, cy, baseW, height, angle, color) {
+    const halfW = baseW / 2;
+    // Triangle points oriented such that tip points along +x before rotation
+    const p1 = rotatePoint(cx + height / 2, cy, cx, cy, angle); // tip
+    const p2 = rotatePoint(cx - height / 2, cy - halfW, cx, cy, angle); // base left
+    const p3 = rotatePoint(cx - height / 2, cy + halfW, cx, cy, angle); // base right
+    
+    // Draw outlined triangle for preview
+    graphicsEdges.lineStyle(2, color, 0.7);
+    graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
+  }
+
   function drawEdge(e, sNode, tNode, edgeId) {
     const from = e.forward ? sNode : tNode;
     const to = e.forward ? tNode : sNode;
@@ -598,8 +1279,8 @@
     
     // Offset start/end by node radius so edges don't overlap nodes visually
     const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
-    const fromR = Math.max(1, (0.5 * Math.sqrt(Math.max(0, from.juice ?? from.size ?? 0.3))) * baseScale) + 3;
-    const toR = Math.max(1, (0.5 * Math.sqrt(Math.max(0, to.juice ?? to.size ?? 0.3))) * baseScale) + 3;
+    const fromR = Math.max(1, (0.5 * Math.sqrt(Math.max(0, from.juice ?? from.size ?? 0.3))) * baseScale) + 1;
+    const toR = Math.max(1, (0.5 * Math.sqrt(Math.max(0, to.juice ?? to.size ?? 0.3))) * baseScale) + 1;
     const [sx0, sy0] = worldToScreen(from.x, from.y);
     const [tx0, ty0] = worldToScreen(to.x, to.y);
     const dx0 = tx0 - sx0;
@@ -623,27 +1304,35 @@
       // One-way: chain of larger triangles pointing to 'to'
       const triH = 16;
       const triW = 12;
-      const spacing = triH; // packed: tip touches base of next
-      const count = Math.max(1, Math.floor(len / spacing));
+      const packedSpacing = triH; // packed: tip touches base of next
+      const packedCount = Math.max(1, Math.floor(len / packedSpacing));
+      
+      // Calculate actual spacing to ensure last triangle tip touches node edge
+      const actualSpacing = len / packedCount;
+      
       const canClick = (from && from.owner === myPlayerId);
       const hoverAllowed = isHovered && canClick;
       const hoverColor = hoverAllowed ? ownerToColor(myPlayerId) : null;
-      for (let i = 0; i < count; i++) {
-        const cx = sx + (i + 0.5) * spacing * ux;
-        const cy = sy + (i + 0.5) * spacing * uy;
+      for (let i = 0; i < packedCount; i++) {
+        const cx = sx + (i + 0.5) * actualSpacing * ux;
+        const cy = sy + (i + 0.5) * actualSpacing * uy;
         drawTriangle(cx, cy, triW, triH, angle, e, from, hoverColor, hoverAllowed);
       }
     } else {
       // Two-way: circles along path and a head triangle showing current direction
       const radius = 4; // keep current size
-      const spacing = radius * 2; // packed circles
-      const count = Math.max(2, Math.floor(len / spacing));
+      const packedSpacing = radius * 2; // packed circles
+      const packedCount = Math.max(2, Math.floor(len / packedSpacing));
+      
+      // Calculate actual spacing to ensure proper distribution
+      const actualSpacing = len / (packedCount - 1);
+      
       // Use player's color for highlight when eligible, otherwise fall back to flow color
       const canClick = (from && from.owner === myPlayerId);
       const color = canClick ? ownerToColor(myPlayerId) : edgeColor(e, from);
-      for (let i = 1; i < count - 1; i++) {
-        const cx = sx + i * spacing * ux;
-        const cy = sy + i * spacing * uy;
+      for (let i = 1; i < packedCount - 1; i++) {
+        const cx = sx + i * actualSpacing * ux;
+        const cy = sy + i * actualSpacing * uy;
         if (e.flowing) {
           graphicsEdges.fillStyle(color, 1);
           graphicsEdges.fillCircle(cx, cy, radius);

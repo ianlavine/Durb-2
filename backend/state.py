@@ -11,11 +11,11 @@ NODE_MIN_JUICE: float = 0.0
 NODE_MAX_JUICE: float = 120.0
 
 # Flow model
-PRODUCTION_RATE_PER_NODE: float = 0.1  # owned nodes generate this per tick (constant growth)
+PRODUCTION_RATE_PER_NODE: float = 0.15  # owned nodes generate this per tick (constant growth)
 TRANSFER_PERCENT_PER_TICK: float = 0.01  # fraction of source juice transferred per tick (split across outgoing edges)
 
-# Gold economy (displayed as 5 sections filling like elixir)
-GOLD_MAX_SECTIONS: float = 5.0
+# Gold economy (displayed as 10 sections filling like elixir)
+GOLD_MAX_SECTIONS: float = 10.0
 GOLD_SECTION_FILL_SECONDS: float = 4.0  # each section fills in 4 seconds
 
 
@@ -34,12 +34,37 @@ class GraphState:
         self.phase: str = "picking"
         # Track which players have completed their starting pick
         self.players_who_picked: Dict[int, bool] = {}
+        # Track capital nodes (double growth rate)
+        self.capital_nodes: set = set()
+        # Track if game has ended due to capital victory
+        self.game_ended: bool = False
+        self.winner_id: Optional[int] = None
 
     def add_player(self, player: Player) -> None:
         self.players[player.id] = player
         # Initialize player economy and pick status
         self.player_gold[player.id] = 0.0
         self.players_who_picked[player.id] = False
+
+    def check_capital_victory(self) -> Optional[int]:
+        """Check if any player has 5 capitals. Returns winner ID or None."""
+        if self.game_ended:
+            return self.winner_id
+            
+        capital_counts = {}
+        for capital_id in self.capital_nodes:
+            node = self.nodes.get(capital_id)
+            if node and node.owner is not None:
+                capital_counts[node.owner] = capital_counts.get(node.owner, 0) + 1
+                
+        # Check for victory condition (5 capitals)
+        for player_id, count in capital_counts.items():
+            if count >= 5:
+                self.game_ended = True
+                self.winner_id = player_id
+                return player_id
+                
+        return None
 
     def to_init_message(self, screen: Dict[str, int], tick_interval: float) -> Dict:
         nodes_arr = [
@@ -53,6 +78,15 @@ class GraphState:
         players_arr = [[pid, p.color] for pid, p in self.players.items()]
         gold_arr = [[pid, round(self.player_gold.get(pid, 0.0), 4)] for pid in self.players.keys()]
         picked_arr = [[pid, bool(self.players_who_picked.get(pid, False))] for pid in self.players.keys()]
+        
+        # Count capitals by player for init
+        capital_counts: Dict[int, int] = {}
+        for capital_id in self.capital_nodes:
+            node = self.nodes.get(capital_id)
+            if node and node.owner is not None:
+                capital_counts[node.owner] = capital_counts.get(node.owner, 0) + 1
+        capital_arr = [[pid, capital_counts.get(pid, 0)] for pid in self.players.keys()]
+        
         return {
             "type": "init",
             "screen": screen,
@@ -64,6 +98,7 @@ class GraphState:
             "phase": self.phase,
             "gold": gold_arr,
             "picked": picked_arr,
+            "capitals": capital_arr,
         }
 
     def to_tick_message(self) -> Dict:
@@ -78,6 +113,15 @@ class GraphState:
                 counts[n.owner] = counts.get(n.owner, 0) + 1
         gold_arr = [[pid, round(self.player_gold.get(pid, 0.0), 4)] for pid in self.players.keys()]
         picked_arr = [[pid, bool(self.players_who_picked.get(pid, False))] for pid in self.players.keys()]
+        
+        # Count capitals by player
+        capital_counts: Dict[int, int] = {}
+        for capital_id in self.capital_nodes:
+            node = self.nodes.get(capital_id)
+            if node and node.owner is not None:
+                capital_counts[node.owner] = capital_counts.get(node.owner, 0) + 1
+        capital_arr = [[pid, capital_counts.get(pid, 0)] for pid in self.players.keys()]
+        
         return {
             "type": "tick",
             "edges": edges_arr,
@@ -87,6 +131,7 @@ class GraphState:
             "phase": self.phase,
             "gold": gold_arr,
             "picked": picked_arr,
+            "capitals": capital_arr,
         }
 
     def simulate_tick(self, tick_interval_seconds: float) -> None:
@@ -94,10 +139,13 @@ class GraphState:
         # Compute size deltas from production and flows
         size_delta: Dict[int, float] = {nid: 0.0 for nid in self.nodes.keys()}
 
-        # Production for owned nodes
+        # Production for owned nodes (capitals get double rate)
         for node in self.nodes.values():
             if node.owner is not None:
-                size_delta[node.id] += PRODUCTION_RATE_PER_NODE
+                base_rate = PRODUCTION_RATE_PER_NODE
+                if node.id in self.capital_nodes:
+                    base_rate *= 2.0  # Double growth for capitals
+                size_delta[node.id] += base_rate
 
         # Flows using percentage-based transfer per source node, split across its outgoing flowing edges
         pending_ownership: Dict[int, int] = {}  # node_id -> new_owner_id
