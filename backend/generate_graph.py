@@ -8,8 +8,8 @@ from typing import List, Optional, Tuple
 
 SEED: Optional[int] = 39
 NODE_COUNT: int = 60
-DESIRED_EDGE_COUNT: int = 45
-ONE_WAY_PERCENT: float = 1.0
+DESIRED_EDGE_COUNT: int = 70
+ONE_WAY_PERCENT: float = 0.5
 
 SCREEN_WIDTH: Optional[int] = None
 SCREEN_HEIGHT: Optional[int] = None
