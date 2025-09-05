@@ -189,7 +189,17 @@ class GameEngine:
         try:
             self.validate_game_active()
             player_id = self.validate_player(token)
-            self.validate_phase("playing")
+            
+            # Allow edge clicks if in playing phase OR if player has already picked in picking phase
+            if self.state.phase == "playing":
+                pass  # Always allowed in playing phase
+            elif self.state.phase == "picking":
+                # Only allow if this player has already picked their starting node
+                if not self.state.players_who_picked.get(player_id, False):
+                    raise GameValidationError("Must pick starting node first")
+            else:
+                raise GameValidationError(f"Not in playing phase")
+            
             edge = self.validate_edge_exists(edge_id)
             
             # Toggle behavior
@@ -260,9 +270,15 @@ class GameEngine:
             # Reverse the edge by swapping source and target
             edge.source_node_id, edge.target_node_id = edge.target_node_id, edge.source_node_id
             
-            # Automatically turn on the edge after reversal
-            edge.on = True
-            edge.flowing = True
+            # Only start flowing if the new source node is owned by the swapping player
+            new_source_node = self.validate_node_exists(edge.source_node_id)
+            if new_source_node.owner == player_id:
+                edge.on = True
+                edge.flowing = True
+            else:
+                # Edge is swapped but not flowing since player doesn't own new source
+                edge.on = False
+                edge.flowing = False
             
             # Deduct gold
             self.state.player_gold[player_id] = max(0.0, self.state.player_gold[player_id] - cost)

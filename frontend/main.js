@@ -26,7 +26,7 @@
   let ws = null;
   let screen = null;
   let nodes = new Map(); // id -> {x,y,size,owner}
-  let edges = new Map(); // id -> {source,target,on,flowing}
+  let edges = new Map(); // id -> {source,target,on,flowing,flowStartTime}
 
   let graphicsEdges;
   let graphicsNodes;
@@ -55,6 +55,11 @@
   let capitalNodes = new Set(); // node IDs that are capitals
   let player1Capitals = 0; // capital count from backend
   let player2Capitals = 0; // capital count from backend
+  
+  // Animation system for juice flow
+  let animationTime = 0; // Global animation timer
+  const JUICE_ANIMATION_SPEED = 4.0; // Speed of juice animation (higher = faster)
+  const JUICE_ANIMATION_PHASES = 3; // Number of distinct color phases for juice animation
 
   function preload() {}
 
@@ -210,9 +215,9 @@
 
     // Create ability buttons
     const abilities = [
-      { name: 'bridge1way', label: '1W', cost: 3, key: 'Q', description: '1-Way Bridge (3 gold)' },
-      { name: 'reverse', label: '🖱️↻', cost: 1, key: 'A', description: 'Reverse Edge (1 gold)' },
-      { name: 'capital', label: '★', cost: 4, key: 'C', description: 'Capital (4 gold)' }
+      { name: 'reverse', label: 'Reverse', cost: 1, key: '🖱️', description: 'Reverse Edge (1 gold)' },
+      { name: 'bridge1way', label: 'Bridge', cost: 3, key: 'A', description: 'Bridge (3 gold)' },
+      { name: 'capital', label: 'Capital', cost: 5, key: 'C', description: 'Capital (5 gold)' }
     ];
 
     abilities.forEach((ability, index) => {
@@ -244,31 +249,37 @@
         lineHeight: '1',
       });
 
-      // Cost indicator
+      // Cost indicator (top-left corner)
       const cost = document.createElement('div');
       cost.textContent = ability.cost;
       Object.assign(cost.style, {
+        position: 'absolute',
+        top: '8px',
+        left: '12px',
         fontSize: '20px',
         color: '#ffd700',
         lineHeight: '1',
-        marginTop: '6px',
+        fontWeight: 'bold',
       });
 
-      // Key indicator
-      const keyIndicator = document.createElement('div');
-      keyIndicator.textContent = ability.key;
-      Object.assign(keyIndicator.style, {
-        position: 'absolute',
-        top: '8px',
-        right: '12px',
-        fontSize: '16px',
-        color: '#888',
-        lineHeight: '1',
-      });
+      // Key indicator (top-right corner, only if key exists)
+      let keyIndicator = null;
+      if (ability.key) {
+        keyIndicator = document.createElement('div');
+        keyIndicator.textContent = ability.key;
+        Object.assign(keyIndicator.style, {
+          position: 'absolute',
+          top: '8px',
+          right: '12px',
+          fontSize: '16px',
+          color: '#888',
+          lineHeight: '1',
+        });
+      }
 
-      button.appendChild(keyIndicator);
-      button.appendChild(label);
       button.appendChild(cost);
+      if (keyIndicator) button.appendChild(keyIndicator);
+      button.appendChild(label);
 
       // Click handler
       button.addEventListener('click', () => handleAbilityClick(ability.name));
@@ -384,7 +395,23 @@
     });
   }
 
-  function update() {}
+  function update() {
+    // Update animation timer for juice flow
+    animationTime += 1/60; // Assuming 60 FPS, increment by frame time
+    
+    // Redraw if there are any flowing edges (for animation)
+    let hasFlowingEdges = false;
+    for (const [id, edge] of edges.entries()) {
+      if (edge.flowing) {
+        hasFlowingEdges = true;
+        break;
+      }
+    }
+    
+    if (hasFlowingEdges) {
+      redrawStatic();
+    }
+  }
 
   function tryConnectWS() {
     ws = new WebSocket(WS_URL);
@@ -433,7 +460,7 @@
     }
     for (const arr of msg.edges) {
       const [id, s, t, bidir, fwd] = arr;
-      edges.set(id, { source: s, target: t, on: false, flowing: false });
+      edges.set(id, { source: s, target: t, on: false, flowing: false, flowStartTime: null });
     }
     if (Array.isArray(msg.players)) {
       for (const arr of msg.players) {
@@ -539,8 +566,16 @@
         const [id, on, flowing, fwd] = arr;
         const e = edges.get(id);
         if (e) {
+          const wasFlowing = e.flowing;
           e.on = !!on;
           e.flowing = !!flowing;
+          
+          // Track when flow starts for initialization animation
+          if (!wasFlowing && e.flowing) {
+            e.flowStartTime = animationTime;
+          } else if (!e.flowing) {
+            e.flowStartTime = null;
+          }
         }
       }
     }
@@ -584,7 +619,8 @@
         source: edge.source,
         target: edge.target,
         on: edge.on,
-        flowing: edge.flowing
+        flowing: edge.flowing,
+        flowStartTime: edge.flowing ? animationTime : null
       });
       redrawStatic();
     }
@@ -599,8 +635,16 @@
         // Update the source and target (they've been swapped)
         existingEdge.source = edge.source;
         existingEdge.target = edge.target;
+        const wasFlowing = existingEdge.flowing;
         existingEdge.on = edge.on;
         existingEdge.flowing = edge.flowing;
+        
+        // Track flow start time for initialization animation
+        if (!wasFlowing && existingEdge.flowing) {
+          existingEdge.flowStartTime = animationTime;
+        } else if (!existingEdge.flowing) {
+          existingEdge.flowStartTime = null;
+        }
         redrawStatic();
       }
     }
@@ -716,6 +760,15 @@
         const myColor = ownerToColor(myPlayerId);
         graphicsNodes.lineStyle(3, myColor, 1);
         graphicsNodes.strokeCircle(nx, ny, r + 3);
+      }
+      
+      // Hover effect: show if node can be targeted for flow (playing phase or picked in picking phase)
+      if (hoveredNodeId === id && ((phase === 'playing') || (phase === 'picking' && myPicked))) {
+        if (canTargetNodeForFlow(id)) {
+          const myColor = ownerToColor(myPlayerId);
+          graphicsNodes.lineStyle(3, myColor, 0.8);
+          graphicsNodes.strokeCircle(nx, ny, r + 3);
+        }
       }
       
       // Bridge building highlight: selected first node
@@ -852,6 +905,19 @@
     return false; // Don't own any nodes
   }
 
+  function canTargetNodeForFlow(targetNodeId) {
+    // Check if I have any edges that I own (source node owned by me) that point to this target node
+    for (const [edgeId, edge] of edges.entries()) {
+      if (edge.target === targetNodeId) {
+        const sourceNode = nodes.get(edge.source);
+        if (sourceNode && sourceNode.owner === myPlayerId) {
+          return true; // Found at least one edge I can flow through to this node
+        }
+      }
+    }
+    return false;
+  }
+
   // Input: during picking, click to claim a node once; during playing, edge interactions allowed
   window.addEventListener('click', (ev) => {
     if (gameEnded) return;
@@ -875,7 +941,7 @@
               const abilities = {
                 'bridge1way': { cost: 3 },
                 'reverse': { cost: 1 },
-                'capital': { cost: 4 }
+                'capital': { cost: 5 }
               };
               const ability = abilities[activeAbility];
               
@@ -967,6 +1033,22 @@
         const cn = nodes.get(candidateNodeId);
         if (cn && (cn.owner == null)) nodeId = candidateNodeId;
       }
+    } else if (phase === 'picking' && myPicked) {
+      // Allow node flow targeting and edge clicks if player has already picked
+      const candidateNodeId = pickNearestNode(wx, wy, 18 / baseScale);
+      if (candidateNodeId != null) {
+        nodeId = candidateNodeId;
+      } else {
+        const candidateEdgeId = pickEdgeNear(wx, wy, 14 / baseScale);
+        if (candidateEdgeId != null) {
+          const e = edges.get(candidateEdgeId);
+          if (e) {
+            const sourceNode = nodes.get(e.source);
+            // Only eligible if you own the source node
+            if (sourceNode && sourceNode.owner === myPlayerId) edgeId = candidateEdgeId;
+          }
+        }
+      }
     } else if (phase === 'playing') {
       const candidateNodeId = pickNearestNode(wx, wy, 18 / baseScale);
       if (candidateNodeId != null) {
@@ -988,13 +1070,56 @@
       if (!myPicked && nodeId != null && ws && ws.readyState === WebSocket.OPEN) {
         const token = localStorage.getItem('token');
         ws.send(JSON.stringify({ type: 'clickNode', nodeId: nodeId, token }));
+        return; // Return after handling node click
       }
-      return; // ignore edge clicks during picking
+      // Allow edge clicks and node flow targeting if player has already picked
+      if (myPicked && ws && ws.readyState === WebSocket.OPEN) {
+        const token = localStorage.getItem('token');
+        
+        // Check for node flow targeting first
+        if (nodeId != null && canTargetNodeForFlow(nodeId)) {
+          // Start flowing all edges that I own which target this node
+          for (const [edgeId, edge] of edges.entries()) {
+            if (edge.target === nodeId) {
+              const sourceNode = nodes.get(edge.source);
+              if (sourceNode && sourceNode.owner === myPlayerId && !edge.flowing) {
+                // Send edge click to start flow
+                ws.send(JSON.stringify({ type: 'clickEdge', edgeId, token }));
+              }
+            }
+          }
+          return;
+        }
+        
+        // Otherwise handle edge clicks
+        if (edgeId != null) {
+          ws.send(JSON.stringify({ type: 'clickEdge', edgeId, token }));
+          return;
+        }
+      }
+      return; // No valid action during picking
     } else {
       if (nodeId != null && ws && ws.readyState === WebSocket.OPEN) {
         const token = localStorage.getItem('token');
-        ws.send(JSON.stringify({ type: 'clickNode', nodeId: nodeId, token }));
-        return;
+        
+        // Check if this is a node we can target for flow
+        if (canTargetNodeForFlow(nodeId)) {
+          // Start flowing all edges that I own which target this node
+          for (const [edgeId, edge] of edges.entries()) {
+            if (edge.target === nodeId) {
+              const sourceNode = nodes.get(edge.source);
+              if (sourceNode && sourceNode.owner === myPlayerId && !edge.flowing) {
+                // Send edge click to start flow
+                ws.send(JSON.stringify({ type: 'clickEdge', edgeId, token }));
+              }
+            }
+          }
+          return;
+        } else {
+          // Regular node click (for other purposes like building capitals, etc.)
+          ws.send(JSON.stringify({ type: 'clickNode', nodeId: nodeId, token }));
+          return;
+        }
       }
       if (edgeId != null && ws && ws.readyState === WebSocket.OPEN) {
         const token = localStorage.getItem('token');
@@ -1024,13 +1149,9 @@
     if (menuVisible) return;
     
     switch (ev.key.toLowerCase()) {
-      case 'q':
-        ev.preventDefault();
-        handleAbilityClick('bridge1way');
-        break;
       case 'a':
         ev.preventDefault();
-        handleAbilityClick('reverse');
+        handleAbilityClick('bridge1way');
         break;
       case 'c':
         ev.preventDefault();
@@ -1115,7 +1236,7 @@
     const abilities = {
       'bridge1way': { cost: 3 },
       'reverse': { cost: 1 },
-      'capital': { cost: 4 }
+      'capital': { cost: 5 }
     };
     
     const ability = abilities[abilityName];
@@ -1155,7 +1276,7 @@
     const abilities = {
       'bridge1way': { cost: 3 },
       'reverse': { cost: 1 },
-      'capital': { cost: 4 }
+      'capital': { cost: 5 }
     };
     
     Object.keys(abilityButtons).forEach(abilityName => {
@@ -1256,8 +1377,9 @@
 
   function drawBridgePreview(e, sNode, tNode) {
     // Similar to drawEdge but draws in gold for preview
-    const from = e.forward ? sNode : tNode;
-    const to = e.forward ? tNode : sNode;
+    // Bridge preview always goes from sNode (first selected) to tNode (mouse position)
+    const from = sNode;
+    const to = tNode;
     
     // Offset start/end by node radius so edges don't overlap nodes visually
     const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
@@ -1391,20 +1513,31 @@
     for (let i = 0; i < packedCount; i++) {
       const cx = sx + (i + 0.5) * actualSpacing * ux;
       const cy = sy + (i + 0.5) * actualSpacing * uy;
-      drawTriangle(cx, cy, triW, triH, angle, e, from, hoverColor, hoverAllowed);
+      drawTriangle(cx, cy, triW, triH, angle, e, from, hoverColor, hoverAllowed, i, packedCount);
     }
   }
 
-  function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, isHovered) {
+  function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, isHovered, triangleIndex, totalTriangles) {
     const color = (overrideColor != null) ? overrideColor : edgeColor(e, fromNode);
     const halfW = baseW / 2;
     // Triangle points oriented such that tip points along +x before rotation
     const p1 = rotatePoint(cx + height / 2, cy, cx, cy, angle); // tip
     const p2 = rotatePoint(cx - height / 2, cy - halfW, cx, cy, angle); // base left
     const p3 = rotatePoint(cx - height / 2, cy + halfW, cx, cy, angle); // base right
+    
     if (e.flowing) {
-      graphicsEdges.fillStyle(color, 1);
-      graphicsEdges.fillTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
+      // Animated juice flow effect
+      const animatedColor = getAnimatedJuiceColor(color, triangleIndex || 0, totalTriangles || 1, e.flowStartTime);
+      
+      if (animatedColor === null) {
+        // Triangle not yet filled - show grey outline (same as non-flowing)
+        graphicsEdges.lineStyle(2, 0x999999, 1);
+        graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
+      } else {
+        // Triangle is filled - show animated color
+        graphicsEdges.fillStyle(animatedColor.color, animatedColor.alpha);
+        graphicsEdges.fillTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
+      }
     } else {
       graphicsEdges.lineStyle(2, 0x999999, 1);
       graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
@@ -1425,6 +1558,67 @@
       fromNode = nodes.get(e.source);  // Always use source node
     }
     return ownerToColor(fromNode ? fromNode.owner : null);
+  }
+
+  function getAnimatedJuiceColor(baseColor, triangleIndex, totalTriangles, flowStartTime) {
+    // Calculate the normal animation colors first (used in both phases)
+    const animationCycle = (animationTime * JUICE_ANIMATION_SPEED) % totalTriangles;
+    const leadTriangle = Math.floor(animationCycle);
+    
+    // Calculate distance from this triangle to the lead triangle (wrapping around)
+    let distanceFromLead;
+    if (triangleIndex >= leadTriangle) {
+      distanceFromLead = triangleIndex - leadTriangle;
+    } else {
+      distanceFromLead = (totalTriangles - leadTriangle) + triangleIndex;
+    }
+    
+    // Always cycle through exactly 4 brightness levels, regardless of edge length
+    const brightnessLevels = 4;
+    const level = distanceFromLead % brightnessLevels; // Cycle through 0, 1, 2, 3
+    const brightness = 1.0 - (level * 0.2); // 1.0, 0.8, 0.6, 0.4
+    
+    // Extract RGB components from hex color
+    const r = (baseColor >> 16) & 0xFF;
+    const g = (baseColor >> 8) & 0xFF;
+    const b = baseColor & 0xFF;
+    
+    // Apply brightness multiplier and make colors lighter overall
+    const lightnessFactor = 1.4; // Make colors 40% lighter
+    const newR = Math.min(255, Math.floor(r * brightness * lightnessFactor));
+    const newG = Math.min(255, Math.floor(g * brightness * lightnessFactor));
+    const newB = Math.min(255, Math.floor(b * brightness * lightnessFactor));
+    
+    // Recombine into hex color
+    const animatedColor = (newR << 16) | (newG << 8) | newB;
+    
+    // Check if we're in initialization phase
+    if (flowStartTime !== null) {
+      const timeSinceStart = animationTime - flowStartTime;
+      const initializationDuration = totalTriangles / JUICE_ANIMATION_SPEED; // Time to fill all triangles
+      
+      if (timeSinceStart < initializationDuration) {
+        // Initialization phase: fill triangles progressively from source to target
+        const fillProgress = (timeSinceStart * JUICE_ANIMATION_SPEED);
+        
+        if (triangleIndex > fillProgress) {
+          // This triangle hasn't been reached yet - return null to show grey outline
+          return null;
+        } else {
+          // This triangle has been reached - show animated color
+          return {
+            color: animatedColor,
+            alpha: 0.9
+          };
+        }
+      }
+    }
+    
+    // Normal phase (after initialization or if no initialization)
+    return {
+      color: animatedColor,
+      alpha: 0.9
+    };
   }
 
   function rotatePoint(x, y, cx, cy, angle) {
