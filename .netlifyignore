@@ -1,4 +1,4 @@
-# Ignore Python backend files
+# Ignore ALL backend and Python-related files
 backend/
 requirements.txt
 runtime.txt
@@ -7,6 +7,19 @@ railway.toml
 *.py
 __pycache__/
 *.pyc
+.python-version
+pyproject.toml
+setup.py
+setup.cfg
+Pipfile
+Pipfile.lock
+.venv/
+venv/
 
 # Ignore other deployment configs not needed for frontend
 DEPLOYMENT.md
+.env
+.env.*
+
+# Only keep frontend files
+!frontend/
