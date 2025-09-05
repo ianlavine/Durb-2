@@ -30,7 +30,6 @@ class Edge:
     id: int
     source: int
     target: int
-    bidirectional: bool
 
 
 def try_get_screen_size() -> Tuple[int, int]:
@@ -138,9 +137,9 @@ def generate_planar_edges(nodes: List[Node], desired_edges: int, one_way_percent
                 source, target = i, j
             else:
                 source, target = j, i
-            edges.append(Edge(len(edges), source, target, bidirectional=False))
+            edges.append(Edge(len(edges), source, target))
         else:
-            edges.append(Edge(len(edges), i, j, bidirectional=True))
+            edges.append(Edge(len(edges), i, j))
         existing_segments.append(((nodes[i].x, nodes[i].y), (nodes[j].x, nodes[j].y)))
     return edges
 
@@ -156,7 +155,7 @@ def main() -> None:
         "screen": {"width": width, "height": height, "margin": 0},
         "nodes": [{"id": n.id, "x": round(n.x, 3), "y": round(n.y, 3)} for n in nodes],
         "edges": [
-            {"id": e.id, "source": e.source, "target": e.target, "bidirectional": e.bidirectional}
+            {"id": e.id, "source": e.source, "target": e.target, "bidirectional": False}
             for e in edges
         ],
     }
@@ -181,7 +180,7 @@ def generate_graph_to_path(width: int, height: int, output_path: Path) -> None:
         "screen": {"width": width, "height": height, "margin": 0},
         "nodes": [{"id": n.id, "x": round(n.x, 3), "y": round(n.y, 3)} for n in nodes],
         "edges": [
-            {"id": e.id, "source": e.source, "target": e.target, "bidirectional": e.bidirectional}
+            {"id": e.id, "source": e.source, "target": e.target, "bidirectional": False}
             for e in edges
         ],
     }

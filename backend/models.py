@@ -23,10 +23,7 @@ class Edge:
     id: int
     source_node_id: int
     target_node_id: int
-    bidirectional: bool
-    # If True, direction is source->target. If False, direction is target->source.
-    # For one-way edges, this should remain True (source is the fixed from_node).
-    forward: bool = True
+    # All edges are now one-way only, from source to target
     on: bool = False
     flowing: bool = False
 

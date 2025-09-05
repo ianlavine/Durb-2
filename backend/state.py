@@ -66,13 +66,37 @@ class GraphState:
                 
         return None
 
+    def check_zero_nodes_loss(self) -> Optional[int]:
+        """Check if any player has 0 nodes. Returns winner ID (the other player) or None."""
+        if self.game_ended:
+            return self.winner_id
+            
+        # Count nodes owned by each player
+        node_counts = {}
+        for node in self.nodes.values():
+            if node.owner is not None:
+                node_counts[node.owner] = node_counts.get(node.owner, 0) + 1
+        
+        # Check if any player has 0 nodes
+        for player_id in self.players.keys():
+            if node_counts.get(player_id, 0) == 0:
+                # This player has no nodes - they lose
+                # Winner is the other player
+                for other_player_id in self.players.keys():
+                    if other_player_id != player_id:
+                        self.game_ended = True
+                        self.winner_id = other_player_id
+                        return other_player_id
+        
+        return None
+
     def to_init_message(self, screen: Dict[str, int], tick_interval: float) -> Dict:
         nodes_arr = [
             [nid, round(n.x, 3), round(n.y, 3), round(n.juice, 3), (n.owner if n.owner is not None else None)]
             for nid, n in self.nodes.items()
         ]
         edges_arr = [
-            [eid, e.source_node_id, e.target_node_id, 1 if e.bidirectional else 0, 1 if e.forward else 0]
+            [eid, e.source_node_id, e.target_node_id, 0, 1]  # Always one-way, always forward
             for eid, e in self.edges.items()
         ]
         players_arr = [[pid, p.color] for pid, p in self.players.items()]
@@ -102,7 +126,7 @@ class GraphState:
         }
 
     def to_tick_message(self) -> Dict:
-        edges_arr = [[eid, 1 if e.on else 0, 1 if e.flowing else 0, 1 if e.forward else 0] for eid, e in self.edges.items()]
+        edges_arr = [[eid, 1 if e.on else 0, 1 if e.flowing else 0, 1] for eid, e in self.edges.items()]  # Always forward now
         nodes_arr = [
             [nid, round(n.juice, 3), (n.owner if n.owner is not None else None)]
             for nid, n in self.nodes.items()
@@ -153,7 +177,7 @@ class GraphState:
         for e in self.edges.values():
             if not e.flowing:
                 continue
-            src_id = e.source_node_id if e.forward else e.target_node_id
+            src_id = e.source_node_id  # All edges flow from source to target
             outgoing_by_node.setdefault(src_id, []).append(e.id)
 
         # Compute per-edge transfer amounts
@@ -174,8 +198,8 @@ class GraphState:
             edge = self.edges.get(eid)
             if edge is None:
                 continue
-            from_id = edge.source_node_id if edge.forward else edge.target_node_id
-            to_id = edge.target_node_id if edge.forward else edge.source_node_id
+            from_id = edge.source_node_id  # All edges flow from source to target
+            to_id = edge.target_node_id
             from_node = self.nodes.get(from_id)
             to_node = self.nodes.get(to_id)
             if from_node is None or to_node is None:
@@ -210,39 +234,7 @@ class GraphState:
                 new_val = min(GOLD_MAX_SECTIONS, current + increment)
                 self.player_gold[pid] = new_val
 
-        # Auto-adjust bidirectional edge directions based on ownership and node sizes
-        for e in self.edges.values():
-            if not e.bidirectional:
-                continue
-            a = self.nodes.get(e.source_node_id)
-            b = self.nodes.get(e.target_node_id)
-            if a is None or b is None:
-                continue
-            a_owner = a.owner
-            b_owner = b.owner
-            desired_forward: Optional[bool] = None
-            # If both endpoints owned by the same player, leave direction as-is (manual control allowed)
-            if a_owner is not None and a_owner == b_owner:
-                desired_forward = e.forward
-            # If opposing owners, face toward the smaller node (by juice)
-            elif (a_owner is not None) and (b_owner is not None) and a_owner != b_owner:
-                if (a.juice or 0) <= (b.juice or 0):
-                    desired_forward = False  # b -> a (toward smaller 'a')
-                else:
-                    desired_forward = True  # a -> b (toward smaller 'b')
-            # If one side owned and the other unowned, face toward the unowned
-            elif a_owner is not None and b_owner is None:
-                desired_forward = True  # a -> b
-            elif a_owner is None and b_owner is not None:
-                desired_forward = False  # b -> a
-            else:
-                desired_forward = e.forward  # both unowned, no change
-
-            # Apply desired direction and turn off if it changed (auto-swap)
-            if desired_forward is not None and desired_forward != e.forward:
-                e.forward = desired_forward
-                e.on = False
-                e.flowing = False
+        # All edges are now one-way only - no auto-adjustment needed
 
 
 def load_graph(graph_path: Path) -> Tuple[GraphState, Dict[str, int]]:
@@ -253,7 +245,7 @@ def load_graph(graph_path: Path) -> Tuple[GraphState, Dict[str, int]]:
     edges_raw = data["edges"]
     nodes: List[Node] = [Node(id=n["id"], x=n["x"], y=n["y"], juice=2.0) for n in nodes_raw]
     edges: List[Edge] = [
-        Edge(id=e["id"], source_node_id=e["source"], target_node_id=e["target"], bidirectional=bool(e["bidirectional"]))
+        Edge(id=e["id"], source_node_id=e["source"], target_node_id=e["target"])
         for e in edges_raw
     ]
     return GraphState(nodes, edges), screen
@@ -266,7 +258,7 @@ def build_state_from_dict(data: Dict) -> Tuple[GraphState, Dict[str, int]]:
     # Start nodes very small (juice units)
     nodes: List[Node] = [Node(id=n["id"], x=n["x"], y=n["y"], juice=2.0) for n in nodes_raw]
     edges: List[Edge] = [
-        Edge(id=e["id"], source_node_id=e["source"], target_node_id=e["target"], bidirectional=bool(e["bidirectional"]))
+        Edge(id=e["id"], source_node_id=e["source"], target_node_id=e["target"])
         for e in edges_raw
     ]
     return GraphState(nodes, edges), screen

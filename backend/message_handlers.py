@@ -54,19 +54,39 @@ class EdgeClickHandler(BaseMessageHandler):
         # Success/failure is handled implicitly through game state changes
 
 
-class EdgeDirectionToggleHandler(BaseMessageHandler):
-    """Handle edge direction toggle messages."""
+class ReverseEdgeHandler(BaseMessageHandler):
+    """Handle edge reversal messages."""
     
     async def handle(self, websocket: websockets.WebSocketServerProtocol, 
                     msg: Dict[str, Any], server_context: Dict[str, Any]) -> None:
         token = msg.get("token")
         edge_id = msg.get("edgeId")
+        cost = msg.get("cost", 1.0)
         
         if edge_id is None:
             return
         
-        success = self.game_engine.handle_edge_direction_toggle(token, edge_id)
-        # Success/failure is handled implicitly through game state changes
+        success = self.game_engine.handle_reverse_edge(token, edge_id, cost)
+        
+        if success and self.game_engine.state:
+            # Broadcast the updated edge immediately so frontend sees the direction change
+            edge = self.game_engine.state.edges.get(edge_id)
+            if edge:
+                edge_data = {
+                    "type": "edgeReversed",
+                    "edge": {
+                        "id": edge.id,
+                        "source": edge.source_node_id,
+                        "target": edge.target_node_id,
+                        "bidirectional": False,
+                        "forward": True,
+                        "on": edge.on,
+                        "flowing": edge.flowing
+                    }
+                }
+                
+                game_clients = server_context.get("game_clients", {})
+                await self._broadcast_to_game_clients(json.dumps(edge_data), game_clients)
 
 
 class NewGameHandler(BaseMessageHandler):
@@ -196,11 +216,10 @@ class BuildBridgeHandler(BaseMessageHandler):
         token = msg.get("token")
         from_node_id = msg.get("fromNodeId")
         to_node_id = msg.get("toNodeId")
-        bidirectional = msg.get("bidirectional", False)
         cost = msg.get("cost", 0)
         
         success, new_edge, error_msg = self.game_engine.handle_build_bridge(
-            token, from_node_id, to_node_id, bidirectional, cost
+            token, from_node_id, to_node_id, cost
         )
         
         if not success:
@@ -218,8 +237,8 @@ class BuildBridgeHandler(BaseMessageHandler):
                     "id": new_edge.id,
                     "source": new_edge.source_node_id,
                     "target": new_edge.target_node_id,
-                    "bidirectional": new_edge.bidirectional,
-                    "forward": new_edge.forward,
+                    "bidirectional": False,
+                    "forward": True,
                     "on": new_edge.on,
                     "flowing": new_edge.flowing
                 }
@@ -304,7 +323,7 @@ class MessageRouter:
         self.handlers = {
             "clickNode": NodeClickHandler(game_engine),
             "clickEdge": EdgeClickHandler(game_engine),
-            "toggleEdgeDirection": EdgeDirectionToggleHandler(game_engine),
+            "reverseEdge": ReverseEdgeHandler(game_engine),
             "newGame": NewGameHandler(game_engine),
             "requestInit": RequestInitHandler(game_engine),
             "joinLobby": JoinLobbyHandler(game_engine),

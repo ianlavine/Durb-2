@@ -198,10 +198,9 @@ class GameEngine:
                 edge.flowing = False
             else:
                 # Check if player owns the source node
-                from_id = edge.source_node_id if edge.forward else edge.target_node_id
-                from_node = self.validate_node_exists(from_id)
+                source_node = self.validate_node_exists(edge.source_node_id)
                 
-                if from_node.owner == player_id:
+                if source_node.owner == player_id:
                     edge.on = True
                     edge.flowing = True
                 else:
@@ -212,9 +211,9 @@ class GameEngine:
         except GameValidationError:
             return False
     
-    def handle_edge_direction_toggle(self, token: str, edge_id: int) -> bool:
+    def handle_reverse_edge(self, token: str, edge_id: int, cost: float = 1.0) -> bool:
         """
-        Handle toggling edge direction for bidirectional edges.
+        Handle reversing an edge direction.
         Returns True if the action was successful.
         """
         try:
@@ -223,45 +222,50 @@ class GameEngine:
             self.validate_phase("playing")
             edge = self.validate_edge_exists(edge_id)
             
-            if not edge.bidirectional:
-                raise GameValidationError("Edge is not bidirectional")
-            
             # Get both nodes
-            a = self.validate_node_exists(edge.source_node_id)
-            b = self.validate_node_exists(edge.target_node_id)
+            source_node = self.validate_node_exists(edge.source_node_id)
+            target_node = self.validate_node_exists(edge.target_node_id)
             
-            a_owner = a.owner
-            b_owner = b.owner
+            # Check eligibility: own both nodes OR own one and not being attacked through edge
+            source_owner = source_node.owner
+            target_owner = target_node.owner
             
-            # Apply direction rules
-            if a_owner is not None and a_owner == b_owner:
-                # Same owner - allow manual swap if requester owns both
-                if player_id == a_owner:
-                    edge.forward = not edge.forward
-                    edge.on = True
-                    edge.flowing = True
+            can_reverse = False
+            
+            if source_owner == player_id and target_owner == player_id:
+                # Player owns both nodes - always allowed
+                can_reverse = True
+            elif source_owner == player_id or target_owner == player_id:
+                # Player owns one node - check if edge is not flowing into them
+                if edge.flowing:
+                    # Edge is flowing - check if it's flowing INTO the player's node
+                    if target_owner == player_id:
+                        # Edge flows into player's node - not allowed (being attacked)
+                        raise GameValidationError("Cannot reverse edge that is attacking you")
+                    else:
+                        # Edge flows from player's node - allowed
+                        can_reverse = True
                 else:
-                    raise GameValidationError("You must own both nodes")
-            elif (a_owner is not None) and (b_owner is not None) and a_owner != b_owner:
-                # Opposing owners - force direction toward smaller node
-                if (a.juice or 0) <= (b.juice or 0):
-                    edge.forward = False  # b -> a
-                else:
-                    edge.forward = True   # a -> b
-                edge.on = False
-                edge.flowing = False
-            elif (a_owner is not None and b_owner is None):
-                # One owned, one unowned - face toward unowned
-                edge.forward = True  # a -> b
-                edge.on = False
-                edge.flowing = False
-            elif (a_owner is None and b_owner is not None):
-                edge.forward = False  # b -> a
-                edge.on = False
-                edge.flowing = False
+                    # Edge not flowing - allowed
+                    can_reverse = True
             else:
-                # Both unowned - no change allowed
-                raise GameValidationError("Cannot change direction of unowned edge")
+                raise GameValidationError("You must own at least one node")
+            
+            if not can_reverse:
+                raise GameValidationError("Cannot reverse this edge")
+            
+            # Validate gold
+            self.validate_sufficient_gold(player_id, cost)
+            
+            # Reverse the edge by swapping source and target
+            edge.source_node_id, edge.target_node_id = edge.target_node_id, edge.source_node_id
+            
+            # Automatically turn on the edge after reversal
+            edge.on = True
+            edge.flowing = True
+            
+            # Deduct gold
+            self.state.player_gold[player_id] = max(0.0, self.state.player_gold[player_id] - cost)
             
             return True
             
@@ -269,7 +273,7 @@ class GameEngine:
             return False
     
     def handle_build_bridge(self, token: str, from_node_id: int, to_node_id: int, 
-                          bidirectional: bool, cost: float) -> Tuple[bool, Optional[Edge], Optional[str]]:
+                          cost: float) -> Tuple[bool, Optional[Edge], Optional[str]]:
         """
         Handle building a bridge between two nodes.
         Returns: (success, new_edge, error_message)
@@ -300,14 +304,12 @@ class GameEngine:
             if self._edges_would_intersect(from_node, to_node):
                 raise GameValidationError("Bridge would intersect existing edge")
             
-            # Create the edge
+            # Create the edge (always one-way from source to target)
             new_edge_id = max(self.state.edges.keys(), default=0) + 1
             new_edge = Edge(
                 id=new_edge_id,
                 source_node_id=from_node_id,
                 target_node_id=to_node_id,
-                bidirectional=bidirectional,
-                forward=True,
                 on=False,
                 flowing=False
             )
@@ -489,5 +491,12 @@ class GameEngine:
         if winner_id is not None:
             self._end_game()
             return winner_id
+        
+        # Check for zero nodes loss condition (only after picking phase)
+        if self.state.phase == "playing":
+            winner_id = self.state.check_zero_nodes_loss()
+            if winner_id is not None:
+                self._end_game()
+                return winner_id
         
         return None

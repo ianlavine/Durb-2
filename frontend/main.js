@@ -26,7 +26,7 @@
   let ws = null;
   let screen = null;
   let nodes = new Map(); // id -> {x,y,size,owner}
-  let edges = new Map(); // id -> {source,target,bidir,forward,on,flowing}
+  let edges = new Map(); // id -> {source,target,on,flowing}
 
   let graphicsEdges;
   let graphicsNodes;
@@ -47,7 +47,7 @@
   
   // Abilities system
   let abilitiesContainer = null;
-  let activeAbility = null; // null, 'bridge2way', 'bridge1way'
+  let activeAbility = null; // null, 'bridge1way', 'reverse'
   let bridgeFirstNode = null; // first selected node for bridge building
   let abilityButtons = {}; // ability name -> button element
   let mouseWorldX = 0; // current mouse position in world coordinates
@@ -210,16 +210,16 @@
 
     // Create ability buttons
     const abilities = [
-      { name: 'bridge2way', label: '2W', cost: 2, key: 'Q', description: '2-Way Bridge (2 gold)' },
-      { name: 'bridge1way', label: '1W', cost: 3, key: 'A', description: '1-Way Bridge (3 gold)' },
+      { name: 'bridge1way', label: '1W', cost: 3, key: 'Q', description: '1-Way Bridge (3 gold)' },
+      { name: 'reverse', label: '🖱️↻', cost: 1, key: 'A', description: 'Reverse Edge (1 gold)' },
       { name: 'capital', label: '★', cost: 4, key: 'C', description: 'Capital (4 gold)' }
     ];
 
     abilities.forEach((ability, index) => {
       const button = document.createElement('div');
       Object.assign(button.style, {
-        width: '120px',
-        height: '120px',
+        width: '140px',
+        height: '140px',
         background: '#2a2a2a',
         border: '3px solid #555',
         borderRadius: '16px',
@@ -408,6 +408,7 @@
       else if (msg.type === 'lobbyJoined') handleLobby(msg);
       else if (msg.type === 'gameOver') handleGameOver(msg);
       else if (msg.type === 'newEdge') handleNewEdge(msg);
+      else if (msg.type === 'edgeReversed') handleEdgeReversed(msg);
       else if (msg.type === 'bridgeError') handleBridgeError(msg);
       else if (msg.type === 'newCapital') handleNewCapital(msg);
       else if (msg.type === 'capitalError') handleCapitalError(msg);
@@ -432,7 +433,7 @@
     }
     for (const arr of msg.edges) {
       const [id, s, t, bidir, fwd] = arr;
-      edges.set(id, { source: s, target: t, bidir: !!bidir, forward: !!fwd, on: false, flowing: false });
+      edges.set(id, { source: s, target: t, on: false, flowing: false });
     }
     if (Array.isArray(msg.players)) {
       for (const arr of msg.players) {
@@ -540,7 +541,6 @@
         if (e) {
           e.on = !!on;
           e.flowing = !!flowing;
-          e.forward = !!fwd;
         }
       }
     }
@@ -583,13 +583,26 @@
       edges.set(edge.id, {
         source: edge.source,
         target: edge.target,
-        bidir: edge.bidirectional,
-        bidirectional: edge.bidirectional,
-        forward: edge.forward,
         on: edge.on,
         flowing: edge.flowing
       });
       redrawStatic();
+    }
+  }
+
+  function handleEdgeReversed(msg) {
+    // Update existing edge with new source/target after reversal
+    if (msg.edge) {
+      const edge = msg.edge;
+      const existingEdge = edges.get(edge.id);
+      if (existingEdge) {
+        // Update the source and target (they've been swapped)
+        existingEdge.source = edge.source;
+        existingEdge.target = edge.target;
+        existingEdge.on = edge.on;
+        existingEdge.flowing = edge.flowing;
+        redrawStatic();
+      }
     }
   }
 
@@ -706,13 +719,13 @@
       }
       
       // Bridge building highlight: selected first node
-      if (bridgeFirstNode === id && (activeAbility === 'bridge2way' || activeAbility === 'bridge1way')) {
+      if (bridgeFirstNode === id && activeAbility === 'bridge1way') {
         graphicsNodes.lineStyle(4, 0xffd700, 1); // gold color
         graphicsNodes.strokeCircle(nx, ny, r + 4);
       }
       
       // Bridge building hover: show gold highlight for valid nodes
-      if (hoveredNodeId === id && (activeAbility === 'bridge2way' || activeAbility === 'bridge1way')) {
+      if (hoveredNodeId === id && activeAbility === 'bridge1way') {
         if (bridgeFirstNode === null) {
           // Before selecting first node: highlight owned nodes
           if (n.owner === myPlayerId) {
@@ -726,10 +739,10 @@
         }
       }
       
-      // Capital creation hover: show player color highlight for owned nodes
+      // Capital creation hover: show player secondary color highlight for owned nodes
       if (hoveredNodeId === id && activeAbility === 'capital' && n.owner === myPlayerId) {
-        const playerColor = ownerToColor(myPlayerId);
-        graphicsNodes.lineStyle(3, playerColor, 0.8);
+        const playerSecondaryColor = ownerToSecondaryColor(myPlayerId);
+        graphicsNodes.lineStyle(3, playerSecondaryColor, 0.8);
         graphicsNodes.strokeCircle(nx, ny, r + 3);
       }
       
@@ -741,7 +754,7 @@
     }
     
     // Draw bridge preview using actual edge drawing logic
-    if (bridgeFirstNode !== null && (activeAbility === 'bridge2way' || activeAbility === 'bridge1way')) {
+    if (bridgeFirstNode !== null && activeAbility === 'bridge1way') {
       const firstNode = nodes.get(bridgeFirstNode);
       if (firstNode) {
         // Create a temporary "mouse node" for the preview
@@ -755,9 +768,6 @@
         
         // Create a temporary edge object for preview
         const previewEdge = {
-          forward: true,
-          bidir: activeAbility === 'bridge2way',
-          bidirectional: activeAbility === 'bridge2way',
           flowing: false, // preview shows as non-flowing (outlined)
           on: false
         };
@@ -802,6 +812,46 @@
     }
   }
 
+  function ownerToSecondaryColor(ownerId) {
+    if (ownerId == null) return 0x000000;
+    // Secondary colors: orange for player 1 (red), purple for player 2 (blue)
+    if (ownerId === 1) return 0xffa500; // orange
+    if (ownerId === 2) return 0x9932cc; // purple  
+    return 0xff00ff; // fallback magenta
+  }
+
+  function canReverseEdge(edge) {
+    if (!edge) return false;
+    
+    const sourceNode = nodes.get(edge.source);
+    const targetNode = nodes.get(edge.target);
+    if (!sourceNode || !targetNode) return false;
+    
+    const sourceOwner = sourceNode.owner;
+    const targetOwner = targetNode.owner;
+    
+    // Can reverse if: own both nodes OR own one node and not being attacked through edge
+    if (sourceOwner === myPlayerId && targetOwner === myPlayerId) {
+      return true; // Own both nodes
+    }
+    
+    if (sourceOwner === myPlayerId || targetOwner === myPlayerId) {
+      // Own one node - check if edge is not flowing into player's node
+      if (edge.flowing) {
+        // Edge is flowing - check if it's flowing INTO the player's node
+        if (targetOwner === myPlayerId) {
+          return false; // Edge flows into player's node - not allowed (being attacked)
+        } else {
+          return true; // Edge flows from player's node - allowed
+        }
+      } else {
+        return true; // Edge not flowing - allowed
+      }
+    }
+    
+    return false; // Don't own any nodes
+  }
+
   // Input: during picking, click to claim a node once; during playing, edge interactions allowed
   window.addEventListener('click', (ev) => {
     if (gameEnded) return;
@@ -809,7 +859,7 @@
     const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
     
     // Handle bridge building mode
-    if (activeAbility === 'bridge2way' || activeAbility === 'bridge1way') {
+    if (activeAbility === 'bridge1way') {
       const candidateNodeId = pickNearestNode(wx, wy, 18 / baseScale);
       if (candidateNodeId != null) {
         const node = nodes.get(candidateNodeId);
@@ -823,20 +873,18 @@
             // Select second node and create bridge (can connect to any node)
             {
               const abilities = {
-                'bridge2way': { cost: 2 },
                 'bridge1way': { cost: 3 },
+                'reverse': { cost: 1 },
                 'capital': { cost: 4 }
               };
               const ability = abilities[activeAbility];
               
               if (goldValue >= ability.cost && ws && ws.readyState === WebSocket.OPEN) {
                 const token = localStorage.getItem('token');
-                const bidirectional = activeAbility === 'bridge2way';
                 ws.send(JSON.stringify({
                   type: 'buildBridge',
                   fromNodeId: bridgeFirstNode,
                   toNodeId: candidateNodeId,
-                  bidirectional: bidirectional,
                   cost: ability.cost,
                   token: token
                 }));
@@ -854,6 +902,33 @@
         }
       }
       return; // Don't handle normal clicks in bridge mode
+    }
+    
+    // Handle reverse edge mode
+    if (activeAbility === 'reverse') {
+      const candidateEdgeId = pickEdgeNear(wx, wy, 14 / baseScale);
+      if (candidateEdgeId != null) {
+        const edge = edges.get(candidateEdgeId);
+        if (edge) {
+          // Reverse the edge
+          const ability = { cost: 1 };
+          if (goldValue >= ability.cost && ws && ws.readyState === WebSocket.OPEN) {
+            const token = localStorage.getItem('token');
+            ws.send(JSON.stringify({
+              type: 'reverseEdge',
+              edgeId: candidateEdgeId,
+              cost: ability.cost,
+              token: token
+            }));
+          }
+          
+          // Reset reverse mode
+          activeAbility = null;
+          bridgeFirstNode = null;
+          updateAbilityButtonStates();
+        }
+      }
+      return; // Don't handle normal clicks in reverse mode
     }
     
     // Handle capital creation mode
@@ -901,10 +976,9 @@
         if (candidateEdgeId != null) {
           const e = edges.get(candidateEdgeId);
           if (e) {
-            const fromId = e.forward ? e.source : e.target;
-            const fromNode = nodes.get(fromId);
-            // Only eligible if you own the from-node
-            if (fromNode && fromNode.owner === myPlayerId) edgeId = candidateEdgeId;
+            const sourceNode = nodes.get(e.source);
+            // Only eligible if you own the source node
+            if (sourceNode && sourceNode.owner === myPlayerId) edgeId = candidateEdgeId;
           }
         }
       }
@@ -929,7 +1003,7 @@
     }
   });
 
-  // Right-click: toggle direction on bidirectional edges
+  // Right-click: reverse edge direction (if eligible)
   window.addEventListener('contextmenu', (ev) => {
     if (gameEnded) return;
     if (phase !== 'playing') return; // disable during picking
@@ -939,7 +1013,7 @@
     if (edgeId != null && ws && ws.readyState === WebSocket.OPEN) {
       ev.preventDefault();
       const token = localStorage.getItem('token');
-      ws.send(JSON.stringify({ type: 'toggleEdgeDirection', edgeId, token }));
+      ws.send(JSON.stringify({ type: 'reverseEdge', edgeId, cost: 1, token }));
     }
   });
 
@@ -952,11 +1026,11 @@
     switch (ev.key.toLowerCase()) {
       case 'q':
         ev.preventDefault();
-        handleAbilityClick('bridge2way');
+        handleAbilityClick('bridge1way');
         break;
       case 'a':
         ev.preventDefault();
-        handleAbilityClick('bridge1way');
+        handleAbilityClick('reverse');
         break;
       case 'c':
         ev.preventDefault();
@@ -988,7 +1062,7 @@
     let needsRedraw = false;
     
     // In bridge building or capital mode, only check for node hover, not edge hover
-    if (activeAbility === 'bridge2way' || activeAbility === 'bridge1way' || activeAbility === 'capital') {
+    if (activeAbility === 'bridge1way' || activeAbility === 'capital') {
       const nodeId = pickNearestNode(wx, wy, 18 / baseScale);
       
       // Update hovered node
@@ -1004,7 +1078,7 @@
       }
       
       // Always redraw during bridge mode to update the preview line (but not for capital mode)
-      if (activeAbility === 'bridge2way' || activeAbility === 'bridge1way') {
+      if (activeAbility === 'bridge1way') {
         needsRedraw = true;
       }
     } else {
@@ -1039,8 +1113,8 @@
     if (phase !== 'playing') return; // Only allow abilities during playing phase
     
     const abilities = {
-      'bridge2way': { cost: 2 },
       'bridge1way': { cost: 3 },
+      'reverse': { cost: 1 },
       'capital': { cost: 4 }
     };
     
@@ -1058,8 +1132,13 @@
       activeAbility = null;
       bridgeFirstNode = null;
       updateAbilityButtonStates();
-    } else if (abilityName === 'bridge2way' || abilityName === 'bridge1way') {
+    } else if (abilityName === 'bridge1way') {
       // Activate bridge building
+      activeAbility = abilityName;
+      bridgeFirstNode = null;
+      updateAbilityButtonStates();
+    } else if (abilityName === 'reverse') {
+      // Activate reverse mode (similar to capital - click an edge to reverse)
       activeAbility = abilityName;
       bridgeFirstNode = null;
       updateAbilityButtonStates();
@@ -1074,8 +1153,8 @@
 
   function updateAbilityButtonStates() {
     const abilities = {
-      'bridge2way': { cost: 2 },
       'bridge1way': { cost: 3 },
+      'reverse': { cost: 1 },
       'capital': { cost: 4 }
     };
     
@@ -1205,42 +1284,19 @@
 
     const previewColor = 0xffd700; // gold color for preview
 
-    if (!e.bidir && !e.bidirectional) {
-      // One-way: chain of larger triangles pointing to 'to'
-      const triH = 16;
-      const triW = 12;
-      const packedSpacing = triH; // packed: tip touches base of next
-      const packedCount = Math.max(1, Math.floor(len / packedSpacing));
-      
-      // Calculate actual spacing to ensure last triangle tip touches node edge
-      const actualSpacing = len / packedCount;
-      
-      for (let i = 0; i < packedCount; i++) {
-        const cx = sx + (i + 0.5) * actualSpacing * ux;
-        const cy = sy + (i + 0.5) * actualSpacing * uy;
-        drawPreviewTriangle(cx, cy, triW, triH, angle, previewColor);
-      }
-    } else {
-      // Two-way: circles along path and a head triangle showing current direction
-      const radius = 4; // keep current size
-      const packedSpacing = radius * 2; // packed circles
-      const packedCount = Math.max(2, Math.floor(len / packedSpacing));
-      
-      // Calculate actual spacing to ensure proper distribution
-      const actualSpacing = len / (packedCount - 1);
-      
-      for (let i = 1; i < packedCount - 1; i++) {
-        const cx = sx + i * actualSpacing * ux;
-        const cy = sy + i * actualSpacing * uy;
-        // Draw outlined circles for preview
-        graphicsEdges.lineStyle(2, previewColor, 0.7);
-        graphicsEdges.strokeCircle(cx, cy, radius);
-      }
-      // Head triangle near 'to'
-      const headDist = Math.min(len - 10, Math.max(10, len - 16));
-      const hx = sx + headDist * ux;
-      const hy = sy + headDist * uy;
-      drawPreviewTriangle(hx, hy, 18, 14, angle, previewColor);
+    // All edges are now one-way: chain of triangles pointing to target
+    const triH = 16;
+    const triW = 12;
+    const packedSpacing = triH; // packed: tip touches base of next
+    const packedCount = Math.max(1, Math.floor(len / packedSpacing));
+    
+    // Calculate actual spacing to ensure last triangle tip touches node edge
+    const actualSpacing = len / packedCount;
+    
+    for (let i = 0; i < packedCount; i++) {
+      const cx = sx + (i + 0.5) * actualSpacing * ux;
+      const cy = sy + (i + 0.5) * actualSpacing * uy;
+      drawPreviewTriangle(cx, cy, triW, triH, angle, previewColor);
     }
   }
 
@@ -1283,8 +1339,8 @@
   }
 
   function drawEdge(e, sNode, tNode, edgeId) {
-    const from = e.forward ? sNode : tNode;
-    const to = e.forward ? tNode : sNode;
+    const from = sNode;  // All edges go from source to target
+    const to = tNode;
     const isHovered = (hoveredEdgeId === edgeId);
     
     // Offset start/end by node radius so edges don't overlap nodes visually
@@ -1310,58 +1366,32 @@
     const uy = dy / len;
     const angle = Math.atan2(uy, ux);
 
-    if (!e.bidir) {
-      // One-way: chain of larger triangles pointing to 'to'
-      const triH = 16;
-      const triW = 12;
-      const packedSpacing = triH; // packed: tip touches base of next
-      const packedCount = Math.max(1, Math.floor(len / packedSpacing));
-      
-      // Calculate actual spacing to ensure last triangle tip touches node edge
-      const actualSpacing = len / packedCount;
-      
-      const canClick = (from && from.owner === myPlayerId);
-      const hoverAllowed = isHovered && canClick;
-      const hoverColor = hoverAllowed ? ownerToColor(myPlayerId) : null;
-      for (let i = 0; i < packedCount; i++) {
-        const cx = sx + (i + 0.5) * actualSpacing * ux;
-        const cy = sy + (i + 0.5) * actualSpacing * uy;
-        drawTriangle(cx, cy, triW, triH, angle, e, from, hoverColor, hoverAllowed);
-      }
-    } else {
-      // Two-way: circles along path and a head triangle showing current direction
-      const radius = 4; // keep current size
-      const packedSpacing = radius * 2; // packed circles
-      const packedCount = Math.max(2, Math.floor(len / packedSpacing));
-      
-      // Calculate actual spacing to ensure proper distribution
-      const actualSpacing = len / (packedCount - 1);
-      
-      // Use player's color for highlight when eligible, otherwise fall back to flow color
-      const canClick = (from && from.owner === myPlayerId);
-      const color = canClick ? ownerToColor(myPlayerId) : edgeColor(e, from);
-      for (let i = 1; i < packedCount - 1; i++) {
-        const cx = sx + i * actualSpacing * ux;
-        const cy = sy + i * actualSpacing * uy;
-        if (e.flowing) {
-          graphicsEdges.fillStyle(color, 1);
-          graphicsEdges.fillCircle(cx, cy, radius);
-        } else {
-          graphicsEdges.lineStyle(2, 0x999999, 1);
-          graphicsEdges.strokeCircle(cx, cy, radius);
-        }
-        // Add hover border using player's color only if eligible
-        if (isHovered && canClick) {
-          graphicsEdges.lineStyle(2, ownerToColor(myPlayerId), 1);
-          graphicsEdges.strokeCircle(cx, cy, radius + 1);
-        }
-      }
-      // Head triangle near 'to'
-      const headDist = Math.min(len - 10, Math.max(10, len - 16));
-      const hx = sx + headDist * ux;
-      const hy = sy + headDist * uy;
-      // Triangle is always green; hover only if eligible
-      drawTriangle(hx, hy, 18, 14, angle, { ...e, flowing: true }, from, 0x00ff66, isHovered && canClick);
+    // All edges are now one-way: chain of triangles pointing from source to target
+    const triH = 16;
+    const triW = 12;
+    const packedSpacing = triH; // packed: tip touches base of next
+    const packedCount = Math.max(1, Math.floor(len / packedSpacing));
+    
+    // Calculate actual spacing to ensure last triangle tip touches node edge
+    const actualSpacing = len / packedCount;
+    
+    const canLeftClick = (from && from.owner === myPlayerId);
+    const canRightClick = isHovered && canReverseEdge(e);
+    const leftClickHover = isHovered && canLeftClick;
+    const rightClickHover = isHovered && canRightClick && !canLeftClick;
+    
+    let hoverColor = null;
+    if (leftClickHover) {
+      hoverColor = ownerToColor(myPlayerId); // Primary color for left-clickable
+    } else if (rightClickHover) {
+      hoverColor = ownerToSecondaryColor(myPlayerId); // Secondary color for right-clickable only
+    }
+    
+    const hoverAllowed = leftClickHover || rightClickHover;
+    for (let i = 0; i < packedCount; i++) {
+      const cx = sx + (i + 0.5) * actualSpacing * ux;
+      const cy = sy + (i + 0.5) * actualSpacing * uy;
+      drawTriangle(cx, cy, triW, triH, angle, e, from, hoverColor, hoverAllowed);
     }
   }
 
@@ -1388,11 +1418,11 @@
   }
 
   function edgeColor(e, fromNodeOrNull) {
-    // If flowing, use from-node owner color; else grey
+    // If flowing, use source node owner color; else grey
     if (!e.flowing) return 0x999999;
     let fromNode = fromNodeOrNull;
     if (!fromNode) {
-      fromNode = e.forward ? nodes.get(e.source) : nodes.get(e.target);
+      fromNode = nodes.get(e.source);  // Always use source node
     }
     return ownerToColor(fromNode ? fromNode.owner : null);
   }
