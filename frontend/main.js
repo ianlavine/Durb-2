@@ -1,6 +1,14 @@
 (() => {
-  // Connect to deployed backend on Render
-  const WS_URL = 'wss://durb-2.onrender.com';
+  // Automatically detect environment - no manual changes needed!
+  const isLocalhost = window.location.hostname === 'localhost' || 
+                     window.location.hostname === '127.0.0.1' || 
+                     window.location.hostname === '';
+  
+  // Server URLs
+  const LOCAL_WS_URL = 'ws://localhost:8765';
+  const PRODUCTION_WS_URL = 'wss://durb-2.onrender.com';
+  
+  const WS_URL = isLocalhost ? LOCAL_WS_URL : PRODUCTION_WS_URL;
   
   console.log('Connecting to WebSocket:', WS_URL);
 
