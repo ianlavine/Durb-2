@@ -1,6 +1,27 @@
 [build]
   publish = "frontend"
-  ignore = "git diff --quiet $CACHED_COMMIT_REF $COMMIT_REF ."
+  # No build command needed - this is a static site
+  command = "echo 'No build needed for static frontend'"
+  # Only rebuild if frontend files changed
+  ignore = "git diff --quiet $CACHED_COMMIT_REF $COMMIT_REF frontend/"
 
 [build.environment]
-  # No Python needed for frontend
+  # Disable Python/Node detection since this is static
+  SKIP_DEPENDENCY_INSTALL = "true"
+
+# Redirect all routes to index.html for SPA behavior (if needed)
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# Optional: Set headers for better performance
+[[headers]]
+  for = "/*.js"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000"
+
+[[headers]]
+  for = "/*.css"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000"

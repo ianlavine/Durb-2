@@ -1,0 +1,12 @@
+# Ignore Python backend files
+backend/
+requirements.txt
+runtime.txt
+Procfile
+railway.toml
+*.py
+__pycache__/
+*.pyc
+
+# Ignore other deployment configs not needed for frontend
+DEPLOYMENT.md
