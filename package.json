@@ -1,0 +1,10 @@
+{
+  "name": "durb-2-frontend",
+  "version": "1.0.0",
+  "description": "Static frontend for Durb 2 game",
+  "scripts": {
+    "build": "echo 'No build needed - static files'"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

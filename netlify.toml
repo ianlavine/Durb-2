@@ -1,18 +1,22 @@
 [build]
   publish = "frontend"
-  # No build command needed - this is a static site
-  command = "echo 'Static frontend - no build required'"
+  # Explicit command that does nothing but succeeds
+  command = "true"
   # Only rebuild if frontend files changed
   ignore = "git diff --quiet $CACHED_COMMIT_REF $COMMIT_REF frontend/"
 
 [build.environment]
-  # Force Netlify to treat this as a static site
+  # Explicitly disable dependency installation
   NETLIFY_SKIP_DEPENDENCY_INSTALL = "true"
   SKIP_DEPENDENCY_INSTALL = "true"
-  # Disable all language detection
-  NODE_VERSION = ""
+  # Force static site behavior
+  NETLIFY_USE_YARN = "false"
+  NETLIFY_USE_NPM = "false"
+  # Disable language runtime detection
+  NODE_ENV = ""
   PYTHON_VERSION = ""
   RUBY_VERSION = ""
+  GO_VERSION = ""
 
 # Redirect all routes to index.html for SPA behavior (if needed)
 [[redirects]]
