@@ -375,6 +375,16 @@ class GameEngine:
         
         return winner_id
     
+    def handle_lobby_disconnect(self, token: str) -> None:
+        """
+        Handle a player disconnecting from the lobby before game starts.
+        """
+        if self.lobby_waiting == token:
+            self.lobby_waiting = None
+            # Also clean up any associated color mapping
+            if token in self.token_to_color:
+                del self.token_to_color[token]
+
     def handle_disconnect(self, token: str) -> Optional[int]:
         """
         Handle a player disconnect after grace period.

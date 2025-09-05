@@ -65,6 +65,9 @@ class WebSocketServer:
         # If in lobby, clear waiting
         if lobby_waiting and lobby_waiting.get("websocket") is websocket:
             self.server_context["lobby_waiting"] = None
+            # Also notify game engine of lobby disconnect
+            if lobby_waiting.get("token"):
+                self.game_engine.handle_lobby_disconnect(lobby_waiting["token"])
         
         # If in game, handle disconnect with grace period
         if token and token in game_clients:
