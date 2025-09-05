@@ -1,7 +1,5 @@
 # Ignore ALL backend and Python-related files
 backend/
-requirements.txt
-runtime.txt
 Procfile
 railway.toml
 *.py
