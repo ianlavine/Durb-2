@@ -109,6 +109,12 @@
         nodes.clear();
         edges.clear();
         capitalNodes.clear(); // Clear capital nodes when returning to menu
+        
+        // Reset ability state when returning to menu
+        activeAbility = null;
+        bridgeFirstNode = null;
+        updateAbilityButtonStates();
+        
         redrawStatic();
       }
     });
@@ -457,6 +463,10 @@
     edges.clear();
     players.clear();
     capitalNodes.clear(); // Clear capital nodes from previous game
+    
+    // Reset ability state from previous game
+    activeAbility = null;
+    bridgeFirstNode = null;
 
     for (const arr of msg.nodes) {
       const [id, x, y, size, owner] = arr;
