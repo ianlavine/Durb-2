@@ -108,6 +108,7 @@
         if (capitalCounter) capitalCounter.style.display = 'none';
         nodes.clear();
         edges.clear();
+        capitalNodes.clear(); // Clear capital nodes when returning to menu
         redrawStatic();
       }
     });
@@ -455,6 +456,7 @@
     nodes.clear();
     edges.clear();
     players.clear();
+    capitalNodes.clear(); // Clear capital nodes from previous game
 
     for (const arr of msg.nodes) {
       const [id, x, y, size, owner] = arr;
