@@ -516,3 +516,102 @@ class GameEngine:
                 return winner_id
         
         return None
+    
+    def handle_redirect_energy(self, token: str, target_node_id: int) -> bool:
+        """
+        Redirect energy flow towards a target node by optimizing edge states.
+        This algorithm turns on/off edges to maximize energy flow to the target node.
+        Returns True if the action was successful.
+        """
+        try:
+            self.validate_game_active()
+            player_id = self.validate_player(token)
+            self.validate_phase("playing")
+            target_node = self.validate_node_exists(target_node_id)
+            
+            # Get all nodes owned by the player
+            player_nodes = [node for node in self.state.nodes.values() 
+                          if node.owner == player_id]
+            
+            if not player_nodes:
+                raise GameValidationError("You don't own any nodes")
+            
+            # Check if the target node can receive flow from any player nodes
+            can_reach_target = False
+            for edge in self.state.edges.values():
+                if edge.target_node_id == target_node_id:
+                    source_node = self.state.nodes.get(edge.source_node_id)
+                    if source_node and source_node.owner == player_id:
+                        can_reach_target = True
+                        break
+            
+            if not can_reach_target:
+                raise GameValidationError("No path to target node")
+            
+            # Algorithm: Maximize flow to target node
+            self._optimize_energy_flow_to_target(player_id, target_node_id)
+            
+            return True
+            
+        except GameValidationError:
+            return False
+    
+    def _optimize_energy_flow_to_target(self, player_id: int, target_node_id: int) -> None:
+        """
+        Optimize energy flow to maximize flow towards the target node.
+        This implements a greedy algorithm that:
+        1. Turns ON all edges owned by player that lead towards the target
+        2. Turns OFF edges owned by player that lead away from the target
+        3. Uses BFS to determine which edges contribute to target flow
+        """
+        from collections import deque, defaultdict
+        
+        # Build adjacency list for owned edges
+        owned_edges_by_source = defaultdict(list)
+        for edge in self.state.edges.values():
+            source_node = self.state.nodes.get(edge.source_node_id)
+            if source_node and source_node.owner == player_id:
+                owned_edges_by_source[edge.source_node_id].append(edge)
+        
+        # Find all nodes that can reach the target through player-owned edges
+        # Using reverse BFS from target to find which nodes can contribute
+        reachable_to_target = set()
+        queue = deque([target_node_id])
+        visited = {target_node_id}
+        
+        while queue:
+            current_node_id = queue.popleft()
+            reachable_to_target.add(current_node_id)
+            
+            # Find all edges that point to current node and are owned by player
+            for edge in self.state.edges.values():
+                if (edge.target_node_id == current_node_id and 
+                    edge.source_node_id not in visited):
+                    source_node = self.state.nodes.get(edge.source_node_id)
+                    if source_node and source_node.owner == player_id:
+                        visited.add(edge.source_node_id)
+                        queue.append(edge.source_node_id)
+        
+        # Now optimize edge states
+        for edge in self.state.edges.values():
+            source_node = self.state.nodes.get(edge.source_node_id)
+            
+            # Only modify edges where player owns the source node
+            if not source_node or source_node.owner != player_id:
+                continue
+            
+            # Turn ON edges that contribute to flow towards target
+            if edge.target_node_id in reachable_to_target:
+                edge.on = True
+                edge.flowing = True
+            else:
+                # Turn OFF edges that don't contribute to target flow
+                # But keep edges to nodes we own (for defensive purposes)
+                target_node = self.state.nodes.get(edge.target_node_id)
+                if target_node and target_node.owner == player_id:
+                    # Keep flowing to our own nodes (defensive)
+                    pass
+                else:
+                    # Turn off flow to nodes that don't help reach target
+                    edge.on = False
+                    edge.flowing = False

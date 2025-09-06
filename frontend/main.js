@@ -436,6 +436,7 @@
       else if (msg.type === 'gameOver') handleGameOver(msg);
       else if (msg.type === 'newEdge') handleNewEdge(msg);
       else if (msg.type === 'edgeReversed') handleEdgeReversed(msg);
+      else if (msg.type === 'edgeUpdated') handleEdgeUpdated(msg);
       else if (msg.type === 'bridgeError') handleBridgeError(msg);
       else if (msg.type === 'newCapital') handleNewCapital(msg);
       else if (msg.type === 'capitalError') handleCapitalError(msg);
@@ -635,6 +636,27 @@
         // Update the source and target (they've been swapped)
         existingEdge.source = edge.source;
         existingEdge.target = edge.target;
+        const wasFlowing = existingEdge.flowing;
+        existingEdge.on = edge.on;
+        existingEdge.flowing = edge.flowing;
+        
+        // Track flow start time for initialization animation
+        if (!wasFlowing && existingEdge.flowing) {
+          existingEdge.flowStartTime = animationTime;
+        } else if (!existingEdge.flowing) {
+          existingEdge.flowStartTime = null;
+        }
+        redrawStatic();
+      }
+    }
+  }
+
+  function handleEdgeUpdated(msg) {
+    // Update existing edge state (used for energy redirection)
+    if (msg.edge) {
+      const edge = msg.edge;
+      const existingEdge = edges.get(edge.id);
+      if (existingEdge) {
         const wasFlowing = existingEdge.flowing;
         existingEdge.on = edge.on;
         existingEdge.flowing = edge.flowing;
@@ -918,12 +940,70 @@
     return false;
   }
 
+  // Double-click handling variables
+  let clickTimeout = null;
+  let lastClickTime = 0;
+  let lastClickedNodeId = null;
+  const DOUBLE_CLICK_DELAY = 300; // milliseconds
+
   // Input: during picking, click to claim a node once; during playing, edge interactions allowed
   window.addEventListener('click', (ev) => {
     if (gameEnded) return;
     const [wx, wy] = screenToWorld(ev.clientX, ev.clientY);
     const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
     
+    const currentTime = Date.now();
+    const nodeId = pickNearestNode(wx, wy, 18 / baseScale);
+    
+    // Check for double-click on the same node
+    if (nodeId != null && nodeId === lastClickedNodeId && 
+        currentTime - lastClickTime < DOUBLE_CLICK_DELAY) {
+      // This is a double-click - handle energy redirection
+      if (clickTimeout) {
+        clearTimeout(clickTimeout);
+        clickTimeout = null;
+      }
+      handleDoubleClick(nodeId);
+      lastClickedNodeId = null;
+      return;
+    }
+    
+    // Store click info for potential double-click
+    lastClickedNodeId = nodeId;
+    lastClickTime = currentTime;
+    
+    // Clear any existing timeout
+    if (clickTimeout) {
+      clearTimeout(clickTimeout);
+    }
+    
+    // Set timeout for single-click handling
+    clickTimeout = setTimeout(() => {
+      handleSingleClick(ev, wx, wy, baseScale);
+      clickTimeout = null;
+    }, DOUBLE_CLICK_DELAY);
+  });
+
+  function handleDoubleClick(nodeId) {
+    // Only allow double-click energy redirection during playing phase
+    if (phase !== 'playing' || !ws || ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    
+    // Check if this node can receive energy flow from any of our nodes
+    if (!canTargetNodeForFlow(nodeId)) {
+      return;
+    }
+    
+    const token = localStorage.getItem('token');
+    ws.send(JSON.stringify({
+      type: 'redirectEnergy',
+      targetNodeId: nodeId,
+      token: token
+    }));
+  }
+
+  function handleSingleClick(ev, wx, wy, baseScale) {
     // Handle bridge building mode
     if (activeAbility === 'bridge1way') {
       const candidateNodeId = pickNearestNode(wx, wy, 18 / baseScale);
@@ -1126,7 +1206,7 @@
         ws.send(JSON.stringify({ type: 'clickEdge', edgeId, token }));
       }
     }
-  });
+  }
 
   // Right-click: reverse edge direction (if eligible)
   window.addEventListener('contextmenu', (ev) => {
