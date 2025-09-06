@@ -236,33 +236,18 @@ class GameEngine:
             source_node = self.validate_node_exists(edge.source_node_id)
             target_node = self.validate_node_exists(edge.target_node_id)
             
-            # Check eligibility: own both nodes OR own one and not being attacked through edge
+            # New eligibility rules: must own at least one node AND source can't be opponent's
             source_owner = source_node.owner
             target_owner = target_node.owner
             
-            can_reverse = False
-            
-            if source_owner == player_id and target_owner == player_id:
-                # Player owns both nodes - always allowed
-                can_reverse = True
-            elif source_owner == player_id or target_owner == player_id:
-                # Player owns one node - check if edge is not flowing into them
-                if edge.flowing:
-                    # Edge is flowing - check if it's flowing INTO the player's node
-                    if target_owner == player_id:
-                        # Edge flows into player's node - not allowed (being attacked)
-                        raise GameValidationError("Cannot reverse edge that is attacking you")
-                    else:
-                        # Edge flows from player's node - allowed
-                        can_reverse = True
-                else:
-                    # Edge not flowing - allowed
-                    can_reverse = True
-            else:
+            # Must own at least one node
+            if source_owner != player_id and target_owner != player_id:
                 raise GameValidationError("You must own at least one node")
             
-            if not can_reverse:
-                raise GameValidationError("Cannot reverse this edge")
+            # Source node cannot belong to opponent
+            opponent_ids = [pid for pid in self.state.players.keys() if pid != player_id]
+            if source_owner in opponent_ids:
+                raise GameValidationError("Cannot reverse edge from opponent's node")
             
             # Validate gold
             self.validate_sufficient_gold(player_id, cost)
@@ -363,6 +348,21 @@ class GameEngine:
             # Check if already a capital
             if hasattr(self.state, 'capital_nodes') and node_id in self.state.capital_nodes:
                 raise GameValidationError("Node is already a capital")
+            
+            # Check if any adjacent nodes are capitals
+            if hasattr(self.state, 'capital_nodes'):
+                for edge_id in node.attached_edge_ids:
+                    edge = self.state.edges.get(edge_id)
+                    if edge:
+                        # Check both directions - if this node is source or target
+                        adjacent_node_id = None
+                        if edge.source_node_id == node_id:
+                            adjacent_node_id = edge.target_node_id
+                        elif edge.target_node_id == node_id:
+                            adjacent_node_id = edge.source_node_id
+                        
+                        if adjacent_node_id and adjacent_node_id in self.state.capital_nodes:
+                            raise GameValidationError("Cannot create capital adjacent to another capital")
             
             # Create capital
             if not hasattr(self.state, 'capital_nodes'):
@@ -516,3 +516,109 @@ class GameEngine:
                 return winner_id
         
         return None
+    
+    def handle_redirect_energy(self, token: str, target_node_id: int) -> bool:
+        """
+        Redirect energy flow towards a target node by optimizing edge states.
+        This algorithm turns on/off edges to maximize energy flow to the target node.
+        Returns True if the action was successful.
+        """
+        try:
+            self.validate_game_active()
+            player_id = self.validate_player(token)
+            self.validate_phase("playing")
+            target_node = self.validate_node_exists(target_node_id)
+            
+            # Get all nodes owned by the player
+            player_nodes = [node for node in self.state.nodes.values() 
+                          if node.owner == player_id]
+            
+            if not player_nodes:
+                raise GameValidationError("You don't own any nodes")
+            
+            # Check if the target node can receive flow from any player nodes
+            can_reach_target = False
+            for edge in self.state.edges.values():
+                if edge.target_node_id == target_node_id:
+                    source_node = self.state.nodes.get(edge.source_node_id)
+                    if source_node and source_node.owner == player_id:
+                        can_reach_target = True
+                        break
+            
+            if not can_reach_target:
+                raise GameValidationError("No path to target node")
+            
+            # Algorithm: Maximize flow to target node
+            self._optimize_energy_flow_to_target(player_id, target_node_id)
+            
+            return True
+            
+        except GameValidationError:
+            return False
+    
+    def _optimize_energy_flow_to_target(self, player_id: int, target_node_id: int) -> None:
+        """
+        Optimize energy flow to maximize flow towards the target node using shortest paths.
+        Algorithm:
+        1. Start from target node and work backwards
+        2. For each node, find the shortest path to target through player-owned edges
+        3. Each node should only send energy through ONE optimal outgoing edge
+        4. Turn off all other outgoing edges from that node
+        """
+        from collections import deque, defaultdict
+        
+        # Build reverse adjacency list (who can send TO each node)
+        incoming_edges = defaultdict(list)
+        outgoing_edges = defaultdict(list)
+        
+        for edge in self.state.edges.values():
+            source_node = self.state.nodes.get(edge.source_node_id)
+            if source_node and source_node.owner == player_id:
+                incoming_edges[edge.target_node_id].append(edge)
+                outgoing_edges[edge.source_node_id].append(edge)
+        
+        # BFS backwards from target to find shortest paths
+        distances = {target_node_id: 0}
+        best_next_hop = {}  # node_id -> edge_id (the ONE edge this node should use)
+        queue = deque([target_node_id])
+        
+        while queue:
+            current_node_id = queue.popleft()
+            current_distance = distances[current_node_id]
+            
+            # Look at all edges that can send TO the current node
+            for edge in incoming_edges[current_node_id]:
+                source_node_id = edge.source_node_id
+                
+                # If we haven't visited this source node, or we found a shorter path
+                if source_node_id not in distances or distances[source_node_id] > current_distance + 1:
+                    distances[source_node_id] = current_distance + 1
+                    best_next_hop[source_node_id] = edge.id
+                    queue.append(source_node_id)
+        
+        # Now set edge states based on the optimal paths
+        for edge in self.state.edges.values():
+            source_node = self.state.nodes.get(edge.source_node_id)
+            
+            # Only modify edges where player owns the source node
+            if not source_node or source_node.owner != player_id:
+                continue
+            
+            # Special case: Turn off ALL outgoing edges from the target node
+            # (we want energy flowing INTO the target, not OUT of it)
+            if edge.source_node_id == target_node_id:
+                edge.on = False
+                edge.flowing = False
+            # If this node has a path to target and this is the optimal edge
+            elif (edge.source_node_id in best_next_hop and 
+                  best_next_hop[edge.source_node_id] == edge.id):
+                # This is the ONE edge this node should use
+                edge.on = True
+                edge.flowing = True
+            else:
+                # Turn off all other edges from nodes that can reach target
+                if edge.source_node_id in best_next_hop:
+                    edge.on = False
+                    edge.flowing = False
+                # For nodes that can't reach target, leave their edges as-is
+                # (they might be defending other areas)

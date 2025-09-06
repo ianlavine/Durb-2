@@ -68,6 +68,14 @@ class ReverseEdgeHandler(BaseMessageHandler):
         
         success = self.game_engine.handle_reverse_edge(token, edge_id, cost)
         
+        if not success:
+            # Send error message to the player who attempted the reversal
+            await websocket.send(json.dumps({
+                "type": "reverseEdgeError", 
+                "message": "You can't reverse an edge your opponent controls"
+            }))
+            return
+        
         if success and self.game_engine.state:
             # Broadcast the updated edge immediately so frontend sees the direction change
             edge = self.game_engine.state.edges.get(edge_id)
@@ -286,6 +294,40 @@ class CreateCapitalHandler(BaseMessageHandler):
             server_context["ws_to_token"] = {}
 
 
+class RedirectEnergyHandler(BaseMessageHandler):
+    """Handle energy redirection messages."""
+    
+    async def handle(self, websocket: websockets.WebSocketServerProtocol, 
+                    msg: Dict[str, Any], server_context: Dict[str, Any]) -> None:
+        token = msg.get("token")
+        target_node_id = msg.get("targetNodeId")
+        
+        if target_node_id is None:
+            return
+        
+        success = self.game_engine.handle_redirect_energy(token, target_node_id)
+        
+        if success and self.game_engine.state:
+            # Broadcast the updated edge states to all clients
+            game_clients = server_context.get("game_clients", {})
+            
+            # Send all affected edge updates
+            for edge in self.game_engine.state.edges.values():
+                edge_data = {
+                    "type": "edgeUpdated",
+                    "edge": {
+                        "id": edge.id,
+                        "source": edge.source_node_id,
+                        "target": edge.target_node_id,
+                        "bidirectional": False,
+                        "forward": True,
+                        "on": edge.on,
+                        "flowing": edge.flowing
+                    }
+                }
+                await self._broadcast_to_game_clients(json.dumps(edge_data), game_clients)
+
+
 class QuitGameHandler(BaseMessageHandler):
     """Handle quit game requests."""
     
@@ -329,6 +371,7 @@ class MessageRouter:
             "joinLobby": JoinLobbyHandler(game_engine),
             "buildBridge": BuildBridgeHandler(game_engine),
             "createCapital": CreateCapitalHandler(game_engine),
+            "redirectEnergy": RedirectEnergyHandler(game_engine),
             "quitGame": QuitGameHandler(game_engine),
         }
     

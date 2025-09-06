@@ -436,7 +436,9 @@
       else if (msg.type === 'gameOver') handleGameOver(msg);
       else if (msg.type === 'newEdge') handleNewEdge(msg);
       else if (msg.type === 'edgeReversed') handleEdgeReversed(msg);
+      else if (msg.type === 'edgeUpdated') handleEdgeUpdated(msg);
       else if (msg.type === 'bridgeError') handleBridgeError(msg);
+      else if (msg.type === 'reverseEdgeError') handleReverseEdgeError(msg);
       else if (msg.type === 'newCapital') handleNewCapital(msg);
       else if (msg.type === 'capitalError') handleCapitalError(msg);
     };
@@ -650,6 +652,27 @@
     }
   }
 
+  function handleEdgeUpdated(msg) {
+    // Update existing edge state (used for energy redirection)
+    if (msg.edge) {
+      const edge = msg.edge;
+      const existingEdge = edges.get(edge.id);
+      if (existingEdge) {
+        const wasFlowing = existingEdge.flowing;
+        existingEdge.on = edge.on;
+        existingEdge.flowing = edge.flowing;
+        
+        // Track flow start time for initialization animation
+        if (!wasFlowing && existingEdge.flowing) {
+          existingEdge.flowStartTime = animationTime;
+        } else if (!existingEdge.flowing) {
+          existingEdge.flowStartTime = null;
+        }
+        redrawStatic();
+      }
+    }
+  }
+
   function handleBridgeError(msg) {
     // Show error message to the player
     showErrorMessage(msg.message || "Invalid Edge!");
@@ -662,6 +685,11 @@
       redrawStatic();
       // Capital counter will be updated by next tick message from backend
     }
+  }
+
+  function handleReverseEdgeError(msg) {
+    // Show error message to the player
+    showErrorMessage(msg.message || "Can't reverse this edge!");
   }
 
   function handleCapitalError(msg) {
@@ -883,26 +911,27 @@
     const sourceOwner = sourceNode.owner;
     const targetOwner = targetNode.owner;
     
-    // Can reverse if: own both nodes OR own one node and not being attacked through edge
-    if (sourceOwner === myPlayerId && targetOwner === myPlayerId) {
-      return true; // Own both nodes
+    // New rules: must own at least one node AND source can't be opponent's
+    
+    // Must own at least one node
+    if (sourceOwner !== myPlayerId && targetOwner !== myPlayerId) {
+      return false; // Don't own any nodes
     }
     
-    if (sourceOwner === myPlayerId || targetOwner === myPlayerId) {
-      // Own one node - check if edge is not flowing into player's node
-      if (edge.flowing) {
-        // Edge is flowing - check if it's flowing INTO the player's node
-        if (targetOwner === myPlayerId) {
-          return false; // Edge flows into player's node - not allowed (being attacked)
-        } else {
-          return true; // Edge flows from player's node - allowed
-        }
-      } else {
-        return true; // Edge not flowing - allowed
+    // Source node cannot belong to opponent
+    // Get opponent IDs (assuming 2-player game for now, but could be expanded)
+    const opponentIds = [];
+    for (const [playerId] of players.entries()) {
+      if (playerId !== myPlayerId) {
+        opponentIds.push(playerId);
       }
     }
     
-    return false; // Don't own any nodes
+    if (opponentIds.includes(sourceOwner)) {
+      return false; // Source node belongs to opponent
+    }
+    
+    return true; // Can reverse
   }
 
   function canTargetNodeForFlow(targetNodeId) {
@@ -918,12 +947,70 @@
     return false;
   }
 
+  // Double-click handling variables
+  let clickTimeout = null;
+  let lastClickTime = 0;
+  let lastClickedNodeId = null;
+  const DOUBLE_CLICK_DELAY = 300; // milliseconds
+
   // Input: during picking, click to claim a node once; during playing, edge interactions allowed
   window.addEventListener('click', (ev) => {
     if (gameEnded) return;
     const [wx, wy] = screenToWorld(ev.clientX, ev.clientY);
     const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
     
+    const currentTime = Date.now();
+    const nodeId = pickNearestNode(wx, wy, 18 / baseScale);
+    
+    // Check for double-click on the same node
+    if (nodeId != null && nodeId === lastClickedNodeId && 
+        currentTime - lastClickTime < DOUBLE_CLICK_DELAY) {
+      // This is a double-click - handle energy redirection
+      if (clickTimeout) {
+        clearTimeout(clickTimeout);
+        clickTimeout = null;
+      }
+      handleDoubleClick(nodeId);
+      lastClickedNodeId = null;
+      return;
+    }
+    
+    // Store click info for potential double-click
+    lastClickedNodeId = nodeId;
+    lastClickTime = currentTime;
+    
+    // Clear any existing timeout
+    if (clickTimeout) {
+      clearTimeout(clickTimeout);
+    }
+    
+    // Set timeout for single-click handling
+    clickTimeout = setTimeout(() => {
+      handleSingleClick(ev, wx, wy, baseScale);
+      clickTimeout = null;
+    }, DOUBLE_CLICK_DELAY);
+  });
+
+  function handleDoubleClick(nodeId) {
+    // Only allow double-click energy redirection during playing phase
+    if (phase !== 'playing' || !ws || ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    
+    // Check if this node can receive energy flow from any of our nodes
+    if (!canTargetNodeForFlow(nodeId)) {
+      return;
+    }
+    
+    const token = localStorage.getItem('token');
+    ws.send(JSON.stringify({
+      type: 'redirectEnergy',
+      targetNodeId: nodeId,
+      token: token
+    }));
+  }
+
+  function handleSingleClick(ev, wx, wy, baseScale) {
     // Handle bridge building mode
     if (activeAbility === 'bridge1way') {
       const candidateNodeId = pickNearestNode(wx, wy, 18 / baseScale);
@@ -1126,7 +1213,7 @@
         ws.send(JSON.stringify({ type: 'clickEdge', edgeId, token }));
       }
     }
-  });
+  }
 
   // Right-click: reverse edge direction (if eligible)
   window.addEventListener('contextmenu', (ev) => {
@@ -1498,7 +1585,9 @@
     const actualSpacing = len / packedCount;
     
     const canLeftClick = (from && from.owner === myPlayerId);
-    const canRightClick = isHovered && canReverseEdge(e);
+    // Show secondary color for any edge where player owns at least one node (allows right-click attempt)
+    const ownsAtLeastOneNode = (from && from.owner === myPlayerId) || (to && to.owner === myPlayerId);
+    const canRightClick = isHovered && ownsAtLeastOneNode;
     const leftClickHover = isHovered && canLeftClick;
     const rightClickHover = isHovered && canRightClick && !canLeftClick;
     
