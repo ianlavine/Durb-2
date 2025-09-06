@@ -73,6 +73,7 @@
     const playBtn = document.getElementById('playBtn');
     if (playBtn) {
       playBtn.addEventListener('click', () => {
+        console.log('poop');
         if (ws && ws.readyState === WebSocket.OPEN) {
           document.getElementById('lobby').style.display = 'block';
           ws.send(JSON.stringify({ type: 'joinLobby' }));
