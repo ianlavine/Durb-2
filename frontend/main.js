@@ -438,6 +438,7 @@
       else if (msg.type === 'edgeReversed') handleEdgeReversed(msg);
       else if (msg.type === 'edgeUpdated') handleEdgeUpdated(msg);
       else if (msg.type === 'bridgeError') handleBridgeError(msg);
+      else if (msg.type === 'reverseEdgeError') handleReverseEdgeError(msg);
       else if (msg.type === 'newCapital') handleNewCapital(msg);
       else if (msg.type === 'capitalError') handleCapitalError(msg);
     };
@@ -686,6 +687,11 @@
     }
   }
 
+  function handleReverseEdgeError(msg) {
+    // Show error message to the player
+    showErrorMessage(msg.message || "Can't reverse this edge!");
+  }
+
   function handleCapitalError(msg) {
     // Show error message to the player
     showErrorMessage(msg.message || "Invalid Capital!");
@@ -905,26 +911,27 @@
     const sourceOwner = sourceNode.owner;
     const targetOwner = targetNode.owner;
     
-    // Can reverse if: own both nodes OR own one node and not being attacked through edge
-    if (sourceOwner === myPlayerId && targetOwner === myPlayerId) {
-      return true; // Own both nodes
+    // New rules: must own at least one node AND source can't be opponent's
+    
+    // Must own at least one node
+    if (sourceOwner !== myPlayerId && targetOwner !== myPlayerId) {
+      return false; // Don't own any nodes
     }
     
-    if (sourceOwner === myPlayerId || targetOwner === myPlayerId) {
-      // Own one node - check if edge is not flowing into player's node
-      if (edge.flowing) {
-        // Edge is flowing - check if it's flowing INTO the player's node
-        if (targetOwner === myPlayerId) {
-          return false; // Edge flows into player's node - not allowed (being attacked)
-        } else {
-          return true; // Edge flows from player's node - allowed
-        }
-      } else {
-        return true; // Edge not flowing - allowed
+    // Source node cannot belong to opponent
+    // Get opponent IDs (assuming 2-player game for now, but could be expanded)
+    const opponentIds = [];
+    for (const [playerId] of players.entries()) {
+      if (playerId !== myPlayerId) {
+        opponentIds.push(playerId);
       }
     }
     
-    return false; // Don't own any nodes
+    if (opponentIds.includes(sourceOwner)) {
+      return false; // Source node belongs to opponent
+    }
+    
+    return true; // Can reverse
   }
 
   function canTargetNodeForFlow(targetNodeId) {
@@ -1578,7 +1585,9 @@
     const actualSpacing = len / packedCount;
     
     const canLeftClick = (from && from.owner === myPlayerId);
-    const canRightClick = isHovered && canReverseEdge(e);
+    // Show secondary color for any edge where player owns at least one node (allows right-click attempt)
+    const ownsAtLeastOneNode = (from && from.owner === myPlayerId) || (to && to.owner === myPlayerId);
+    const canRightClick = isHovered && ownsAtLeastOneNode;
     const leftClickHover = isHovered && canLeftClick;
     const rightClickHover = isHovered && canRightClick && !canLeftClick;
     

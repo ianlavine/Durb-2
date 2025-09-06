@@ -68,6 +68,14 @@ class ReverseEdgeHandler(BaseMessageHandler):
         
         success = self.game_engine.handle_reverse_edge(token, edge_id, cost)
         
+        if not success:
+            # Send error message to the player who attempted the reversal
+            await websocket.send(json.dumps({
+                "type": "reverseEdgeError", 
+                "message": "You can't reverse an edge your opponent controls"
+            }))
+            return
+        
         if success and self.game_engine.state:
             # Broadcast the updated edge immediately so frontend sees the direction change
             edge = self.game_engine.state.edges.get(edge_id)
