@@ -32,6 +32,10 @@ class GraphGenerator:
         """Synchronous graph generation."""
         nodes = gen_graph.generate_node_positions(gen_graph.NODE_COUNT, width, height, margin)
         edges = gen_graph.generate_planar_edges(nodes, gen_graph.DESIRED_EDGE_COUNT, gen_graph.ONE_WAY_PERCENT)
+        
+        # Remove isolated nodes after graph generation
+        nodes, edges = gen_graph.remove_isolated_nodes(nodes, edges)
+        
         return nodes, edges
     
     def generate_sync(self, width: int = None, height: int = None, margin: int = None) -> Tuple[List, List]:

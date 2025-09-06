@@ -215,8 +215,8 @@
 
     // Create ability buttons
     const abilities = [
-      { name: 'reverse', label: 'Reverse', cost: 1, key: '🖱️', description: 'Reverse Edge (1 gold)' },
-      { name: 'bridge1way', label: 'Bridge', cost: 3, key: 'A', description: 'Bridge (3 gold)' },
+      { name: 'reverse', label: 'Reverse', cost: 1, key: '🖱️', description: 'Reverse Pipe (1 gold)' },
+      { name: 'bridge1way', label: 'New Pipe', cost: 3, key: 'A', description: 'New Pipe (3 gold)' },
       { name: 'capital', label: 'Capital', cost: 5, key: 'C', description: 'Capital (5 gold)' }
     ];
 
@@ -626,6 +626,13 @@
       });
       redrawStatic();
     }
+    
+    // Reset bridge building state on successful edge creation
+    if (activeAbility === 'bridge1way') {
+      activeAbility = null;
+      bridgeFirstNode = null;
+      updateAbilityButtonStates();
+    }
   }
 
   function handleEdgeReversed(msg) {
@@ -649,6 +656,13 @@
         }
         redrawStatic();
       }
+    }
+    
+    // Reset reverse mode on successful edge reversal
+    if (activeAbility === 'reverse') {
+      activeAbility = null;
+      bridgeFirstNode = null;
+      updateAbilityButtonStates();
     }
   }
 
@@ -675,7 +689,7 @@
 
   function handleBridgeError(msg) {
     // Show error message to the player
-    showErrorMessage(msg.message || "Invalid Edge!");
+    showErrorMessage(msg.message || "Invalid Pipe!");
   }
 
   function handleNewCapital(msg) {
@@ -685,11 +699,18 @@
       redrawStatic();
       // Capital counter will be updated by next tick message from backend
     }
+    
+    // Reset capital creation state on successful capital creation
+    if (activeAbility === 'capital') {
+      activeAbility = null;
+      bridgeFirstNode = null;
+      updateAbilityButtonStates();
+    }
   }
 
   function handleReverseEdgeError(msg) {
     // Show error message to the player
-    showErrorMessage(msg.message || "Can't reverse this edge!");
+    showErrorMessage(msg.message || "Can't reverse this pipe!");
   }
 
   function handleCapitalError(msg) {
@@ -791,7 +812,8 @@
       }
       
       // Hover effect: show if node can be targeted for flow (playing phase or picked in picking phase)
-      if (hoveredNodeId === id && ((phase === 'playing') || (phase === 'picking' && myPicked))) {
+      // Only show this when no ability is active to avoid conflicting with ability-specific highlights
+      if (hoveredNodeId === id && ((phase === 'playing') || (phase === 'picking' && myPicked)) && !activeAbility) {
         if (canTargetNodeForFlow(id)) {
           const myColor = ownerToColor(myPlayerId);
           graphicsNodes.lineStyle(3, myColor, 0.8);
@@ -820,8 +842,9 @@
         }
       }
       
-      // Capital creation hover: show player secondary color highlight for owned nodes
-      if (hoveredNodeId === id && activeAbility === 'capital' && n.owner === myPlayerId) {
+      // Capital creation hover: show player secondary color highlight for valid capital locations
+      // (don't mislead with highlighting if it won't work)
+      if (hoveredNodeId === id && activeAbility === 'capital' && canCreateCapitalAt(id)) {
         const playerSecondaryColor = ownerToSecondaryColor(myPlayerId);
         graphicsNodes.lineStyle(3, playerSecondaryColor, 0.8);
         graphicsNodes.strokeCircle(nx, ny, r + 3);
@@ -947,6 +970,37 @@
     return false;
   }
 
+  function canCreateCapitalAt(nodeId) {
+    const node = nodes.get(nodeId);
+    if (!node || node.owner !== myPlayerId) {
+      return false; // Must own the node
+    }
+    
+    // Check if already a capital
+    if (capitalNodes.has(nodeId)) {
+      return false; // Already a capital
+    }
+    
+    // Check for adjacent capitals
+    for (const [edgeId, edge] of edges.entries()) {
+      let adjacentNodeId = null;
+      
+      // Find adjacent node (could be source or target)
+      if (edge.source === nodeId) {
+        adjacentNodeId = edge.target;
+      } else if (edge.target === nodeId) {
+        adjacentNodeId = edge.source;
+      }
+      
+      // If adjacent node is a capital, can't create here
+      if (adjacentNodeId && capitalNodes.has(adjacentNodeId)) {
+        return false;
+      }
+    }
+    
+    return true; // All checks passed
+  }
+
   // Double-click handling variables
   let clickTimeout = null;
   let lastClickTime = 0;
@@ -1043,10 +1097,8 @@
                 }));
               }
               
-              // Reset bridge building state
-              activeAbility = null;
-              bridgeFirstNode = null;
-              updateAbilityButtonStates();
+              // Don't reset bridge building state here - wait for server response
+              // Reset will happen in handleNewEdge() on success or stay active on error
             }
           } else {
             // Clicked same node, cancel selection
@@ -1075,10 +1127,8 @@
             }));
           }
           
-          // Reset reverse mode
-          activeAbility = null;
-          bridgeFirstNode = null;
-          updateAbilityButtonStates();
+          // Don't reset reverse mode here - wait for server response
+          // Reset will happen in handleEdgeReversed() on success or stay active on error
         }
       }
       return; // Don't handle normal clicks in reverse mode
@@ -1089,8 +1139,8 @@
       const candidateNodeId = pickNearestNode(wx, wy, 18 / baseScale);
       if (candidateNodeId != null) {
         const node = nodes.get(candidateNodeId);
-        if (node && node.owner === myPlayerId) {
-          // Create capital on owned node
+        if (node) {
+          // Attempt to create capital (backend will validate ownership and adjacency)
           const ability = { cost: 4 };
           if (goldValue >= ability.cost && ws && ws.readyState === WebSocket.OPEN) {
             const token = localStorage.getItem('token');
@@ -1102,10 +1152,8 @@
             }));
           }
           
-          // Reset capital creation state
-          activeAbility = null;
-          bridgeFirstNode = null;
-          updateAbilityButtonStates();
+          // Don't reset capital creation state here - wait for server response
+          // Reset will happen in handleNewCapital() on success or stay active on error
         }
       }
       return; // Don't handle normal clicks in capital mode
@@ -1585,9 +1633,8 @@
     const actualSpacing = len / packedCount;
     
     const canLeftClick = (from && from.owner === myPlayerId);
-    // Show secondary color for any edge where player owns at least one node (allows right-click attempt)
-    const ownsAtLeastOneNode = (from && from.owner === myPlayerId) || (to && to.owner === myPlayerId);
-    const canRightClick = isHovered && ownsAtLeastOneNode;
+    // Only highlight edges that can actually be reversed (use the validation function)
+    const canRightClick = isHovered && canReverseEdge(e);
     const leftClickHover = isHovered && canLeftClick;
     const rightClickHover = isHovered && canRightClick && !canLeftClick;
     

@@ -144,6 +144,41 @@ def generate_planar_edges(nodes: List[Node], desired_edges: int, one_way_percent
     return edges
 
 
+def remove_isolated_nodes(nodes: List[Node], edges: List[Edge]) -> Tuple[List[Node], List[Edge]]:
+    """Remove nodes that have no edges and reassign IDs to maintain continuity."""
+    if not nodes or not edges:
+        return nodes, edges
+    
+    # Find nodes that are connected to at least one edge
+    connected_node_ids = set()
+    for edge in edges:
+        connected_node_ids.add(edge.source)
+        connected_node_ids.add(edge.target)
+    
+    # Filter out isolated nodes
+    connected_nodes = [node for node in nodes if node.id in connected_node_ids]
+    
+    # If no nodes were removed, return original lists
+    if len(connected_nodes) == len(nodes):
+        return nodes, edges
+    
+    # Create mapping from old node IDs to new node IDs
+    old_to_new_id = {}
+    new_nodes = []
+    for new_id, node in enumerate(connected_nodes):
+        old_to_new_id[node.id] = new_id
+        new_nodes.append(Node(new_id, node.x, node.y))
+    
+    # Update edge IDs and node references
+    new_edges = []
+    for new_edge_id, edge in enumerate(edges):
+        new_source = old_to_new_id[edge.source]
+        new_target = old_to_new_id[edge.target]
+        new_edges.append(Edge(new_edge_id, new_source, new_target))
+    
+    return new_nodes, new_edges
+
+
 def main() -> None:
     if SEED is not None:
         random.seed(SEED)
@@ -151,6 +186,10 @@ def main() -> None:
     width, height = 100, 100
     nodes = generate_node_positions(NODE_COUNT, width, height, 0)
     edges = generate_planar_edges(nodes, DESIRED_EDGE_COUNT, ONE_WAY_PERCENT)
+    
+    # Remove isolated nodes after graph generation
+    nodes, edges = remove_isolated_nodes(nodes, edges)
+    
     data = {
         "screen": {"width": width, "height": height, "margin": 0},
         "nodes": [{"id": n.id, "x": round(n.x, 3), "y": round(n.y, 3)} for n in nodes],
@@ -176,6 +215,10 @@ def generate_graph_to_path(width: int, height: int, output_path: Path) -> None:
         random.seed(SEED)
     nodes = generate_node_positions(NODE_COUNT, width, height, 0)
     edges = generate_planar_edges(nodes, DESIRED_EDGE_COUNT, ONE_WAY_PERCENT)
+    
+    # Remove isolated nodes after graph generation
+    nodes, edges = remove_isolated_nodes(nodes, edges)
+    
     data = {
         "screen": {"width": width, "height": height, "margin": 0},
         "nodes": [{"id": n.id, "x": round(n.x, 3), "y": round(n.y, 3)} for n in nodes],

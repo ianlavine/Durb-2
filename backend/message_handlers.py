@@ -72,7 +72,7 @@ class ReverseEdgeHandler(BaseMessageHandler):
             # Send error message to the player who attempted the reversal
             await websocket.send(json.dumps({
                 "type": "reverseEdgeError", 
-                "message": "You can't reverse an edge your opponent controls"
+                "message": "Pipe controlled by opponent"
             }))
             return
         

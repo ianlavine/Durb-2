@@ -247,7 +247,7 @@ class GameEngine:
             # Source node cannot belong to opponent
             opponent_ids = [pid for pid in self.state.players.keys() if pid != player_id]
             if source_owner in opponent_ids:
-                raise GameValidationError("Cannot reverse edge from opponent's node")
+                raise GameValidationError("Pipe controlled by opponent")
             
             # Validate gold
             self.validate_sufficient_gold(player_id, cost)
@@ -362,7 +362,7 @@ class GameEngine:
                             adjacent_node_id = edge.source_node_id
                         
                         if adjacent_node_id and adjacent_node_id in self.state.capital_nodes:
-                            raise GameValidationError("Cannot create capital adjacent to another capital")
+                            raise GameValidationError("No Adjacent Capitals")
             
             # Create capital
             if not hasattr(self.state, 'capital_nodes'):
