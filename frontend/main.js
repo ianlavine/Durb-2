@@ -46,10 +46,8 @@
   let hoveredEdgeId = null;
   
   // Abilities system
-  let abilitiesContainer = null;
   let activeAbility = null; // null, 'bridge1way', 'reverse'
   let bridgeFirstNode = null; // first selected node for bridge building
-  let abilityButtons = {}; // ability name -> button element
   let mouseWorldX = 0; // current mouse position in world coordinates
   let mouseWorldY = 0;
   let capitalNodes = new Set(); // node IDs that are capitals
@@ -104,9 +102,8 @@
         if (overlayMsg) overlayMsg.style.display = 'none';
         // Hide HUD when returning to menu
         if (hudContainer) hudContainer.style.display = 'none';
-        if (abilitiesContainer) abilitiesContainer.style.visibility = 'hidden';
-        const capitalCounter = document.querySelector('div[style*="top: 20px"][style*="right: 20px"]');
-        if (capitalCounter) capitalCounter.style.display = 'none';
+        const goldNumber = document.getElementById('goldNumber');
+        if (goldNumber) goldNumber.style.display = 'none';
         nodes.clear();
         edges.clear();
         capitalNodes.clear(); // Clear capital nodes when returning to menu
@@ -114,7 +111,6 @@
         // Reset ability state when returning to menu
         activeAbility = null;
         bridgeFirstNode = null;
-        updateAbilityButtonStates();
         
         redrawStatic();
       }
@@ -205,193 +201,28 @@
     document.body.appendChild(gold);
     hudContainer = gold;
 
-    // Abilities container (left of gold bar)
-    abilitiesContainer = document.createElement('div');
-    Object.assign(abilitiesContainer.style, {
+    // Gold number display at top of gold bar
+    const goldNumber = document.createElement('div');
+    goldNumber.id = 'goldNumber';
+    Object.assign(goldNumber.style, {
       position: 'absolute',
-      right: '100px', // to the left of gold bar (20px + 48px + 32px margin)
-      bottom: '20px', // aligned with gold bar bottom
-      width: '124px',
-      height: '600px', // match gold bar height
-      display: 'flex',
-      visibility: 'hidden', // initially hidden
-      zIndex: 8,
-      boxSizing: 'border-box',
-      flexDirection: 'column',
-      justifyContent: 'flex-end', // align abilities to bottom
-    });
-
-    // Create ability buttons
-    const abilities = [
-      { name: 'reverse', label: 'Reverse', cost: 1, key: '🖱️', description: 'Reverse Pipe (1 gold)' },
-      { name: 'bridge1way', label: 'New Pipe', cost: 3, key: 'A', description: 'New Pipe (3 gold)' },
-      { name: 'destroy', label: 'Destroy', cost: 2, key: 'D', description: 'Destroy Node (2 gold)' }
-      // Capital ability hidden but backend logic preserved
-    ];
-
-    abilities.forEach((ability, index) => {
-      const button = document.createElement('div');
-      Object.assign(button.style, {
-        width: '140px',
-        height: '140px',
-        background: '#2a2a2a',
-        border: '3px solid #555',
-        borderRadius: '16px',
-        marginBottom: '16px',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        cursor: 'pointer',
-        position: 'relative',
-        transition: 'all 0.2s ease',
-        boxSizing: 'border-box',
-      });
-
-      // Ability label
-      const label = document.createElement('div');
-      label.textContent = ability.label;
-      Object.assign(label.style, {
-        fontSize: '32px',
-        fontWeight: 'bold',
-        color: '#ccc',
-        lineHeight: '1',
-      });
-
-      // Cost indicator (top-left corner)
-      const cost = document.createElement('div');
-      cost.textContent = ability.cost;
-      Object.assign(cost.style, {
-        position: 'absolute',
-        top: '8px',
-        left: '12px',
-        fontSize: '20px',
-        color: '#ffd700',
-        lineHeight: '1',
-        fontWeight: 'bold',
-      });
-
-      // Key indicator (top-right corner, only if key exists)
-      let keyIndicator = null;
-      if (ability.key) {
-        keyIndicator = document.createElement('div');
-        keyIndicator.textContent = ability.key;
-        Object.assign(keyIndicator.style, {
-          position: 'absolute',
-          top: '8px',
-          right: '12px',
-          fontSize: '16px',
-          color: '#888',
-          lineHeight: '1',
-        });
-      }
-
-      button.appendChild(cost);
-      if (keyIndicator) button.appendChild(keyIndicator);
-      button.appendChild(label);
-
-      // Click handler
-      button.addEventListener('click', () => handleAbilityClick(ability.name));
-
-      // Hover effects
-      button.addEventListener('mouseenter', () => {
-        button.style.borderColor = '#777';
-        button.style.background = '#333';
-      });
-      button.addEventListener('mouseleave', () => {
-        if (activeAbility !== ability.name) {
-          button.style.borderColor = '#555';
-          button.style.background = '#2a2a2a';
-        }
-      });
-
-      // Title for tooltip
-      button.title = ability.description;
-
-      abilitiesContainer.appendChild(button);
-      abilityButtons[ability.name] = button;
-    });
-
-    document.body.appendChild(abilitiesContainer);
-
-    // Capital counter display (top right)
-    const capitalCounter = document.createElement('div');
-    Object.assign(capitalCounter.style, {
-      position: 'absolute',
-      top: '20px',
       right: '20px',
-      width: '280px',
-      background: 'rgba(0, 0, 0, 0.8)',
-      border: '3px solid #444',
-      borderRadius: '16px',
-      padding: '20px',
-      zIndex: 10,
+      bottom: '620px', // positioned above the gold bar (600px + 20px)
+      fontSize: '100px',
+      fontWeight: 'bold',
+      color: '#ffd700',
+      lineHeight: '1',
       textAlign: 'center',
-      display: 'none',
-      boxSizing: 'border-box',
+      zIndex: 8,
+      display: 'none', // initially hidden
     });
+    goldNumber.textContent = '0';
+    
+    document.body.appendChild(goldNumber);
 
-    // "Capitals" title
-    const capitalTitle = document.createElement('div');
-    capitalTitle.textContent = 'Capitals';
-    Object.assign(capitalTitle.style, {
-      fontSize: '24px',
-      fontWeight: 'bold',
-      color: '#fff',
-      marginBottom: '16px',
-    });
-    capitalCounter.appendChild(capitalTitle);
+    // Abilities container removed - abilities now only accessible via keyboard shortcuts and right-click
 
-    // Container for side-by-side numbers
-    const numbersContainer = document.createElement('div');
-    Object.assign(numbersContainer.style, {
-      display: 'flex',
-      justifyContent: 'space-around',
-      alignItems: 'center',
-      marginBottom: '16px',
-    });
-    capitalCounter.appendChild(numbersContainer);
-
-    // Player capital counts
-    const player1Count = document.createElement('div');
-    player1Count.id = 'player1-capitals';
-    Object.assign(player1Count.style, {
-      fontSize: '48px',
-      fontWeight: 'bold',
-      color: '#ff3333', // red player color
-      lineHeight: '1',
-    });
-    numbersContainer.appendChild(player1Count);
-
-    const vsText = document.createElement('div');
-    vsText.textContent = 'vs';
-    Object.assign(vsText.style, {
-      fontSize: '20px',
-      color: '#888',
-      fontWeight: 'bold',
-    });
-    numbersContainer.appendChild(vsText);
-
-    const player2Count = document.createElement('div');
-    player2Count.id = 'player2-capitals';
-    Object.assign(player2Count.style, {
-      fontSize: '48px',
-      fontWeight: 'bold',
-      color: '#3388ff', // blue player color
-      lineHeight: '1',
-    });
-    numbersContainer.appendChild(player2Count);
-
-    // Win condition text
-    const winCondition = document.createElement('div');
-    winCondition.textContent = 'First to 5 wins';
-    Object.assign(winCondition.style, {
-      fontSize: '18px',
-      color: '#ccc',
-    });
-    capitalCounter.appendChild(winCondition);
-
-    document.body.appendChild(capitalCounter);
+    // Capital counter display removed
 
     window.addEventListener('resize', () => {
       this.scale.resize(window.innerWidth, window.innerHeight);
@@ -525,7 +356,6 @@
       statusText.setVisible(phase === 'picking' && !myPicked);
     }
     updateGoldBar();
-    updateAbilityButtonStates();
   }
 
   function handleLobby(msg) {
@@ -624,8 +454,6 @@
       statusText.setVisible(phase === 'picking' && !myPicked);
     }
     updateGoldBar();
-    updateAbilityButtonStates();
-    updateCapitalCounter();
     redrawStatic();
   }
 
@@ -647,7 +475,6 @@
     if (activeAbility === 'bridge1way') {
       activeAbility = null;
       bridgeFirstNode = null;
-      updateAbilityButtonStates();
     }
   }
 
@@ -678,7 +505,6 @@
     if (activeAbility === 'reverse') {
       activeAbility = null;
       bridgeFirstNode = null;
-      updateAbilityButtonStates();
     }
   }
 
@@ -720,7 +546,6 @@
     if (activeAbility === 'capital') {
       activeAbility = null;
       bridgeFirstNode = null;
-      updateAbilityButtonStates();
     }
   }
 
@@ -747,7 +572,6 @@
     if (activeAbility === 'destroy') {
       activeAbility = null;
       bridgeFirstNode = null;
-      updateAbilityButtonStates();
     }
   }
 
@@ -800,23 +624,16 @@
       graphicsNodes.clear();
       // Hide HUD when menu is visible (graph is not drawn)
       if (hudContainer) hudContainer.style.display = 'none';
-      if (abilitiesContainer) abilitiesContainer.style.visibility = 'hidden';
-      const capitalCounter = document.querySelector('div[style*="top: 20px"][style*="right: 20px"]');
-      if (capitalCounter) capitalCounter.style.display = 'none';
+      const goldNumber = document.getElementById('goldNumber');
+      if (goldNumber) goldNumber.style.display = 'none';
       return; // Do not draw game under menu
     }
     
-    // Show gold bar and abilities when graph is being drawn and we have nodes/game data
+    // Show gold bar when graph is being drawn and we have nodes/game data
     if (hudContainer && nodes.size > 0) {
       hudContainer.style.display = 'block';
-    }
-    if (abilitiesContainer && nodes.size > 0) {
-      abilitiesContainer.style.visibility = 'visible';
-    }
-    // Show capital counter during game
-    const capitalCounter = document.querySelector('div[style*="top: 20px"][style*="right: 20px"]');
-    if (capitalCounter && nodes.size > 0) {
-      capitalCounter.style.display = 'block';
+      const goldNumber = document.getElementById('goldNumber');
+      if (goldNumber) goldNumber.style.display = 'block';
     }
     for (const [id, e] of edges.entries()) {
       const s = nodes.get(e.source);
@@ -931,7 +748,7 @@
     let minX = 0, minY = 0, maxX = 100, maxY = 100;
     // Nodes are already in 0..100 logical space; fit that rect to screen
     const padding = 60; // top/bottom padding
-    const rightReservedPx = 220; // space for gold bar, abilities closer together, and margins
+    const rightReservedPx = 80; // space for gold bar and margins
     const width = Math.max(1, maxX - minX);
     const height = Math.max(1, maxY - minY);
     const scaleX = (viewW - padding * 2 - rightReservedPx) / width;
@@ -1055,49 +872,64 @@
   });
 
 
-  function handleSingleClick(ev, wx, wy, baseScale) {
-    // Handle bridge building mode
-    if (activeAbility === 'bridge1way') {
-      const candidateNodeId = pickNearestNode(wx, wy, 18 / baseScale);
-      if (candidateNodeId != null) {
-        const node = nodes.get(candidateNodeId);
-        if (node) {
-          if (bridgeFirstNode === null) {
-            // Select first node (must be owned by player)
-            if (node.owner === myPlayerId) {
-              bridgeFirstNode = candidateNodeId;
+  function handleBridgeBuilding(wx, wy, baseScale, isRightClick = false) {
+    if (activeAbility !== 'bridge1way') return false;
+    
+    const nodeId = pickNearestNode(wx, wy, 18 / baseScale);
+    const edgeId = pickEdgeNear(wx, wy, 14 / baseScale);
+    
+    if (nodeId != null) {
+      const node = nodes.get(nodeId);
+      if (node) {
+        if (bridgeFirstNode === null) {
+          // Start bridge building - first node must be owned by player
+          if (node.owner === myPlayerId) {
+            if (goldValue >= 3) {
+              bridgeFirstNode = nodeId;
+              return true; // Handled
+            } else {
+              // Not enough gold for bridge building
+              showErrorMessage("Not enough gold! Need 3 gold for new pipe.");
+              return true; // Handled
             }
-          } else if (bridgeFirstNode !== candidateNodeId) {
-            // Select second node and create bridge (can connect to any node)
-            {
-              const abilities = {
-                'bridge1way': { cost: 3 },
-                'reverse': { cost: 1 },
-                'destroy': { cost: 2 }
-              };
-              const ability = abilities[activeAbility];
-              
-              if (goldValue >= ability.cost && ws && ws.readyState === WebSocket.OPEN) {
-                const token = localStorage.getItem('token');
-                ws.send(JSON.stringify({
-                  type: 'buildBridge',
-                  fromNodeId: bridgeFirstNode,
-                  toNodeId: candidateNodeId,
-                  cost: ability.cost,
-                  token: token
-                }));
-              }
-              
-              // Don't reset bridge building state here - wait for server response
-              // Reset will happen in handleNewEdge() on success or stay active on error
-            }
-          } else {
-            // Clicked same node, cancel selection
-            bridgeFirstNode = null;
           }
+        } else if (bridgeFirstNode !== nodeId) {
+          // Complete bridge building - second node can be any node
+          if (goldValue >= 3 && ws && ws.readyState === WebSocket.OPEN) {
+            const token = localStorage.getItem('token');
+            ws.send(JSON.stringify({
+              type: 'buildBridge',
+              fromNodeId: bridgeFirstNode,
+              toNodeId: nodeId,
+              cost: 3,
+              token: token
+            }));
+            // Don't reset bridge building state here - wait for server response
+            return true; // Handled
+          } else if (goldValue < 3) {
+            // Not enough gold to complete bridge building
+            showErrorMessage("Not enough gold! Need 3 gold for new pipe.");
+            return true; // Handled
+          }
+        } else {
+          // Clicked same node, cancel selection
+          bridgeFirstNode = null;
+          return true; // Handled
         }
       }
-      return; // Don't handle normal clicks in bridge mode
+    }
+    
+    // If we get here, it means we clicked on empty space, an edge, or an invalid node
+    // Cancel bridge building
+    activeAbility = null;
+    bridgeFirstNode = null;
+    return true; // Handled
+  }
+
+  function handleSingleClick(ev, wx, wy, baseScale) {
+    // Handle bridge building mode
+    if (handleBridgeBuilding(wx, wy, baseScale, false)) {
+      return; // Bridge building was handled
     }
     
     // Handle reverse edge mode
@@ -1271,31 +1103,37 @@
     }
   }
 
-  // Right-click: activate new pipe ability on node, or reverse edge direction (if eligible)
+  // Right-click: activate new pipe ability on node, complete bridge building, or reverse edge direction
   window.addEventListener('contextmenu', (ev) => {
     if (gameEnded) return;
     if (phase !== 'playing') return; // disable during picking
     const [wx, wy] = screenToWorld(ev.clientX, ev.clientY);
     const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
     
-    // First check if we're right-clicking on a node
+    // Handle bridge building mode first
+    if (handleBridgeBuilding(wx, wy, baseScale, true)) {
+      ev.preventDefault();
+      return; // Bridge building was handled
+    }
+    
+    // Check if we're right-clicking on a node to start bridge building
     const nodeId = pickNearestNode(wx, wy, 18 / baseScale);
     if (nodeId != null) {
       const node = nodes.get(nodeId);
       if (node && node.owner === myPlayerId) {
-        // Check if we can afford the new pipe ability (3 gold)
+        ev.preventDefault(); // Always prevent default when clicking on owned node
         if (goldValue >= 3) {
-          ev.preventDefault();
-          // Activate new pipe ability and start bridge building at this node
           activeAbility = 'bridge1way';
           bridgeFirstNode = nodeId;
-          updateAbilityButtonStates();
-          return;
+        } else {
+          // Not enough gold for bridge building
+          showErrorMessage("Not enough gold! Need 3 gold for new pipe.");
         }
+        return;
       }
     }
     
-    // Fall back to edge reversal if not on a valid node
+    // Fall back to edge reversal if not on a valid node or not in bridge building mode
     const edgeId = pickEdgeNear(wx, wy, 14 / baseScale);
     if (edgeId != null && ws && ws.readyState === WebSocket.OPEN) {
       ev.preventDefault();
@@ -1324,7 +1162,6 @@
         if (activeAbility) {
           activeAbility = null;
           bridgeFirstNode = null;
-          updateAbilityButtonStates();
         }
         break;
     }
@@ -1414,66 +1251,23 @@
       // Deactivate
       activeAbility = null;
       bridgeFirstNode = null;
-      updateAbilityButtonStates();
     } else if (abilityName === 'bridge1way') {
       // Activate bridge building
       activeAbility = abilityName;
       bridgeFirstNode = null;
-      updateAbilityButtonStates();
     } else if (abilityName === 'reverse') {
       // Activate reverse mode (similar to capital - click an edge to reverse)
       activeAbility = abilityName;
       bridgeFirstNode = null;
-      updateAbilityButtonStates();
     } else if (abilityName === 'destroy') {
       // Activate destroy mode
       activeAbility = abilityName;
       bridgeFirstNode = null; // reuse for destroy node selection
-      updateAbilityButtonStates();
     }
     // Placeholder abilities do nothing for now
   }
 
-  function updateAbilityButtonStates() {
-    const abilities = {
-      'bridge1way': { cost: 3 },
-      'reverse': { cost: 1 },
-      'destroy': { cost: 2 }
-    };
-    
-    Object.keys(abilityButtons).forEach(abilityName => {
-      const button = abilityButtons[abilityName];
-      const ability = abilities[abilityName];
-      if (!button || !ability) return;
-      
-      const canAfford = goldValue >= ability.cost;
-      const isActive = activeAbility === abilityName;
-      
-      if (isActive) {
-        button.style.background = '#4a4a00';
-        button.style.borderColor = '#ffd700';
-      } else if (canAfford) {
-        button.style.background = '#2a2a2a';
-        button.style.borderColor = '#555';
-      } else {
-        button.style.background = '#1a1a1a';
-        button.style.borderColor = '#333';
-      }
-      
-      // Update opacity and cursor
-      button.style.opacity = canAfford ? '1' : '0.5';
-      button.style.cursor = canAfford ? 'pointer' : 'not-allowed';
-    });
-  }
 
-  function updateCapitalCounter() {
-    // Simply display the capital counts received from backend
-    const player1Element = document.getElementById('player1-capitals');
-    const player2Element = document.getElementById('player2-capitals');
-    
-    if (player1Element) player1Element.textContent = player1Capitals.toString();
-    if (player2Element) player2Element.textContent = player2Capitals.toString();
-  }
 
   function updateGoldBar() {
     const val = Math.max(0, Math.min(7, goldValue || 0));
@@ -1487,6 +1281,12 @@
       else if (i === full) h = Math.max(0, Math.min(100, frac * 100));
       else h = 0;
       seg.fill.style.height = `${h}%`;
+    }
+    
+    // Update gold number display
+    const goldNumber = document.getElementById('goldNumber');
+    if (goldNumber) {
+      goldNumber.textContent = Math.floor(val).toString();
     }
   }
 
