@@ -14,9 +14,9 @@ NODE_MAX_JUICE: float = 120.0
 PRODUCTION_RATE_PER_NODE: float = 0.15  # owned nodes generate this per tick (constant growth)
 TRANSFER_PERCENT_PER_TICK: float = 0.01  # fraction of source juice transferred per tick (split across outgoing edges)
 
-# Gold economy (displayed as 10 sections filling like elixir)
-GOLD_MAX_SECTIONS: float = 10.0
-GOLD_SECTION_FILL_SECONDS: float = 5.5  # each section fills in 8 seconds
+# Gold economy (displayed as 7 sections filling like elixir)
+GOLD_MAX_SECTIONS: float = 7.0
+GOLD_SECTION_FILL_SECONDS: float = 6  # each section fills in 6 seconds
 
 
 class GraphState:

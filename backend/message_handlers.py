@@ -328,6 +328,34 @@ class RedirectEnergyHandler(BaseMessageHandler):
                 await self._broadcast_to_game_clients(json.dumps(edge_data), game_clients)
 
 
+class DestroyNodeHandler(BaseMessageHandler):
+    """Handle node destruction requests."""
+    
+    async def handle(self, websocket: websockets.WebSocketServerProtocol, 
+                    msg: Dict[str, Any], server_context: Dict[str, Any]) -> None:
+        token = msg.get("token")
+        node_id = msg.get("nodeId")
+        cost = msg.get("cost", 3.0)
+        
+        success, error_msg = self.game_engine.handle_destroy_node(token, node_id, cost)
+        
+        if not success:
+            await websocket.send(json.dumps({
+                "type": "destroyError", 
+                "message": error_msg or "Failed to destroy node"
+            }))
+            return
+        
+        # Broadcast successful node destruction
+        destroy_data = {
+            "type": "nodeDestroyed",
+            "nodeId": node_id
+        }
+        
+        game_clients = server_context.get("game_clients", {})
+        await self._broadcast_to_game_clients(json.dumps(destroy_data), game_clients)
+
+
 class QuitGameHandler(BaseMessageHandler):
     """Handle quit game requests."""
     
@@ -372,6 +400,7 @@ class MessageRouter:
             "buildBridge": BuildBridgeHandler(game_engine),
             "createCapital": CreateCapitalHandler(game_engine),
             "redirectEnergy": RedirectEnergyHandler(game_engine),
+            "destroyNode": DestroyNodeHandler(game_engine),
             "quitGame": QuitGameHandler(game_engine),
         }
     
