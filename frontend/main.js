@@ -54,6 +54,10 @@
   let player1Capitals = 0; // capital count from backend
   let player2Capitals = 0; // capital count from backend
   
+  // Peace period state
+  let peacePeriodActive = false;
+  let peaceTimeRemaining = 0.0;
+  
   // Animation system for juice flow
   let animationTime = 0; // Global animation timer
   const JUICE_ANIMATION_SPEED = 4.0; // Speed of juice animation (higher = faster)
@@ -104,6 +108,11 @@
         if (hudContainer) hudContainer.style.display = 'none';
         const goldNumber = document.getElementById('goldNumber');
         if (goldNumber) goldNumber.style.display = 'none';
+        // Hide peace period UI when returning to menu
+        const peaceIndicator = document.getElementById('peaceIndicator');
+        const peaceTimer = document.getElementById('peaceTimer');
+        if (peaceIndicator) peaceIndicator.style.display = 'none';
+        if (peaceTimer) peaceTimer.style.display = 'none';
         nodes.clear();
         edges.clear();
         capitalNodes.clear(); // Clear capital nodes when returning to menu
@@ -111,6 +120,10 @@
         // Reset ability state when returning to menu
         activeAbility = null;
         bridgeFirstNode = null;
+        
+        // Reset peace period state
+        peacePeriodActive = false;
+        peaceTimeRemaining = 0.0;
         
         redrawStatic();
       }
@@ -219,6 +232,51 @@
     goldNumber.textContent = '0';
     
     document.body.appendChild(goldNumber);
+
+    // Peace period indicator (top right)
+    const peaceIndicator = document.createElement('div');
+    peaceIndicator.id = 'peaceIndicator';
+    Object.assign(peaceIndicator.style, {
+      position: 'absolute',
+      top: '20px',
+      right: '20px',
+      background: 'rgba(0, 150, 0, 0.9)',
+      color: '#ffffff',
+      padding: '12px 20px',
+      borderRadius: '8px',
+      fontSize: '24px',
+      fontWeight: 'bold',
+      zIndex: 10,
+      textAlign: 'center',
+      border: '2px solid #00ff00',
+      boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+      display: 'none',
+      fontFamily: 'monospace'
+    });
+    
+    // Peace timer (below peace indicator)
+    const peaceTimer = document.createElement('div');
+    peaceTimer.id = 'peaceTimer';
+    Object.assign(peaceTimer.style, {
+      position: 'absolute',
+      top: '70px',
+      right: '20px',
+      background: 'rgba(0, 150, 0, 0.9)',
+      color: '#ffffff',
+      padding: '8px 16px',
+      borderRadius: '6px',
+      fontSize: '18px',
+      fontWeight: 'bold',
+      zIndex: 10,
+      textAlign: 'center',
+      border: '2px solid #00ff00',
+      boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+      display: 'none',
+      fontFamily: 'monospace'
+    });
+    
+    document.body.appendChild(peaceIndicator);
+    document.body.appendChild(peaceTimer);
 
     // Abilities container removed - abilities now only accessible via keyboard shortcuts and right-click
 
@@ -343,19 +401,25 @@
         if (Number(pid) === 2) player2Capitals = Number(count) || 0;
       }
     }
+    // Peace period info
+    if (msg.peace) {
+      peacePeriodActive = msg.peace.active || false;
+      peaceTimeRemaining = Number(msg.peace.timeRemaining) || 0.0;
+    }
     computeTransform(game.scale.gameSize.width, game.scale.gameSize.height);
     const menu = document.getElementById('menu');
     menu && menu.classList.add('hidden');
     if (overlayMsg) overlayMsg.style.display = 'none';
     redrawStatic();
     if (statusText) {
-      statusText.setText(phase === 'picking' && !myPicked ? 'Choose Starting Node' : '');
+      statusText.setText(!myPicked ? 'Choose Starting Node' : '');
       statusText.setStyle({ font: '48px monospace', color: '#ffffff' });
       statusText.setPosition(game.scale.gameSize.width / 2 - statusText.width / 2, 16);
       statusText.setDepth(10);
-      statusText.setVisible(phase === 'picking' && !myPicked);
+      statusText.setVisible(!myPicked);
     }
     updateGoldBar();
+    updatePeacePeriodUI();
   }
 
   function handleLobby(msg) {
@@ -377,12 +441,20 @@
       overlayMsg.style.display = 'block';
     }
     gameEnded = true;
+    // Reset peace period state when game ends
+    peacePeriodActive = false;
+    peaceTimeRemaining = 0.0;
     const buttons = document.getElementsByTagName('button');
     for (const b of buttons) {
       if (b.textContent === 'Forfeit') b.textContent = 'Quit';
     }
     // Do not clear board; leave last state visible (stale, no updates)
     redrawStatic();
+    // Hide peace period UI when game ends
+    const peaceIndicator = document.getElementById('peaceIndicator');
+    const peaceTimer = document.getElementById('peaceTimer');
+    if (peaceIndicator) peaceIndicator.style.display = 'none';
+    if (peaceTimer) peaceTimer.style.display = 'none';
     // Ensure menu elements are ready for return
     const menu = document.getElementById('menu');
     const lobby = document.getElementById('lobby');
@@ -446,14 +518,20 @@
         if (Number(pid) === 2) player2Capitals = Number(count) || 0;
       }
     }
+    // Peace period info
+    if (msg.peace) {
+      peacePeriodActive = msg.peace.active || false;
+      peaceTimeRemaining = Number(msg.peace.timeRemaining) || 0.0;
+    }
     if (statusText) {
-      statusText.setText(phase === 'picking' && !myPicked ? 'Choose Starting Node' : '');
+      statusText.setText(!myPicked ? 'Choose Starting Node' : '');
       statusText.setStyle({ font: '48px monospace', color: '#ffffff' });
       statusText.setPosition(game.scale.gameSize.width / 2 - statusText.width / 2, 16);
       statusText.setDepth(10);
-      statusText.setVisible(phase === 'picking' && !myPicked);
+      statusText.setVisible(!myPicked);
     }
     updateGoldBar();
+    updatePeacePeriodUI();
     redrawStatic();
   }
 
@@ -659,16 +737,16 @@
         graphicsNodes.strokeCircle(nx, ny, r + 2);
       }
       
-      // Hover effect: player's color border when eligible (picking phase)
-      if (hoveredNodeId === id && phase === 'picking' && !myPicked && (n.owner == null)) {
+      // Hover effect: player's color border when eligible for starting node pick
+      if (hoveredNodeId === id && !myPicked && (n.owner == null)) {
         const myColor = ownerToColor(myPlayerId);
         graphicsNodes.lineStyle(3, myColor, 1);
         graphicsNodes.strokeCircle(nx, ny, r + 3);
       }
       
-      // Hover effect: show if node can be targeted for flow (playing phase or picked in picking phase)
+      // Hover effect: show if node can be targeted for flow
       // Only show this when no ability is active to avoid conflicting with ability-specific highlights
-      if (hoveredNodeId === id && ((phase === 'playing') || (phase === 'picking' && myPicked)) && !activeAbility) {
+      if (hoveredNodeId === id && myPicked && !activeAbility) {
         if (canTargetNodeForFlow(id)) {
           const myColor = ownerToColor(myPlayerId);
           graphicsNodes.lineStyle(3, myColor, 0.8);
@@ -691,9 +769,18 @@
             graphicsNodes.strokeCircle(nx, ny, r + 3);
           }
         } else if (bridgeFirstNode !== id) {
-          // After selecting first node: highlight any other node as valid target
-          graphicsNodes.lineStyle(3, 0xffd700, 0.7); // semi-transparent gold
-          graphicsNodes.strokeCircle(nx, ny, r + 3);
+          // After selecting first node: highlight valid targets
+          // During peace period, don't highlight opponent's nodes
+          if (peacePeriodActive) {
+            if (n.owner === null || n.owner === myPlayerId) {
+              graphicsNodes.lineStyle(3, 0xffd700, 0.7); // semi-transparent gold
+              graphicsNodes.strokeCircle(nx, ny, r + 3);
+            }
+          } else {
+            // Normal behavior - highlight any other node as valid target
+            graphicsNodes.lineStyle(3, 0xffd700, 0.7); // semi-transparent gold
+            graphicsNodes.strokeCircle(nx, ny, r + 3);
+          }
         }
       }
       
@@ -824,6 +911,13 @@
       if (edge.target === targetNodeId) {
         const sourceNode = nodes.get(edge.source);
         if (sourceNode && sourceNode.owner === myPlayerId) {
+          // During peace period, only allow targeting if it won't attack opponent's node
+          if (peacePeriodActive) {
+            const targetNode = nodes.get(edge.target);
+            if (targetNode && targetNode.owner !== null && targetNode.owner !== myPlayerId) {
+              return false; // Would attack during peace period
+            }
+          }
           return true; // Found at least one edge I can flow through to this node
         }
       }
@@ -896,6 +990,15 @@
         } else if (bridgeFirstNode !== nodeId) {
           // Complete bridge building - second node can be any node
           if (goldValue >= 3 && ws && ws.readyState === WebSocket.OPEN) {
+            // During peace period, check if this would attack
+            if (peacePeriodActive) {
+              const targetNode = nodes.get(nodeId);
+              if (targetNode && targetNode.owner !== null && targetNode.owner !== myPlayerId) {
+                showErrorMessage("Cannot build bridge to attack during peace period!");
+                return true; // Handled
+              }
+            }
+            
             const token = localStorage.getItem('token');
             ws.send(JSON.stringify({
               type: 'buildBridge',
@@ -1010,77 +1113,34 @@
     // Normal click handling
     let nodeId = null;
     let edgeId = null;
-    if (phase === 'picking' && !myPicked) {
-      const candidateNodeId = pickNearestNode(wx, wy, 18 / baseScale);
-      if (candidateNodeId != null) {
-        const cn = nodes.get(candidateNodeId);
-        if (cn && (cn.owner == null)) nodeId = candidateNodeId;
-      }
-    } else if (phase === 'picking' && myPicked) {
-      // Allow node flow targeting and edge clicks if player has already picked
-      const candidateNodeId = pickNearestNode(wx, wy, 18 / baseScale);
-      if (candidateNodeId != null) {
-        nodeId = candidateNodeId;
-      } else {
-        const candidateEdgeId = pickEdgeNear(wx, wy, 14 / baseScale);
-        if (candidateEdgeId != null) {
-          const e = edges.get(candidateEdgeId);
-          if (e) {
-            const sourceNode = nodes.get(e.source);
-            // Only eligible if you own the source node
-            if (sourceNode && sourceNode.owner === myPlayerId) edgeId = candidateEdgeId;
-          }
-        }
-      }
-    } else if (phase === 'playing') {
-      const candidateNodeId = pickNearestNode(wx, wy, 18 / baseScale);
-      if (candidateNodeId != null) {
-        nodeId = candidateNodeId;
-      } else {
-        const candidateEdgeId = pickEdgeNear(wx, wy, 14 / baseScale);
-        if (candidateEdgeId != null) {
-          const e = edges.get(candidateEdgeId);
-          if (e) {
-            const sourceNode = nodes.get(e.source);
-            // Only eligible if you own the source node
-            if (sourceNode && sourceNode.owner === myPlayerId) edgeId = candidateEdgeId;
-          }
+    
+    const candidateNodeId = pickNearestNode(wx, wy, 18 / baseScale);
+    if (candidateNodeId != null) {
+      nodeId = candidateNodeId;
+    } else {
+      const candidateEdgeId = pickEdgeNear(wx, wy, 14 / baseScale);
+      if (candidateEdgeId != null) {
+        const e = edges.get(candidateEdgeId);
+        if (e) {
+          const sourceNode = nodes.get(e.source);
+          // Only eligible if you own the source node
+          if (sourceNode && sourceNode.owner === myPlayerId) edgeId = candidateEdgeId;
         }
       }
     }
 
-    if (phase === 'picking') {
-      if (!myPicked && nodeId != null && ws && ws.readyState === WebSocket.OPEN) {
-        const token = localStorage.getItem('token');
-        ws.send(JSON.stringify({ type: 'clickNode', nodeId: nodeId, token }));
-        return; // Return after handling node click
-      }
-      // Allow edge clicks and node flow targeting if player has already picked
-      if (myPicked && ws && ws.readyState === WebSocket.OPEN) {
-        const token = localStorage.getItem('token');
-        
-        // Check for node flow targeting first
-        if (nodeId != null && canTargetNodeForFlow(nodeId)) {
-          // Redirect energy towards this node
-          ws.send(JSON.stringify({
-            type: 'redirectEnergy',
-            targetNodeId: nodeId,
-            token: token
-          }));
-          return;
-        }
-        
-        // Otherwise handle edge clicks
-        if (edgeId != null) {
-          ws.send(JSON.stringify({ type: 'clickEdge', edgeId, token }));
-          return;
-        }
-      }
-      return; // No valid action during picking
-    } else {
-      if (nodeId != null && ws && ws.readyState === WebSocket.OPEN) {
-        const token = localStorage.getItem('token');
-        
+    // Handle clicks - check for starting node pick first
+    if (!myPicked && nodeId != null && ws && ws.readyState === WebSocket.OPEN) {
+      const token = localStorage.getItem('token');
+      ws.send(JSON.stringify({ type: 'clickNode', nodeId: nodeId, token }));
+      return; // Return after handling starting node pick
+    }
+    
+    // Handle all other clicks (node flow targeting, edge clicks, etc.)
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      const token = localStorage.getItem('token');
+      
+      if (nodeId != null) {
         // Check if this is a node we can target for flow
         if (canTargetNodeForFlow(nodeId)) {
           // Redirect energy towards this node
@@ -1096,8 +1156,8 @@
           return;
         }
       }
-      if (edgeId != null && ws && ws.readyState === WebSocket.OPEN) {
-        const token = localStorage.getItem('token');
+      
+      if (edgeId != null) {
         ws.send(JSON.stringify({ type: 'clickEdge', edgeId, token }));
       }
     }
@@ -1106,7 +1166,6 @@
   // Right-click: activate new pipe ability on node, complete bridge building, or reverse edge direction
   window.addEventListener('contextmenu', (ev) => {
     if (gameEnded) return;
-    if (phase !== 'playing') return; // disable during picking
     const [wx, wy] = screenToWorld(ev.clientX, ev.clientY);
     const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
     
@@ -1230,7 +1289,7 @@
   }
 
   function handleAbilityClick(abilityName) {
-    if (phase !== 'playing') return; // Only allow abilities during playing phase
+    // Allow abilities during peace and playing phases
     
     const abilities = {
       'bridge1way': { cost: 3 },
@@ -1287,6 +1346,24 @@
     const goldNumber = document.getElementById('goldNumber');
     if (goldNumber) {
       goldNumber.textContent = Math.floor(val).toString();
+    }
+  }
+
+  function updatePeacePeriodUI() {
+    const peaceIndicator = document.getElementById('peaceIndicator');
+    const peaceTimer = document.getElementById('peaceTimer');
+    
+    if (peaceIndicator && peaceTimer) {
+      if (peacePeriodActive) {
+        peaceIndicator.style.display = 'block';
+        peaceIndicator.textContent = 'PEACE';
+        
+        peaceTimer.style.display = 'block';
+        peaceTimer.textContent = `${Math.ceil(peaceTimeRemaining)}s`;
+      } else {
+        peaceIndicator.style.display = 'none';
+        peaceTimer.style.display = 'none';
+      }
     }
   }
 

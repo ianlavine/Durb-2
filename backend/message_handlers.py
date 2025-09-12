@@ -4,6 +4,7 @@ Separates message parsing and response logic from core game logic.
 """
 import json
 import asyncio
+import time
 from typing import Dict, Any, Optional, Set
 import websockets
 
@@ -108,7 +109,7 @@ class NewGameHandler(BaseMessageHandler):
         server_context["screen"] = screen
         
         # Send init message
-        init_msg = new_state.to_init_message(screen, server_context.get("tick_interval", 0.1))
+        init_msg = new_state.to_init_message(screen, server_context.get("tick_interval", 0.1), time.time())
         await websocket.send(json.dumps(init_msg))
 
 
@@ -133,7 +134,8 @@ class RequestInitHandler(BaseMessageHandler):
             # Send init with player info
             init = self.game_engine.state.to_init_message(
                 server_context.get("screen", {}), 
-                server_context.get("tick_interval", 0.1)
+                server_context.get("tick_interval", 0.1),
+                time.time()
             )
             init["myPlayerId"] = self.game_engine.token_to_player_id[token]
             init["token"] = token
@@ -198,7 +200,8 @@ class JoinLobbyHandler(BaseMessageHandler):
         
         init_common = self.game_engine.state.to_init_message(
             server_context.get("screen", {}), 
-            server_context.get("tick_interval", 0.1)
+            server_context.get("tick_interval", 0.1),
+            time.time()
         )
         
         # Player 1 message
