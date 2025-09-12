@@ -335,7 +335,7 @@ class DestroyNodeHandler(BaseMessageHandler):
                     msg: Dict[str, Any], server_context: Dict[str, Any]) -> None:
         token = msg.get("token")
         node_id = msg.get("nodeId")
-        cost = msg.get("cost", 3.0)
+        cost = msg.get("cost", 2.0)
         
         success, error_msg = self.game_engine.handle_destroy_node(token, node_id, cost)
         

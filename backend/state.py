@@ -16,7 +16,7 @@ TRANSFER_PERCENT_PER_TICK: float = 0.01  # fraction of source juice transferred 
 
 # Gold economy (displayed as 7 sections filling like elixir)
 GOLD_MAX_SECTIONS: float = 7.0
-GOLD_SECTION_FILL_SECONDS: float = 6  # each section fills in 6 seconds
+GOLD_SECTION_FILL_SECONDS: float = 5  # each section fills in 5 seconds
 
 
 class GraphState:

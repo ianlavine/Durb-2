@@ -225,7 +225,7 @@
     const abilities = [
       { name: 'reverse', label: 'Reverse', cost: 1, key: '🖱️', description: 'Reverse Pipe (1 gold)' },
       { name: 'bridge1way', label: 'New Pipe', cost: 3, key: 'A', description: 'New Pipe (3 gold)' },
-      { name: 'destroy', label: 'Destroy', cost: 3, key: 'D', description: 'Destroy Node (3 gold)' }
+      { name: 'destroy', label: 'Destroy', cost: 2, key: 'D', description: 'Destroy Node (2 gold)' }
       // Capital ability hidden but backend logic preserved
     ];
 
@@ -1073,7 +1073,7 @@
               const abilities = {
                 'bridge1way': { cost: 3 },
                 'reverse': { cost: 1 },
-                'destroy': { cost: 3 }
+                'destroy': { cost: 2 }
               };
               const ability = abilities[activeAbility];
               
@@ -1157,7 +1157,7 @@
         const node = nodes.get(candidateNodeId);
         if (node && node.owner === myPlayerId) {
           // Attempt to destroy node (backend will validate ownership)
-          const ability = { cost: 3 };
+          const ability = { cost: 2 };
           if (goldValue >= ability.cost && ws && ws.readyState === WebSocket.OPEN) {
             const token = localStorage.getItem('token');
             ws.send(JSON.stringify({
@@ -1271,12 +1271,31 @@
     }
   }
 
-  // Right-click: reverse edge direction (if eligible)
+  // Right-click: activate new pipe ability on node, or reverse edge direction (if eligible)
   window.addEventListener('contextmenu', (ev) => {
     if (gameEnded) return;
     if (phase !== 'playing') return; // disable during picking
     const [wx, wy] = screenToWorld(ev.clientX, ev.clientY);
     const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
+    
+    // First check if we're right-clicking on a node
+    const nodeId = pickNearestNode(wx, wy, 18 / baseScale);
+    if (nodeId != null) {
+      const node = nodes.get(nodeId);
+      if (node && node.owner === myPlayerId) {
+        // Check if we can afford the new pipe ability (3 gold)
+        if (goldValue >= 3) {
+          ev.preventDefault();
+          // Activate new pipe ability and start bridge building at this node
+          activeAbility = 'bridge1way';
+          bridgeFirstNode = nodeId;
+          updateAbilityButtonStates();
+          return;
+        }
+      }
+    }
+    
+    // Fall back to edge reversal if not on a valid node
     const edgeId = pickEdgeNear(wx, wy, 14 / baseScale);
     if (edgeId != null && ws && ws.readyState === WebSocket.OPEN) {
       ev.preventDefault();
