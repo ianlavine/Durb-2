@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
@@ -131,7 +132,7 @@ class WebSocketServer:
             
             # Broadcast game state update
             if self.game_engine.state:
-                msg = json.dumps(self.game_engine.state.to_tick_message())
+                msg = json.dumps(self.game_engine.state.to_tick_message(time.time()))
                 await self._broadcast(msg)
 
 

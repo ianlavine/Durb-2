@@ -46,15 +46,17 @@
   let hoveredEdgeId = null;
   
   // Abilities system
-  let abilitiesContainer = null;
   let activeAbility = null; // null, 'bridge1way', 'reverse'
   let bridgeFirstNode = null; // first selected node for bridge building
-  let abilityButtons = {}; // ability name -> button element
   let mouseWorldX = 0; // current mouse position in world coordinates
   let mouseWorldY = 0;
   let capitalNodes = new Set(); // node IDs that are capitals
   let player1Capitals = 0; // capital count from backend
   let player2Capitals = 0; // capital count from backend
+  
+  // Peace period state
+  let peacePeriodActive = false;
+  let peaceTimeRemaining = 0.0;
   
   // Animation system for juice flow
   let animationTime = 0; // Global animation timer
@@ -104,9 +106,13 @@
         if (overlayMsg) overlayMsg.style.display = 'none';
         // Hide HUD when returning to menu
         if (hudContainer) hudContainer.style.display = 'none';
-        if (abilitiesContainer) abilitiesContainer.style.visibility = 'hidden';
-        const capitalCounter = document.querySelector('div[style*="top: 20px"][style*="right: 20px"]');
-        if (capitalCounter) capitalCounter.style.display = 'none';
+        const goldNumber = document.getElementById('goldNumber');
+        if (goldNumber) goldNumber.style.display = 'none';
+        // Hide peace period UI when returning to menu
+        const peaceIndicator = document.getElementById('peaceIndicator');
+        const peaceTimer = document.getElementById('peaceTimer');
+        if (peaceIndicator) peaceIndicator.style.display = 'none';
+        if (peaceTimer) peaceTimer.style.display = 'none';
         nodes.clear();
         edges.clear();
         capitalNodes.clear(); // Clear capital nodes when returning to menu
@@ -114,7 +120,10 @@
         // Reset ability state when returning to menu
         activeAbility = null;
         bridgeFirstNode = null;
-        updateAbilityButtonStates();
+        
+        // Reset peace period state
+        peacePeriodActive = false;
+        peaceTimeRemaining = 0.0;
         
         redrawStatic();
       }
@@ -205,193 +214,73 @@
     document.body.appendChild(gold);
     hudContainer = gold;
 
-    // Abilities container (left of gold bar)
-    abilitiesContainer = document.createElement('div');
-    Object.assign(abilitiesContainer.style, {
+    // Gold number display at top of gold bar
+    const goldNumber = document.createElement('div');
+    goldNumber.id = 'goldNumber';
+    Object.assign(goldNumber.style, {
       position: 'absolute',
-      right: '100px', // to the left of gold bar (20px + 48px + 32px margin)
-      bottom: '20px', // aligned with gold bar bottom
-      width: '124px',
-      height: '600px', // match gold bar height
-      display: 'flex',
-      visibility: 'hidden', // initially hidden
+      right: '20px',
+      bottom: '620px', // positioned above the gold bar (600px + 20px)
+      fontSize: '100px',
+      fontWeight: 'bold',
+      color: '#ffd700',
+      lineHeight: '1',
+      textAlign: 'center',
       zIndex: 8,
-      boxSizing: 'border-box',
-      flexDirection: 'column',
-      justifyContent: 'flex-end', // align abilities to bottom
+      display: 'none', // initially hidden
     });
+    goldNumber.textContent = '0';
+    
+    document.body.appendChild(goldNumber);
 
-    // Create ability buttons
-    const abilities = [
-      { name: 'reverse', label: 'Reverse', cost: 1, key: '🖱️', description: 'Reverse Pipe (1 gold)' },
-      { name: 'bridge1way', label: 'New Pipe', cost: 3, key: 'A', description: 'New Pipe (3 gold)' },
-      { name: 'destroy', label: 'Destroy', cost: 3, key: 'D', description: 'Destroy Node (3 gold)' }
-      // Capital ability hidden but backend logic preserved
-    ];
-
-    abilities.forEach((ability, index) => {
-      const button = document.createElement('div');
-      Object.assign(button.style, {
-        width: '140px',
-        height: '140px',
-        background: '#2a2a2a',
-        border: '3px solid #555',
-        borderRadius: '16px',
-        marginBottom: '16px',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        cursor: 'pointer',
-        position: 'relative',
-        transition: 'all 0.2s ease',
-        boxSizing: 'border-box',
-      });
-
-      // Ability label
-      const label = document.createElement('div');
-      label.textContent = ability.label;
-      Object.assign(label.style, {
-        fontSize: '32px',
-        fontWeight: 'bold',
-        color: '#ccc',
-        lineHeight: '1',
-      });
-
-      // Cost indicator (top-left corner)
-      const cost = document.createElement('div');
-      cost.textContent = ability.cost;
-      Object.assign(cost.style, {
-        position: 'absolute',
-        top: '8px',
-        left: '12px',
-        fontSize: '20px',
-        color: '#ffd700',
-        lineHeight: '1',
-        fontWeight: 'bold',
-      });
-
-      // Key indicator (top-right corner, only if key exists)
-      let keyIndicator = null;
-      if (ability.key) {
-        keyIndicator = document.createElement('div');
-        keyIndicator.textContent = ability.key;
-        Object.assign(keyIndicator.style, {
-          position: 'absolute',
-          top: '8px',
-          right: '12px',
-          fontSize: '16px',
-          color: '#888',
-          lineHeight: '1',
-        });
-      }
-
-      button.appendChild(cost);
-      if (keyIndicator) button.appendChild(keyIndicator);
-      button.appendChild(label);
-
-      // Click handler
-      button.addEventListener('click', () => handleAbilityClick(ability.name));
-
-      // Hover effects
-      button.addEventListener('mouseenter', () => {
-        button.style.borderColor = '#777';
-        button.style.background = '#333';
-      });
-      button.addEventListener('mouseleave', () => {
-        if (activeAbility !== ability.name) {
-          button.style.borderColor = '#555';
-          button.style.background = '#2a2a2a';
-        }
-      });
-
-      // Title for tooltip
-      button.title = ability.description;
-
-      abilitiesContainer.appendChild(button);
-      abilityButtons[ability.name] = button;
-    });
-
-    document.body.appendChild(abilitiesContainer);
-
-    // Capital counter display (top right)
-    const capitalCounter = document.createElement('div');
-    Object.assign(capitalCounter.style, {
+    // Peace period indicator (top right)
+    const peaceIndicator = document.createElement('div');
+    peaceIndicator.id = 'peaceIndicator';
+    Object.assign(peaceIndicator.style, {
       position: 'absolute',
       top: '20px',
       right: '20px',
-      width: '280px',
-      background: 'rgba(0, 0, 0, 0.8)',
-      border: '3px solid #444',
-      borderRadius: '16px',
-      padding: '20px',
-      zIndex: 10,
-      textAlign: 'center',
-      display: 'none',
-      boxSizing: 'border-box',
-    });
-
-    // "Capitals" title
-    const capitalTitle = document.createElement('div');
-    capitalTitle.textContent = 'Capitals';
-    Object.assign(capitalTitle.style, {
+      background: 'rgba(0, 150, 0, 0.9)',
+      color: '#ffffff',
+      padding: '12px 20px',
+      borderRadius: '8px',
       fontSize: '24px',
       fontWeight: 'bold',
-      color: '#fff',
-      marginBottom: '16px',
+      zIndex: 10,
+      textAlign: 'center',
+      border: '2px solid #00ff00',
+      boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+      display: 'none',
+      fontFamily: 'monospace'
     });
-    capitalCounter.appendChild(capitalTitle);
-
-    // Container for side-by-side numbers
-    const numbersContainer = document.createElement('div');
-    Object.assign(numbersContainer.style, {
-      display: 'flex',
-      justifyContent: 'space-around',
-      alignItems: 'center',
-      marginBottom: '16px',
-    });
-    capitalCounter.appendChild(numbersContainer);
-
-    // Player capital counts
-    const player1Count = document.createElement('div');
-    player1Count.id = 'player1-capitals';
-    Object.assign(player1Count.style, {
-      fontSize: '48px',
-      fontWeight: 'bold',
-      color: '#ff3333', // red player color
-      lineHeight: '1',
-    });
-    numbersContainer.appendChild(player1Count);
-
-    const vsText = document.createElement('div');
-    vsText.textContent = 'vs';
-    Object.assign(vsText.style, {
-      fontSize: '20px',
-      color: '#888',
-      fontWeight: 'bold',
-    });
-    numbersContainer.appendChild(vsText);
-
-    const player2Count = document.createElement('div');
-    player2Count.id = 'player2-capitals';
-    Object.assign(player2Count.style, {
-      fontSize: '48px',
-      fontWeight: 'bold',
-      color: '#3388ff', // blue player color
-      lineHeight: '1',
-    });
-    numbersContainer.appendChild(player2Count);
-
-    // Win condition text
-    const winCondition = document.createElement('div');
-    winCondition.textContent = 'First to 5 wins';
-    Object.assign(winCondition.style, {
+    
+    // Peace timer (below peace indicator)
+    const peaceTimer = document.createElement('div');
+    peaceTimer.id = 'peaceTimer';
+    Object.assign(peaceTimer.style, {
+      position: 'absolute',
+      top: '70px',
+      right: '20px',
+      background: 'rgba(0, 150, 0, 0.9)',
+      color: '#ffffff',
+      padding: '8px 16px',
+      borderRadius: '6px',
       fontSize: '18px',
-      color: '#ccc',
+      fontWeight: 'bold',
+      zIndex: 10,
+      textAlign: 'center',
+      border: '2px solid #00ff00',
+      boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+      display: 'none',
+      fontFamily: 'monospace'
     });
-    capitalCounter.appendChild(winCondition);
+    
+    document.body.appendChild(peaceIndicator);
+    document.body.appendChild(peaceTimer);
 
-    document.body.appendChild(capitalCounter);
+    // Abilities container removed - abilities now only accessible via keyboard shortcuts and right-click
+
+    // Capital counter display removed
 
     window.addEventListener('resize', () => {
       this.scale.resize(window.innerWidth, window.innerHeight);
@@ -512,20 +401,25 @@
         if (Number(pid) === 2) player2Capitals = Number(count) || 0;
       }
     }
+    // Peace period info
+    if (msg.peace) {
+      peacePeriodActive = msg.peace.active || false;
+      peaceTimeRemaining = Number(msg.peace.timeRemaining) || 0.0;
+    }
     computeTransform(game.scale.gameSize.width, game.scale.gameSize.height);
     const menu = document.getElementById('menu');
     menu && menu.classList.add('hidden');
     if (overlayMsg) overlayMsg.style.display = 'none';
     redrawStatic();
     if (statusText) {
-      statusText.setText(phase === 'picking' && !myPicked ? 'Choose Starting Node' : '');
+      statusText.setText(!myPicked ? 'Choose Starting Node' : '');
       statusText.setStyle({ font: '48px monospace', color: '#ffffff' });
       statusText.setPosition(game.scale.gameSize.width / 2 - statusText.width / 2, 16);
       statusText.setDepth(10);
-      statusText.setVisible(phase === 'picking' && !myPicked);
+      statusText.setVisible(!myPicked);
     }
     updateGoldBar();
-    updateAbilityButtonStates();
+    updatePeacePeriodUI();
   }
 
   function handleLobby(msg) {
@@ -547,12 +441,20 @@
       overlayMsg.style.display = 'block';
     }
     gameEnded = true;
+    // Reset peace period state when game ends
+    peacePeriodActive = false;
+    peaceTimeRemaining = 0.0;
     const buttons = document.getElementsByTagName('button');
     for (const b of buttons) {
       if (b.textContent === 'Forfeit') b.textContent = 'Quit';
     }
     // Do not clear board; leave last state visible (stale, no updates)
     redrawStatic();
+    // Hide peace period UI when game ends
+    const peaceIndicator = document.getElementById('peaceIndicator');
+    const peaceTimer = document.getElementById('peaceTimer');
+    if (peaceIndicator) peaceIndicator.style.display = 'none';
+    if (peaceTimer) peaceTimer.style.display = 'none';
     // Ensure menu elements are ready for return
     const menu = document.getElementById('menu');
     const lobby = document.getElementById('lobby');
@@ -616,16 +518,20 @@
         if (Number(pid) === 2) player2Capitals = Number(count) || 0;
       }
     }
+    // Peace period info
+    if (msg.peace) {
+      peacePeriodActive = msg.peace.active || false;
+      peaceTimeRemaining = Number(msg.peace.timeRemaining) || 0.0;
+    }
     if (statusText) {
-      statusText.setText(phase === 'picking' && !myPicked ? 'Choose Starting Node' : '');
+      statusText.setText(!myPicked ? 'Choose Starting Node' : '');
       statusText.setStyle({ font: '48px monospace', color: '#ffffff' });
       statusText.setPosition(game.scale.gameSize.width / 2 - statusText.width / 2, 16);
       statusText.setDepth(10);
-      statusText.setVisible(phase === 'picking' && !myPicked);
+      statusText.setVisible(!myPicked);
     }
     updateGoldBar();
-    updateAbilityButtonStates();
-    updateCapitalCounter();
+    updatePeacePeriodUI();
     redrawStatic();
   }
 
@@ -647,7 +553,6 @@
     if (activeAbility === 'bridge1way') {
       activeAbility = null;
       bridgeFirstNode = null;
-      updateAbilityButtonStates();
     }
   }
 
@@ -678,7 +583,6 @@
     if (activeAbility === 'reverse') {
       activeAbility = null;
       bridgeFirstNode = null;
-      updateAbilityButtonStates();
     }
   }
 
@@ -720,7 +624,6 @@
     if (activeAbility === 'capital') {
       activeAbility = null;
       bridgeFirstNode = null;
-      updateAbilityButtonStates();
     }
   }
 
@@ -747,7 +650,6 @@
     if (activeAbility === 'destroy') {
       activeAbility = null;
       bridgeFirstNode = null;
-      updateAbilityButtonStates();
     }
   }
 
@@ -800,23 +702,16 @@
       graphicsNodes.clear();
       // Hide HUD when menu is visible (graph is not drawn)
       if (hudContainer) hudContainer.style.display = 'none';
-      if (abilitiesContainer) abilitiesContainer.style.visibility = 'hidden';
-      const capitalCounter = document.querySelector('div[style*="top: 20px"][style*="right: 20px"]');
-      if (capitalCounter) capitalCounter.style.display = 'none';
+      const goldNumber = document.getElementById('goldNumber');
+      if (goldNumber) goldNumber.style.display = 'none';
       return; // Do not draw game under menu
     }
     
-    // Show gold bar and abilities when graph is being drawn and we have nodes/game data
+    // Show gold bar when graph is being drawn and we have nodes/game data
     if (hudContainer && nodes.size > 0) {
       hudContainer.style.display = 'block';
-    }
-    if (abilitiesContainer && nodes.size > 0) {
-      abilitiesContainer.style.visibility = 'visible';
-    }
-    // Show capital counter during game
-    const capitalCounter = document.querySelector('div[style*="top: 20px"][style*="right: 20px"]');
-    if (capitalCounter && nodes.size > 0) {
-      capitalCounter.style.display = 'block';
+      const goldNumber = document.getElementById('goldNumber');
+      if (goldNumber) goldNumber.style.display = 'block';
     }
     for (const [id, e] of edges.entries()) {
       const s = nodes.get(e.source);
@@ -842,16 +737,16 @@
         graphicsNodes.strokeCircle(nx, ny, r + 2);
       }
       
-      // Hover effect: player's color border when eligible (picking phase)
-      if (hoveredNodeId === id && phase === 'picking' && !myPicked && (n.owner == null)) {
+      // Hover effect: player's color border when eligible for starting node pick
+      if (hoveredNodeId === id && !myPicked && (n.owner == null)) {
         const myColor = ownerToColor(myPlayerId);
         graphicsNodes.lineStyle(3, myColor, 1);
         graphicsNodes.strokeCircle(nx, ny, r + 3);
       }
       
-      // Hover effect: show if node can be targeted for flow (playing phase or picked in picking phase)
+      // Hover effect: show if node can be targeted for flow
       // Only show this when no ability is active to avoid conflicting with ability-specific highlights
-      if (hoveredNodeId === id && ((phase === 'playing') || (phase === 'picking' && myPicked)) && !activeAbility) {
+      if (hoveredNodeId === id && myPicked && !activeAbility) {
         if (canTargetNodeForFlow(id)) {
           const myColor = ownerToColor(myPlayerId);
           graphicsNodes.lineStyle(3, myColor, 0.8);
@@ -874,9 +769,18 @@
             graphicsNodes.strokeCircle(nx, ny, r + 3);
           }
         } else if (bridgeFirstNode !== id) {
-          // After selecting first node: highlight any other node as valid target
-          graphicsNodes.lineStyle(3, 0xffd700, 0.7); // semi-transparent gold
-          graphicsNodes.strokeCircle(nx, ny, r + 3);
+          // After selecting first node: highlight valid targets
+          // During peace period, don't highlight opponent's nodes
+          if (peacePeriodActive) {
+            if (n.owner === null || n.owner === myPlayerId) {
+              graphicsNodes.lineStyle(3, 0xffd700, 0.7); // semi-transparent gold
+              graphicsNodes.strokeCircle(nx, ny, r + 3);
+            }
+          } else {
+            // Normal behavior - highlight any other node as valid target
+            graphicsNodes.lineStyle(3, 0xffd700, 0.7); // semi-transparent gold
+            graphicsNodes.strokeCircle(nx, ny, r + 3);
+          }
         }
       }
       
@@ -931,7 +835,7 @@
     let minX = 0, minY = 0, maxX = 100, maxY = 100;
     // Nodes are already in 0..100 logical space; fit that rect to screen
     const padding = 60; // top/bottom padding
-    const rightReservedPx = 220; // space for gold bar, abilities closer together, and margins
+    const rightReservedPx = 80; // space for gold bar and margins
     const width = Math.max(1, maxX - minX);
     const height = Math.max(1, maxY - minY);
     const scaleX = (viewW - padding * 2 - rightReservedPx) / width;
@@ -1007,6 +911,13 @@
       if (edge.target === targetNodeId) {
         const sourceNode = nodes.get(edge.source);
         if (sourceNode && sourceNode.owner === myPlayerId) {
+          // During peace period, only allow targeting if it won't attack opponent's node
+          if (peacePeriodActive) {
+            const targetNode = nodes.get(edge.target);
+            if (targetNode && targetNode.owner !== null && targetNode.owner !== myPlayerId) {
+              return false; // Would attack during peace period
+            }
+          }
           return true; // Found at least one edge I can flow through to this node
         }
       }
@@ -1055,49 +966,73 @@
   });
 
 
-  function handleSingleClick(ev, wx, wy, baseScale) {
-    // Handle bridge building mode
-    if (activeAbility === 'bridge1way') {
-      const candidateNodeId = pickNearestNode(wx, wy, 18 / baseScale);
-      if (candidateNodeId != null) {
-        const node = nodes.get(candidateNodeId);
-        if (node) {
-          if (bridgeFirstNode === null) {
-            // Select first node (must be owned by player)
-            if (node.owner === myPlayerId) {
-              bridgeFirstNode = candidateNodeId;
+  function handleBridgeBuilding(wx, wy, baseScale, isRightClick = false) {
+    if (activeAbility !== 'bridge1way') return false;
+    
+    const nodeId = pickNearestNode(wx, wy, 18 / baseScale);
+    const edgeId = pickEdgeNear(wx, wy, 14 / baseScale);
+    
+    if (nodeId != null) {
+      const node = nodes.get(nodeId);
+      if (node) {
+        if (bridgeFirstNode === null) {
+          // Start bridge building - first node must be owned by player
+          if (node.owner === myPlayerId) {
+            if (goldValue >= 3) {
+              bridgeFirstNode = nodeId;
+              return true; // Handled
+            } else {
+              // Not enough gold for bridge building
+              showErrorMessage("Not enough gold! Need 3 gold for new pipe.");
+              return true; // Handled
             }
-          } else if (bridgeFirstNode !== candidateNodeId) {
-            // Select second node and create bridge (can connect to any node)
-            {
-              const abilities = {
-                'bridge1way': { cost: 3 },
-                'reverse': { cost: 1 },
-                'destroy': { cost: 3 }
-              };
-              const ability = abilities[activeAbility];
-              
-              if (goldValue >= ability.cost && ws && ws.readyState === WebSocket.OPEN) {
-                const token = localStorage.getItem('token');
-                ws.send(JSON.stringify({
-                  type: 'buildBridge',
-                  fromNodeId: bridgeFirstNode,
-                  toNodeId: candidateNodeId,
-                  cost: ability.cost,
-                  token: token
-                }));
-              }
-              
-              // Don't reset bridge building state here - wait for server response
-              // Reset will happen in handleNewEdge() on success or stay active on error
-            }
-          } else {
-            // Clicked same node, cancel selection
-            bridgeFirstNode = null;
           }
+        } else if (bridgeFirstNode !== nodeId) {
+          // Complete bridge building - second node can be any node
+          if (goldValue >= 3 && ws && ws.readyState === WebSocket.OPEN) {
+            // During peace period, check if this would attack
+            if (peacePeriodActive) {
+              const targetNode = nodes.get(nodeId);
+              if (targetNode && targetNode.owner !== null && targetNode.owner !== myPlayerId) {
+                showErrorMessage("Cannot build bridge to attack during peace period!");
+                return true; // Handled
+              }
+            }
+            
+            const token = localStorage.getItem('token');
+            ws.send(JSON.stringify({
+              type: 'buildBridge',
+              fromNodeId: bridgeFirstNode,
+              toNodeId: nodeId,
+              cost: 3,
+              token: token
+            }));
+            // Don't reset bridge building state here - wait for server response
+            return true; // Handled
+          } else if (goldValue < 3) {
+            // Not enough gold to complete bridge building
+            showErrorMessage("Not enough gold! Need 3 gold for new pipe.");
+            return true; // Handled
+          }
+        } else {
+          // Clicked same node, cancel selection
+          bridgeFirstNode = null;
+          return true; // Handled
         }
       }
-      return; // Don't handle normal clicks in bridge mode
+    }
+    
+    // If we get here, it means we clicked on empty space, an edge, or an invalid node
+    // Cancel bridge building
+    activeAbility = null;
+    bridgeFirstNode = null;
+    return true; // Handled
+  }
+
+  function handleSingleClick(ev, wx, wy, baseScale) {
+    // Handle bridge building mode
+    if (handleBridgeBuilding(wx, wy, baseScale, false)) {
+      return; // Bridge building was handled
     }
     
     // Handle reverse edge mode
@@ -1157,7 +1092,7 @@
         const node = nodes.get(candidateNodeId);
         if (node && node.owner === myPlayerId) {
           // Attempt to destroy node (backend will validate ownership)
-          const ability = { cost: 3 };
+          const ability = { cost: 2 };
           if (goldValue >= ability.cost && ws && ws.readyState === WebSocket.OPEN) {
             const token = localStorage.getItem('token');
             ws.send(JSON.stringify({
@@ -1178,77 +1113,34 @@
     // Normal click handling
     let nodeId = null;
     let edgeId = null;
-    if (phase === 'picking' && !myPicked) {
-      const candidateNodeId = pickNearestNode(wx, wy, 18 / baseScale);
-      if (candidateNodeId != null) {
-        const cn = nodes.get(candidateNodeId);
-        if (cn && (cn.owner == null)) nodeId = candidateNodeId;
-      }
-    } else if (phase === 'picking' && myPicked) {
-      // Allow node flow targeting and edge clicks if player has already picked
-      const candidateNodeId = pickNearestNode(wx, wy, 18 / baseScale);
-      if (candidateNodeId != null) {
-        nodeId = candidateNodeId;
-      } else {
-        const candidateEdgeId = pickEdgeNear(wx, wy, 14 / baseScale);
-        if (candidateEdgeId != null) {
-          const e = edges.get(candidateEdgeId);
-          if (e) {
-            const sourceNode = nodes.get(e.source);
-            // Only eligible if you own the source node
-            if (sourceNode && sourceNode.owner === myPlayerId) edgeId = candidateEdgeId;
-          }
-        }
-      }
-    } else if (phase === 'playing') {
-      const candidateNodeId = pickNearestNode(wx, wy, 18 / baseScale);
-      if (candidateNodeId != null) {
-        nodeId = candidateNodeId;
-      } else {
-        const candidateEdgeId = pickEdgeNear(wx, wy, 14 / baseScale);
-        if (candidateEdgeId != null) {
-          const e = edges.get(candidateEdgeId);
-          if (e) {
-            const sourceNode = nodes.get(e.source);
-            // Only eligible if you own the source node
-            if (sourceNode && sourceNode.owner === myPlayerId) edgeId = candidateEdgeId;
-          }
+    
+    const candidateNodeId = pickNearestNode(wx, wy, 18 / baseScale);
+    if (candidateNodeId != null) {
+      nodeId = candidateNodeId;
+    } else {
+      const candidateEdgeId = pickEdgeNear(wx, wy, 14 / baseScale);
+      if (candidateEdgeId != null) {
+        const e = edges.get(candidateEdgeId);
+        if (e) {
+          const sourceNode = nodes.get(e.source);
+          // Only eligible if you own the source node
+          if (sourceNode && sourceNode.owner === myPlayerId) edgeId = candidateEdgeId;
         }
       }
     }
 
-    if (phase === 'picking') {
-      if (!myPicked && nodeId != null && ws && ws.readyState === WebSocket.OPEN) {
-        const token = localStorage.getItem('token');
-        ws.send(JSON.stringify({ type: 'clickNode', nodeId: nodeId, token }));
-        return; // Return after handling node click
-      }
-      // Allow edge clicks and node flow targeting if player has already picked
-      if (myPicked && ws && ws.readyState === WebSocket.OPEN) {
-        const token = localStorage.getItem('token');
-        
-        // Check for node flow targeting first
-        if (nodeId != null && canTargetNodeForFlow(nodeId)) {
-          // Redirect energy towards this node
-          ws.send(JSON.stringify({
-            type: 'redirectEnergy',
-            targetNodeId: nodeId,
-            token: token
-          }));
-          return;
-        }
-        
-        // Otherwise handle edge clicks
-        if (edgeId != null) {
-          ws.send(JSON.stringify({ type: 'clickEdge', edgeId, token }));
-          return;
-        }
-      }
-      return; // No valid action during picking
-    } else {
-      if (nodeId != null && ws && ws.readyState === WebSocket.OPEN) {
-        const token = localStorage.getItem('token');
-        
+    // Handle clicks - check for starting node pick first
+    if (!myPicked && nodeId != null && ws && ws.readyState === WebSocket.OPEN) {
+      const token = localStorage.getItem('token');
+      ws.send(JSON.stringify({ type: 'clickNode', nodeId: nodeId, token }));
+      return; // Return after handling starting node pick
+    }
+    
+    // Handle all other clicks (node flow targeting, edge clicks, etc.)
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      const token = localStorage.getItem('token');
+      
+      if (nodeId != null) {
         // Check if this is a node we can target for flow
         if (canTargetNodeForFlow(nodeId)) {
           // Redirect energy towards this node
@@ -1264,19 +1156,43 @@
           return;
         }
       }
-      if (edgeId != null && ws && ws.readyState === WebSocket.OPEN) {
-        const token = localStorage.getItem('token');
+      
+      if (edgeId != null) {
         ws.send(JSON.stringify({ type: 'clickEdge', edgeId, token }));
       }
     }
   }
 
-  // Right-click: reverse edge direction (if eligible)
+  // Right-click: activate new pipe ability on node, complete bridge building, or reverse edge direction
   window.addEventListener('contextmenu', (ev) => {
     if (gameEnded) return;
-    if (phase !== 'playing') return; // disable during picking
     const [wx, wy] = screenToWorld(ev.clientX, ev.clientY);
     const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
+    
+    // Handle bridge building mode first
+    if (handleBridgeBuilding(wx, wy, baseScale, true)) {
+      ev.preventDefault();
+      return; // Bridge building was handled
+    }
+    
+    // Check if we're right-clicking on a node to start bridge building
+    const nodeId = pickNearestNode(wx, wy, 18 / baseScale);
+    if (nodeId != null) {
+      const node = nodes.get(nodeId);
+      if (node && node.owner === myPlayerId) {
+        ev.preventDefault(); // Always prevent default when clicking on owned node
+        if (goldValue >= 3) {
+          activeAbility = 'bridge1way';
+          bridgeFirstNode = nodeId;
+        } else {
+          // Not enough gold for bridge building
+          showErrorMessage("Not enough gold! Need 3 gold for new pipe.");
+        }
+        return;
+      }
+    }
+    
+    // Fall back to edge reversal if not on a valid node or not in bridge building mode
     const edgeId = pickEdgeNear(wx, wy, 14 / baseScale);
     if (edgeId != null && ws && ws.readyState === WebSocket.OPEN) {
       ev.preventDefault();
@@ -1305,7 +1221,6 @@
         if (activeAbility) {
           activeAbility = null;
           bridgeFirstNode = null;
-          updateAbilityButtonStates();
         }
         break;
     }
@@ -1374,7 +1289,7 @@
   }
 
   function handleAbilityClick(abilityName) {
-    if (phase !== 'playing') return; // Only allow abilities during playing phase
+    // Allow abilities during peace and playing phases
     
     const abilities = {
       'bridge1way': { cost: 3 },
@@ -1395,66 +1310,23 @@
       // Deactivate
       activeAbility = null;
       bridgeFirstNode = null;
-      updateAbilityButtonStates();
     } else if (abilityName === 'bridge1way') {
       // Activate bridge building
       activeAbility = abilityName;
       bridgeFirstNode = null;
-      updateAbilityButtonStates();
     } else if (abilityName === 'reverse') {
       // Activate reverse mode (similar to capital - click an edge to reverse)
       activeAbility = abilityName;
       bridgeFirstNode = null;
-      updateAbilityButtonStates();
     } else if (abilityName === 'destroy') {
       // Activate destroy mode
       activeAbility = abilityName;
       bridgeFirstNode = null; // reuse for destroy node selection
-      updateAbilityButtonStates();
     }
     // Placeholder abilities do nothing for now
   }
 
-  function updateAbilityButtonStates() {
-    const abilities = {
-      'bridge1way': { cost: 3 },
-      'reverse': { cost: 1 },
-      'destroy': { cost: 2 }
-    };
-    
-    Object.keys(abilityButtons).forEach(abilityName => {
-      const button = abilityButtons[abilityName];
-      const ability = abilities[abilityName];
-      if (!button || !ability) return;
-      
-      const canAfford = goldValue >= ability.cost;
-      const isActive = activeAbility === abilityName;
-      
-      if (isActive) {
-        button.style.background = '#4a4a00';
-        button.style.borderColor = '#ffd700';
-      } else if (canAfford) {
-        button.style.background = '#2a2a2a';
-        button.style.borderColor = '#555';
-      } else {
-        button.style.background = '#1a1a1a';
-        button.style.borderColor = '#333';
-      }
-      
-      // Update opacity and cursor
-      button.style.opacity = canAfford ? '1' : '0.5';
-      button.style.cursor = canAfford ? 'pointer' : 'not-allowed';
-    });
-  }
 
-  function updateCapitalCounter() {
-    // Simply display the capital counts received from backend
-    const player1Element = document.getElementById('player1-capitals');
-    const player2Element = document.getElementById('player2-capitals');
-    
-    if (player1Element) player1Element.textContent = player1Capitals.toString();
-    if (player2Element) player2Element.textContent = player2Capitals.toString();
-  }
 
   function updateGoldBar() {
     const val = Math.max(0, Math.min(7, goldValue || 0));
@@ -1468,6 +1340,30 @@
       else if (i === full) h = Math.max(0, Math.min(100, frac * 100));
       else h = 0;
       seg.fill.style.height = `${h}%`;
+    }
+    
+    // Update gold number display
+    const goldNumber = document.getElementById('goldNumber');
+    if (goldNumber) {
+      goldNumber.textContent = Math.floor(val).toString();
+    }
+  }
+
+  function updatePeacePeriodUI() {
+    const peaceIndicator = document.getElementById('peaceIndicator');
+    const peaceTimer = document.getElementById('peaceTimer');
+    
+    if (peaceIndicator && peaceTimer) {
+      if (peacePeriodActive) {
+        peaceIndicator.style.display = 'block';
+        peaceIndicator.textContent = 'PEACE';
+        
+        peaceTimer.style.display = 'block';
+        peaceTimer.textContent = `${Math.ceil(peaceTimeRemaining)}s`;
+      } else {
+        peaceIndicator.style.display = 'none';
+        peaceTimer.style.display = 'none';
+      }
     }
   }
 

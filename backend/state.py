@@ -16,7 +16,7 @@ TRANSFER_PERCENT_PER_TICK: float = 0.01  # fraction of source juice transferred 
 
 # Gold economy (displayed as 7 sections filling like elixir)
 GOLD_MAX_SECTIONS: float = 7.0
-GOLD_SECTION_FILL_SECONDS: float = 6  # each section fills in 6 seconds
+GOLD_SECTION_FILL_SECONDS: float = 5  # each section fills in 5 seconds
 
 
 class GraphState:
@@ -39,12 +39,48 @@ class GraphState:
         # Track if game has ended due to capital victory
         self.game_ended: bool = False
         self.winner_id: Optional[int] = None
+        
+        # Peace period state
+        self.peace_period_active: bool = False
+        self.peace_period_start_time: Optional[float] = None
+        self.peace_period_duration: float = 60.0  # 60 seconds
 
     def add_player(self, player: Player) -> None:
         self.players[player.id] = player
         # Initialize player economy and pick status
         self.player_gold[player.id] = 0.0
         self.players_who_picked[player.id] = False
+
+    def start_peace_period(self, current_time: float) -> None:
+        """Start the peace period timer."""
+        self.peace_period_active = True
+        self.peace_period_start_time = current_time
+
+    def check_peace_period(self, current_time: float) -> bool:
+        """Check if peace period should end. Returns True if peace period ended."""
+        if not self.peace_period_active or self.peace_period_start_time is None:
+            return False
+        
+        elapsed = current_time - self.peace_period_start_time
+        if elapsed >= self.peace_period_duration:
+            self.peace_period_active = False
+            self.peace_period_start_time = None
+            return True
+        
+        return False
+
+    def is_peace_period_active(self) -> bool:
+        """Check if peace period is currently active."""
+        return self.peace_period_active
+
+    def get_peace_time_remaining(self, current_time: float) -> float:
+        """Get remaining time in peace period. Returns 0 if not active."""
+        if not self.peace_period_active or self.peace_period_start_time is None:
+            return 0.0
+        
+        elapsed = current_time - self.peace_period_start_time
+        remaining = max(0.0, self.peace_period_duration - elapsed)
+        return remaining
 
     def check_capital_victory(self) -> Optional[int]:
         """Check if any player has 5 capitals. Returns winner ID or None."""
@@ -90,7 +126,7 @@ class GraphState:
         
         return None
 
-    def to_init_message(self, screen: Dict[str, int], tick_interval: float) -> Dict:
+    def to_init_message(self, screen: Dict[str, int], tick_interval: float, current_time: float = 0.0) -> Dict:
         nodes_arr = [
             [nid, round(n.x, 3), round(n.y, 3), round(n.juice, 3), (n.owner if n.owner is not None else None)]
             for nid, n in self.nodes.items()
@@ -111,6 +147,12 @@ class GraphState:
                 capital_counts[node.owner] = capital_counts.get(node.owner, 0) + 1
         capital_arr = [[pid, capital_counts.get(pid, 0)] for pid in self.players.keys()]
         
+        # Peace period info
+        peace_info = {
+            "active": self.peace_period_active,
+            "timeRemaining": round(self.get_peace_time_remaining(current_time), 1) if self.peace_period_active else 0.0
+        }
+        
         return {
             "type": "init",
             "screen": screen,
@@ -123,9 +165,10 @@ class GraphState:
             "gold": gold_arr,
             "picked": picked_arr,
             "capitals": capital_arr,
+            "peace": peace_info,
         }
 
-    def to_tick_message(self) -> Dict:
+    def to_tick_message(self, current_time: float = 0.0) -> Dict:
         edges_arr = [[eid, 1 if e.on else 0, 1 if e.flowing else 0, 1] for eid, e in self.edges.items()]  # Always forward now
         nodes_arr = [
             [nid, round(n.juice, 3), (n.owner if n.owner is not None else None)]
@@ -146,6 +189,12 @@ class GraphState:
                 capital_counts[node.owner] = capital_counts.get(node.owner, 0) + 1
         capital_arr = [[pid, capital_counts.get(pid, 0)] for pid in self.players.keys()]
         
+        # Peace period info
+        peace_info = {
+            "active": self.peace_period_active,
+            "timeRemaining": round(self.get_peace_time_remaining(current_time), 1) if self.peace_period_active else 0.0
+        }
+        
         return {
             "type": "tick",
             "edges": edges_arr,
@@ -156,6 +205,7 @@ class GraphState:
             "gold": gold_arr,
             "picked": picked_arr,
             "capitals": capital_arr,
+            "peace": peace_info,
         }
 
     def simulate_tick(self, tick_interval_seconds: float) -> None:
