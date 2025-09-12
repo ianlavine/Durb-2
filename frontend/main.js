@@ -156,7 +156,7 @@
       right: '20px',
       bottom: '20px',
       width: '48px',
-      height: '500px', // Much taller gold bar
+      height: '600px', // Even taller gold bar with 7 sections
       background: '#1a1a1a',
       border: '1px solid #444',
       borderRadius: '10px',
@@ -176,9 +176,9 @@
       gap: '6px',
     });
     gold.appendChild(stack);
-    // Create 10 segments
+    // Create 7 segments
     goldSegments = [];
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 7; i++) {
       const segment = document.createElement('div');
       Object.assign(segment.style, {
         position: 'relative',
@@ -212,7 +212,7 @@
       right: '100px', // to the left of gold bar (20px + 48px + 32px margin)
       bottom: '20px', // aligned with gold bar bottom
       width: '124px',
-      height: '500px', // match gold bar height
+      height: '600px', // match gold bar height
       display: 'flex',
       visibility: 'hidden', // initially hidden
       zIndex: 8,
@@ -225,7 +225,8 @@
     const abilities = [
       { name: 'reverse', label: 'Reverse', cost: 1, key: '🖱️', description: 'Reverse Pipe (1 gold)' },
       { name: 'bridge1way', label: 'New Pipe', cost: 3, key: 'A', description: 'New Pipe (3 gold)' },
-      { name: 'capital', label: 'Capital', cost: 5, key: 'C', description: 'Capital (5 gold)' }
+      { name: 'destroy', label: 'Destroy', cost: 3, key: 'D', description: 'Destroy Node (3 gold)' }
+      // Capital ability hidden but backend logic preserved
     ];
 
     abilities.forEach((ability, index) => {
@@ -449,6 +450,8 @@
       else if (msg.type === 'reverseEdgeError') handleReverseEdgeError(msg);
       else if (msg.type === 'newCapital') handleNewCapital(msg);
       else if (msg.type === 'capitalError') handleCapitalError(msg);
+      else if (msg.type === 'nodeDestroyed') handleNodeDestroyed(msg);
+      else if (msg.type === 'destroyError') handleDestroyError(msg);
     };
   }
 
@@ -499,7 +502,7 @@
     goldValue = 0;
     if (Array.isArray(msg.gold)) {
       for (const [pid, val] of msg.gold) {
-        if (Number(pid) === myPlayerId) goldValue = Math.max(0, Math.min(10, Number(val) || 0));
+        if (Number(pid) === myPlayerId) goldValue = Math.max(0, Math.min(7, Number(val) || 0));
       }
     }
     // Capital counts from backend
@@ -603,7 +606,7 @@
     }
     if (Array.isArray(msg.gold)) {
       for (const [pid, val] of msg.gold) {
-        if (Number(pid) === myPlayerId) goldValue = Math.max(0, Math.min(10, Number(val) || 0));
+        if (Number(pid) === myPlayerId) goldValue = Math.max(0, Math.min(7, Number(val) || 0));
       }
     }
     // Capital counts from backend
@@ -729,6 +732,28 @@
   function handleCapitalError(msg) {
     // Show error message to the player
     showErrorMessage(msg.message || "Invalid Capital!");
+  }
+
+  function handleNodeDestroyed(msg) {
+    // Remove the destroyed node from the frontend
+    if (msg.nodeId) {
+      nodes.delete(msg.nodeId);
+      // Also remove from capital nodes if it was a capital
+      capitalNodes.delete(msg.nodeId);
+      redrawStatic();
+    }
+    
+    // Reset destroy mode on successful node destruction
+    if (activeAbility === 'destroy') {
+      activeAbility = null;
+      bridgeFirstNode = null;
+      updateAbilityButtonStates();
+    }
+  }
+
+  function handleDestroyError(msg) {
+    // Show error message to the player
+    showErrorMessage(msg.message || "Can't destroy this node!");
   }
 
   function showErrorMessage(message) {
@@ -860,6 +885,12 @@
       if (hoveredNodeId === id && activeAbility === 'capital' && canCreateCapitalAt(id)) {
         const playerSecondaryColor = ownerToSecondaryColor(myPlayerId);
         graphicsNodes.lineStyle(3, playerSecondaryColor, 0.8);
+        graphicsNodes.strokeCircle(nx, ny, r + 3);
+      }
+      
+      // Destroy mode hover: show black highlight for owned nodes
+      if (hoveredNodeId === id && activeAbility === 'destroy' && n.owner === myPlayerId) {
+        graphicsNodes.lineStyle(3, 0x000000, 0.8); // black highlight
         graphicsNodes.strokeCircle(nx, ny, r + 3);
       }
       
@@ -1014,68 +1045,15 @@
     return true; // All checks passed
   }
 
-  // Double-click handling variables
-  let clickTimeout = null;
-  let lastClickTime = 0;
-  let lastClickedNodeId = null;
-  const DOUBLE_CLICK_DELAY = 300; // milliseconds
-
   // Input: during picking, click to claim a node once; during playing, edge interactions allowed
   window.addEventListener('click', (ev) => {
     if (gameEnded) return;
     const [wx, wy] = screenToWorld(ev.clientX, ev.clientY);
     const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
     
-    const currentTime = Date.now();
-    const nodeId = pickNearestNode(wx, wy, 18 / baseScale);
-    
-    // Check for double-click on the same node
-    if (nodeId != null && nodeId === lastClickedNodeId && 
-        currentTime - lastClickTime < DOUBLE_CLICK_DELAY) {
-      // This is a double-click - handle energy redirection
-      if (clickTimeout) {
-        clearTimeout(clickTimeout);
-        clickTimeout = null;
-      }
-      handleDoubleClick(nodeId);
-      lastClickedNodeId = null;
-      return;
-    }
-    
-    // Store click info for potential double-click
-    lastClickedNodeId = nodeId;
-    lastClickTime = currentTime;
-    
-    // Clear any existing timeout
-    if (clickTimeout) {
-      clearTimeout(clickTimeout);
-    }
-    
-    // Set timeout for single-click handling
-    clickTimeout = setTimeout(() => {
-      handleSingleClick(ev, wx, wy, baseScale);
-      clickTimeout = null;
-    }, DOUBLE_CLICK_DELAY);
+    handleSingleClick(ev, wx, wy, baseScale);
   });
 
-  function handleDoubleClick(nodeId) {
-    // Only allow double-click energy redirection during playing phase
-    if (phase !== 'playing' || !ws || ws.readyState !== WebSocket.OPEN) {
-      return;
-    }
-    
-    // Check if this node can receive energy flow from any of our nodes
-    if (!canTargetNodeForFlow(nodeId)) {
-      return;
-    }
-    
-    const token = localStorage.getItem('token');
-    ws.send(JSON.stringify({
-      type: 'redirectEnergy',
-      targetNodeId: nodeId,
-      token: token
-    }));
-  }
 
   function handleSingleClick(ev, wx, wy, baseScale) {
     // Handle bridge building mode
@@ -1095,7 +1073,7 @@
               const abilities = {
                 'bridge1way': { cost: 3 },
                 'reverse': { cost: 1 },
-                'capital': { cost: 5 }
+                'destroy': { cost: 3 }
               };
               const ability = abilities[activeAbility];
               
@@ -1172,6 +1150,31 @@
       return; // Don't handle normal clicks in capital mode
     }
     
+    // Handle destroy mode
+    if (activeAbility === 'destroy') {
+      const candidateNodeId = pickNearestNode(wx, wy, 18 / baseScale);
+      if (candidateNodeId != null) {
+        const node = nodes.get(candidateNodeId);
+        if (node && node.owner === myPlayerId) {
+          // Attempt to destroy node (backend will validate ownership)
+          const ability = { cost: 3 };
+          if (goldValue >= ability.cost && ws && ws.readyState === WebSocket.OPEN) {
+            const token = localStorage.getItem('token');
+            ws.send(JSON.stringify({
+              type: 'destroyNode',
+              nodeId: candidateNodeId,
+              cost: ability.cost,
+              token: token
+            }));
+          }
+          
+          // Don't reset destroy state here - wait for server response
+          // Reset will happen in handleNodeDestroyed() on success or stay active on error
+        }
+      }
+      return; // Don't handle normal clicks in destroy mode
+    }
+    
     // Normal click handling
     let nodeId = null;
     let edgeId = null;
@@ -1226,16 +1229,12 @@
         
         // Check for node flow targeting first
         if (nodeId != null && canTargetNodeForFlow(nodeId)) {
-          // Start flowing all edges that I own which target this node
-          for (const [edgeId, edge] of edges.entries()) {
-            if (edge.target === nodeId) {
-              const sourceNode = nodes.get(edge.source);
-              if (sourceNode && sourceNode.owner === myPlayerId && !edge.flowing) {
-                // Send edge click to start flow
-                ws.send(JSON.stringify({ type: 'clickEdge', edgeId, token }));
-              }
-            }
-          }
+          // Redirect energy towards this node
+          ws.send(JSON.stringify({
+            type: 'redirectEnergy',
+            targetNodeId: nodeId,
+            token: token
+          }));
           return;
         }
         
@@ -1252,16 +1251,12 @@
         
         // Check if this is a node we can target for flow
         if (canTargetNodeForFlow(nodeId)) {
-          // Start flowing all edges that I own which target this node
-          for (const [edgeId, edge] of edges.entries()) {
-            if (edge.target === nodeId) {
-              const sourceNode = nodes.get(edge.source);
-              if (sourceNode && sourceNode.owner === myPlayerId && !edge.flowing) {
-                // Send edge click to start flow
-                ws.send(JSON.stringify({ type: 'clickEdge', edgeId, token }));
-              }
-            }
-          }
+          // Redirect energy towards this node
+          ws.send(JSON.stringify({
+            type: 'redirectEnergy',
+            targetNodeId: nodeId,
+            token: token
+          }));
           return;
         } else {
           // Regular node click (for other purposes like building capitals, etc.)
@@ -1301,9 +1296,9 @@
         ev.preventDefault();
         handleAbilityClick('bridge1way');
         break;
-      case 'c':
+      case 'd':
         ev.preventDefault();
-        handleAbilityClick('capital');
+        handleAbilityClick('destroy');
         break;
       case 'escape':
         // Cancel active ability
@@ -1330,8 +1325,8 @@
     
     let needsRedraw = false;
     
-    // In bridge building or capital mode, only check for node hover, not edge hover
-    if (activeAbility === 'bridge1way' || activeAbility === 'capital') {
+    // In bridge building, capital, or destroy mode, only check for node hover, not edge hover
+    if (activeAbility === 'bridge1way' || activeAbility === 'capital' || activeAbility === 'destroy') {
       const nodeId = pickNearestNode(wx, wy, 18 / baseScale);
       
       // Update hovered node
@@ -1346,7 +1341,7 @@
         needsRedraw = true;
       }
       
-      // Always redraw during bridge mode to update the preview line (but not for capital mode)
+      // Always redraw during bridge mode to update the preview line (but not for capital or destroy mode)
       if (activeAbility === 'bridge1way') {
         needsRedraw = true;
       }
@@ -1384,7 +1379,7 @@
     const abilities = {
       'bridge1way': { cost: 3 },
       'reverse': { cost: 1 },
-      'capital': { cost: 5 }
+      'destroy': { cost: 2 }
     };
     
     const ability = abilities[abilityName];
@@ -1411,10 +1406,10 @@
       activeAbility = abilityName;
       bridgeFirstNode = null;
       updateAbilityButtonStates();
-    } else if (abilityName === 'capital') {
-      // Activate capital creation
+    } else if (abilityName === 'destroy') {
+      // Activate destroy mode
       activeAbility = abilityName;
-      bridgeFirstNode = null; // reuse for capital node selection
+      bridgeFirstNode = null; // reuse for destroy node selection
       updateAbilityButtonStates();
     }
     // Placeholder abilities do nothing for now
@@ -1424,7 +1419,7 @@
     const abilities = {
       'bridge1way': { cost: 3 },
       'reverse': { cost: 1 },
-      'capital': { cost: 5 }
+      'destroy': { cost: 2 }
     };
     
     Object.keys(abilityButtons).forEach(abilityName => {
@@ -1462,7 +1457,7 @@
   }
 
   function updateGoldBar() {
-    const val = Math.max(0, Math.min(10, goldValue || 0));
+    const val = Math.max(0, Math.min(7, goldValue || 0));
     const full = Math.floor(val);
     const frac = val - full;
     for (let i = 0; i < goldSegments.length; i++) {

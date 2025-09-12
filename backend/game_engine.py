@@ -311,8 +311,8 @@ class GameEngine:
                 id=new_edge_id,
                 source_node_id=from_node_id,
                 target_node_id=to_node_id,
-                on=False,
-                flowing=False
+                on=True,
+                flowing=True
             )
             
             # Add to state
@@ -555,6 +555,57 @@ class GameEngine:
             
         except GameValidationError:
             return False
+    
+    def handle_destroy_node(self, token: str, node_id: int, cost: float = 3.0) -> Tuple[bool, Optional[str]]:
+        """
+        Handle destroying a node owned by the player.
+        Returns: (success, error_message)
+        """
+        try:
+            self.validate_game_active()
+            player_id = self.validate_player(token)
+            self.validate_phase("playing")
+            
+            # Validate node
+            node = self.validate_node_exists(node_id)
+            self.validate_player_owns_node(node, player_id)
+            
+            # Validate gold
+            self.validate_sufficient_gold(player_id, cost)
+            
+            # Remove all edges connected to this node
+            edges_to_remove = []
+            for edge_id, edge in self.state.edges.items():
+                if edge.source_node_id == node_id or edge.target_node_id == node_id:
+                    edges_to_remove.append(edge_id)
+            
+            # Remove the edges
+            for edge_id in edges_to_remove:
+                edge = self.state.edges[edge_id]
+                # Remove edge from both connected nodes' attached_edge_ids
+                source_node = self.state.nodes.get(edge.source_node_id)
+                target_node = self.state.nodes.get(edge.target_node_id)
+                if source_node and edge_id in source_node.attached_edge_ids:
+                    source_node.attached_edge_ids.remove(edge_id)
+                if target_node and edge_id in target_node.attached_edge_ids:
+                    target_node.attached_edge_ids.remove(edge_id)
+                # Remove the edge from the edges dictionary
+                del self.state.edges[edge_id]
+            
+            # Remove the node from capital nodes if it was a capital
+            if hasattr(self.state, 'capital_nodes') and node_id in self.state.capital_nodes:
+                self.state.capital_nodes.remove(node_id)
+            
+            # Remove the node
+            del self.state.nodes[node_id]
+            
+            # Deduct gold
+            self.state.player_gold[player_id] = max(0.0, self.state.player_gold[player_id] - cost)
+            
+            return True, None
+            
+        except GameValidationError as e:
+            return False, str(e)
     
     def _optimize_energy_flow_to_target(self, player_id: int, target_node_id: int) -> None:
         """
