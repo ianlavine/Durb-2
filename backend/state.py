@@ -14,9 +14,9 @@ NODE_MAX_JUICE: float = 120.0
 PRODUCTION_RATE_PER_NODE: float = 0.15  # owned nodes generate this per tick (constant growth)
 TRANSFER_PERCENT_PER_TICK: float = 0.01  # fraction of source juice transferred per tick (split across outgoing edges)
 
-# Gold economy (displayed as 7 sections filling like elixir)
-GOLD_MAX_SECTIONS: float = 7.0
-GOLD_SECTION_FILL_SECONDS: float = 5  # each section fills in 5 seconds
+# Gold economy - no limit, no natural generation
+GOLD_REWARD_FOR_CAPTURE: float = 2.0  # gold awarded when capturing unowned nodes
+STARTING_GOLD: float = 3.0  # gold each player starts with
 
 
 class GraphState:
@@ -40,47 +40,13 @@ class GraphState:
         self.game_ended: bool = False
         self.winner_id: Optional[int] = None
         
-        # Peace period state
-        self.peace_period_active: bool = False
-        self.peace_period_start_time: Optional[float] = None
-        self.peace_period_duration: float = 60.0  # 60 seconds
 
     def add_player(self, player: Player) -> None:
         self.players[player.id] = player
         # Initialize player economy and pick status
-        self.player_gold[player.id] = 0.0
+        self.player_gold[player.id] = STARTING_GOLD
         self.players_who_picked[player.id] = False
 
-    def start_peace_period(self, current_time: float) -> None:
-        """Start the peace period timer."""
-        self.peace_period_active = True
-        self.peace_period_start_time = current_time
-
-    def check_peace_period(self, current_time: float) -> bool:
-        """Check if peace period should end. Returns True if peace period ended."""
-        if not self.peace_period_active or self.peace_period_start_time is None:
-            return False
-        
-        elapsed = current_time - self.peace_period_start_time
-        if elapsed >= self.peace_period_duration:
-            self.peace_period_active = False
-            self.peace_period_start_time = None
-            return True
-        
-        return False
-
-    def is_peace_period_active(self) -> bool:
-        """Check if peace period is currently active."""
-        return self.peace_period_active
-
-    def get_peace_time_remaining(self, current_time: float) -> float:
-        """Get remaining time in peace period. Returns 0 if not active."""
-        if not self.peace_period_active or self.peace_period_start_time is None:
-            return 0.0
-        
-        elapsed = current_time - self.peace_period_start_time
-        remaining = max(0.0, self.peace_period_duration - elapsed)
-        return remaining
 
     def check_capital_victory(self) -> Optional[int]:
         """Check if any player has 5 capitals. Returns winner ID or None."""
@@ -106,6 +72,10 @@ class GraphState:
         """Check if any player has 0 nodes. Returns winner ID (the other player) or None."""
         if self.game_ended:
             return self.winner_id
+        
+        # Only check for zero nodes loss after picking phase is complete
+        if self.phase == "picking":
+            return None
             
         # Count nodes owned by each player
         node_counts = {}
@@ -147,12 +117,6 @@ class GraphState:
                 capital_counts[node.owner] = capital_counts.get(node.owner, 0) + 1
         capital_arr = [[pid, capital_counts.get(pid, 0)] for pid in self.players.keys()]
         
-        # Peace period info
-        peace_info = {
-            "active": self.peace_period_active,
-            "timeRemaining": round(self.get_peace_time_remaining(current_time), 1) if self.peace_period_active else 0.0
-        }
-        
         return {
             "type": "init",
             "screen": screen,
@@ -165,7 +129,6 @@ class GraphState:
             "gold": gold_arr,
             "picked": picked_arr,
             "capitals": capital_arr,
-            "peace": peace_info,
         }
 
     def to_tick_message(self, current_time: float = 0.0) -> Dict:
@@ -189,12 +152,6 @@ class GraphState:
                 capital_counts[node.owner] = capital_counts.get(node.owner, 0) + 1
         capital_arr = [[pid, capital_counts.get(pid, 0)] for pid in self.players.keys()]
         
-        # Peace period info
-        peace_info = {
-            "active": self.peace_period_active,
-            "timeRemaining": round(self.get_peace_time_remaining(current_time), 1) if self.peace_period_active else 0.0
-        }
-        
         return {
             "type": "tick",
             "edges": edges_arr,
@@ -205,7 +162,6 @@ class GraphState:
             "gold": gold_arr,
             "picked": picked_arr,
             "capitals": capital_arr,
-            "peace": peace_info,
         }
 
     def simulate_tick(self, tick_interval_seconds: float) -> None:
@@ -268,21 +224,17 @@ class GraphState:
             node = self.nodes[nid]
             node.juice = max(NODE_MIN_JUICE, min(NODE_MAX_JUICE, node.juice + delta))
 
-        # Apply pending ownership changes
+        # Apply pending ownership changes and award gold for capturing unowned nodes
         for nid, new_owner in pending_ownership.items():
             node = self.nodes.get(nid)
             if node is None:
                 continue
             if node.juice <= NODE_MIN_JUICE:
+                # Check if this was an unowned node being captured
+                if node.owner is None:
+                    # Award gold for capturing unowned node
+                    self.player_gold[new_owner] = self.player_gold.get(new_owner, 0.0) + GOLD_REWARD_FOR_CAPTURE
                 node.owner = new_owner
-
-        # Economy: increment gold each tick, capped at max sections
-        if GOLD_SECTION_FILL_SECONDS > 0:
-            increment = tick_interval_seconds / GOLD_SECTION_FILL_SECONDS
-            for pid in list(self.players.keys()):
-                current = self.player_gold.get(pid, 0.0)
-                new_val = min(GOLD_MAX_SECTIONS, current + increment)
-                self.player_gold[pid] = new_val
 
         # All edges are now one-way only - no auto-adjustment needed
 

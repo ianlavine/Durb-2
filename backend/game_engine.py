@@ -68,9 +68,8 @@ class GameEngine:
         self.state.add_player(p1)
         self.state.add_player(p2)
         
-        # Set up game state - start in peace phase immediately
-        self.state.phase = "peace"
-        self.state.start_peace_period(time.time())
+        # Set up game state - start in picking phase for starting node selection
+        self.state.phase = "picking"
         self.token_to_player_id = {player1_token: 1, player2_token: 2}
         self.game_active = True
     
@@ -163,7 +162,9 @@ class GameEngine:
             
             # Check if this is for picking a starting node (node is unowned and player hasn't picked yet)
             if node.owner is None and not self.state.players_who_picked.get(player_id):
-                # This is a starting node pick
+                # This is a starting node pick - give gold reward for capturing unowned node
+                from .state import GOLD_REWARD_FOR_CAPTURE
+                self.state.player_gold[player_id] = self.state.player_gold.get(player_id, 0.0) + GOLD_REWARD_FOR_CAPTURE
                 node.owner = player_id
                 self.state.players_who_picked[player_id] = True
                 return True
@@ -184,9 +185,9 @@ class GameEngine:
             self.validate_game_active()
             player_id = self.validate_player(token)
             
-            # Allow edge clicks in both peace and playing phases
-            if self.state.phase not in ["peace", "playing"]:
-                raise GameValidationError("Game not in active phase")
+            # Allow edge clicks in playing phase
+            if self.state.phase != "playing":
+                raise GameValidationError("Game not in playing phase")
             
             edge = self.validate_edge_exists(edge_id)
             
@@ -199,12 +200,6 @@ class GameEngine:
                 source_node = self.validate_node_exists(edge.source_node_id)
                 
                 if source_node.owner == player_id:
-                    # During peace period, check if this would flow into opponent's node
-                    if self.state.phase == "peace":
-                        target_node = self.validate_node_exists(edge.target_node_id)
-                        if target_node.owner is not None and target_node.owner != player_id:
-                            raise GameValidationError("Cannot attack during peace period")
-                    
                     edge.on = True
                     edge.flowing = True
                 else:
@@ -224,8 +219,8 @@ class GameEngine:
             self.validate_game_active()
             player_id = self.validate_player(token)
             
-            # Allow reverse edge in playing phase or peace phase
-            if self.state.phase not in ["playing", "peace"]:
+            # Allow reverse edge in playing phase
+            if self.state.phase != "playing":
                 raise GameValidationError("Not in playing phase")
                 
             edge = self.validate_edge_exists(edge_id)
@@ -247,11 +242,6 @@ class GameEngine:
             if source_owner in opponent_ids:
                 raise GameValidationError("Pipe controlled by opponent")
             
-            # During peace period, check if reversing would create an attack
-            if self.state.phase == "peace":
-                # After reversal, check if the new source (current target) would flow into opponent's node
-                if target_owner is not None and target_owner != player_id:
-                    raise GameValidationError("Cannot reverse pipe to attack during peace period")
             
             # Validate gold
             self.validate_sufficient_gold(player_id, cost)
@@ -260,24 +250,10 @@ class GameEngine:
             edge.source_node_id, edge.target_node_id = edge.target_node_id, edge.source_node_id
             
             # Only start flowing if the new source node is owned by the swapping player
-            # AND we're not in peace period (or if it wouldn't attack)
             new_source_node = self.validate_node_exists(edge.source_node_id)
             if new_source_node.owner == player_id:
-                if self.state.phase == "peace":
-                    # During peace, check if this would attack opponent's node
-                    new_target_node = self.validate_node_exists(edge.target_node_id)
-                    if new_target_node.owner is not None and new_target_node.owner != player_id:
-                        # Would attack during peace - don't start flowing
-                        edge.on = False
-                        edge.flowing = False
-                    else:
-                        # Safe to start flowing
-                        edge.on = True
-                        edge.flowing = True
-                else:
-                    # Normal behavior outside peace period
-                    edge.on = True
-                    edge.flowing = True
+                edge.on = True
+                edge.flowing = True
             else:
                 # Edge is swapped but not flowing since player doesn't own new source
                 edge.on = False
@@ -301,8 +277,8 @@ class GameEngine:
             self.validate_game_active()
             player_id = self.validate_player(token)
             
-            # Allow bridge building in playing phase or peace phase
-            if self.state.phase not in ["playing", "peace"]:
+            # Allow bridge building in playing phase
+            if self.state.phase != "playing":
                 raise GameValidationError("Not in playing phase")
             
             # Validate nodes
@@ -315,10 +291,6 @@ class GameEngine:
             # Validate ownership
             self.validate_player_owns_node(from_node, player_id)
             
-            # During peace period, check if this would attack opponent's node
-            if self.state.phase == "peace":
-                if to_node.owner is not None and to_node.owner != player_id:
-                    raise GameValidationError("Cannot build bridge to attack during peace period")
             
             # Validate gold
             self.validate_sufficient_gold(player_id, cost)
@@ -334,17 +306,12 @@ class GameEngine:
             # Create the edge (always one-way from source to target)
             new_edge_id = max(self.state.edges.keys(), default=0) + 1
             
-            # During peace period, don't start flowing if it would attack
-            should_flow = True
-            if self.state.phase == "peace" and to_node.owner is not None and to_node.owner != player_id:
-                should_flow = False
-            
             new_edge = Edge(
                 id=new_edge_id,
                 source_node_id=from_node_id,
                 target_node_id=to_node_id,
-                on=should_flow,
-                flowing=should_flow
+                on=True,
+                flowing=True
             )
             
             # Add to state
@@ -532,11 +499,12 @@ class GameEngine:
         if not self.state or not self.game_active:
             return None
         
-        current_time = time.time()
-        
-        # Check if peace period should end
-        if self.state.phase == "peace" and self.state.check_peace_period(current_time):
-            self.state.phase = "playing"
+        # Check if we should transition from picking to playing phase
+        if self.state.phase == "picking":
+            # Check if all players have picked their starting nodes
+            all_picked = all(self.state.players_who_picked.get(pid, False) for pid in self.state.players.keys())
+            if all_picked:
+                self.state.phase = "playing"
         
         self.state.simulate_tick(tick_interval_seconds)
         
@@ -546,12 +514,11 @@ class GameEngine:
             self._end_game()
             return winner_id
         
-        # Check for zero nodes loss condition (only after peace period ends)
-        if self.state.phase == "playing":
-            winner_id = self.state.check_zero_nodes_loss()
-            if winner_id is not None:
-                self._end_game()
-                return winner_id
+        # Check for zero nodes loss condition
+        winner_id = self.state.check_zero_nodes_loss()
+        if winner_id is not None:
+            self._end_game()
+            return winner_id
         
         return None
     
