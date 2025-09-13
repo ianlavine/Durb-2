@@ -35,12 +35,11 @@
   let players = new Map(); // id -> {color}
   let gameEnded = false;
   let overlayMsg = null;
-  let hudContainer = null; // repurposed as gold bar container (right side)
-  let goldSegments = []; // array of {wrap, fill}
+  let goldDisplay = null; // gold number display in bottom right
   let myPlayerId = null;
   let phase = 'picking';
   let myPicked = false;
-  let goldValue = 0; // 0..10
+  let goldValue = 0; // no limit
   let nodeMaxJuice = 50;
   let hoveredNodeId = null;
   let hoveredEdgeId = null;
@@ -54,9 +53,6 @@
   let player1Capitals = 0; // capital count from backend
   let player2Capitals = 0; // capital count from backend
   
-  // Peace period state
-  let peacePeriodActive = false;
-  let peaceTimeRemaining = 0.0;
   
   // Animation system for juice flow
   let animationTime = 0; // Global animation timer
@@ -104,15 +100,8 @@
         }
         quitBtn.style.display = 'none';
         if (overlayMsg) overlayMsg.style.display = 'none';
-        // Hide HUD when returning to menu
-        if (hudContainer) hudContainer.style.display = 'none';
-        const goldNumber = document.getElementById('goldNumber');
-        if (goldNumber) goldNumber.style.display = 'none';
-        // Hide peace period UI when returning to menu
-        const peaceIndicator = document.getElementById('peaceIndicator');
-        const peaceTimer = document.getElementById('peaceTimer');
-        if (peaceIndicator) peaceIndicator.style.display = 'none';
-        if (peaceTimer) peaceTimer.style.display = 'none';
+        // Hide gold display when returning to menu
+        if (goldDisplay) goldDisplay.style.display = 'none';
         nodes.clear();
         edges.clear();
         capitalNodes.clear(); // Clear capital nodes when returning to menu
@@ -121,9 +110,6 @@
         activeAbility = null;
         bridgeFirstNode = null;
         
-        // Reset peace period state
-        peacePeriodActive = false;
-        peaceTimeRemaining = 0.0;
         
         redrawStatic();
       }
@@ -158,125 +144,27 @@
     });
     document.body.appendChild(overlayMsg);
 
-    // Right-side vertical gold bar with 5 sections
-    const gold = document.createElement('div');
-    Object.assign(gold.style, {
-      position: 'absolute',
-      right: '20px',
-      bottom: '20px',
-      width: '48px',
-      height: '600px', // Even taller gold bar with 7 sections
-      background: '#1a1a1a',
-      border: '1px solid #444',
-      borderRadius: '10px',
-      padding: '6px',
-      display: 'none',
-      zIndex: 8,
-      boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
-      boxSizing: 'border-box',
-    });
-    const stack = document.createElement('div');
-    Object.assign(stack.style, {
-      position: 'relative',
-      width: '100%',
-      height: '100%',
-      display: 'flex',
-      flexDirection: 'column-reverse', // fill from bottom up
-      gap: '6px',
-    });
-    gold.appendChild(stack);
-    // Create 7 segments
-    goldSegments = [];
-    for (let i = 0; i < 7; i++) {
-      const segment = document.createElement('div');
-      Object.assign(segment.style, {
-        position: 'relative',
-        width: '100%',
-        flex: '1 1 0',
-        background: '#2a2a2a',
-        border: '1px solid #555',
-        borderRadius: '6px',
-        overflow: 'hidden',
-      });
-      const fill = document.createElement('div');
-      Object.assign(fill.style, {
-        position: 'absolute',
-        left: 0,
-        right: 0,
-        bottom: 0,
-        height: '0%',
-        background: '#ffd700', // gold color
-      });
-      segment.appendChild(fill);
-      stack.appendChild(segment);
-      goldSegments.push({ wrap: segment, fill });
-    }
-    document.body.appendChild(gold);
-    hudContainer = gold;
-
-    // Gold number display at top of gold bar
+    // Gold number display in bottom right
     const goldNumber = document.createElement('div');
     goldNumber.id = 'goldNumber';
     Object.assign(goldNumber.style, {
       position: 'absolute',
       right: '20px',
-      bottom: '620px', // positioned above the gold bar (600px + 20px)
-      fontSize: '100px',
+      bottom: '20px',
+      fontSize: '120px',
       fontWeight: 'bold',
       color: '#ffd700',
       lineHeight: '1',
       textAlign: 'center',
+      textShadow: '3px 3px 6px rgba(0,0,0,0.8)',
       zIndex: 8,
       display: 'none', // initially hidden
     });
     goldNumber.textContent = '0';
     
     document.body.appendChild(goldNumber);
+    goldDisplay = goldNumber;
 
-    // Peace period indicator (top right)
-    const peaceIndicator = document.createElement('div');
-    peaceIndicator.id = 'peaceIndicator';
-    Object.assign(peaceIndicator.style, {
-      position: 'absolute',
-      top: '20px',
-      right: '20px',
-      background: 'rgba(0, 150, 0, 0.9)',
-      color: '#ffffff',
-      padding: '12px 20px',
-      borderRadius: '8px',
-      fontSize: '24px',
-      fontWeight: 'bold',
-      zIndex: 10,
-      textAlign: 'center',
-      border: '2px solid #00ff00',
-      boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
-      display: 'none',
-      fontFamily: 'monospace'
-    });
-    
-    // Peace timer (below peace indicator)
-    const peaceTimer = document.createElement('div');
-    peaceTimer.id = 'peaceTimer';
-    Object.assign(peaceTimer.style, {
-      position: 'absolute',
-      top: '70px',
-      right: '20px',
-      background: 'rgba(0, 150, 0, 0.9)',
-      color: '#ffffff',
-      padding: '8px 16px',
-      borderRadius: '6px',
-      fontSize: '18px',
-      fontWeight: 'bold',
-      zIndex: 10,
-      textAlign: 'center',
-      border: '2px solid #00ff00',
-      boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
-      display: 'none',
-      fontFamily: 'monospace'
-    });
-    
-    document.body.appendChild(peaceIndicator);
-    document.body.appendChild(peaceTimer);
 
     // Abilities container removed - abilities now only accessible via keyboard shortcuts and right-click
 
@@ -391,7 +279,7 @@
     goldValue = 0;
     if (Array.isArray(msg.gold)) {
       for (const [pid, val] of msg.gold) {
-        if (Number(pid) === myPlayerId) goldValue = Math.max(0, Math.min(7, Number(val) || 0));
+        if (Number(pid) === myPlayerId) goldValue = Math.max(0, Number(val) || 0);
       }
     }
     // Capital counts from backend
@@ -400,11 +288,6 @@
         if (Number(pid) === 1) player1Capitals = Number(count) || 0;
         if (Number(pid) === 2) player2Capitals = Number(count) || 0;
       }
-    }
-    // Peace period info
-    if (msg.peace) {
-      peacePeriodActive = msg.peace.active || false;
-      peaceTimeRemaining = Number(msg.peace.timeRemaining) || 0.0;
     }
     computeTransform(game.scale.gameSize.width, game.scale.gameSize.height);
     const menu = document.getElementById('menu');
@@ -419,7 +302,6 @@
       statusText.setVisible(!myPicked);
     }
     updateGoldBar();
-    updatePeacePeriodUI();
   }
 
   function handleLobby(msg) {
@@ -441,20 +323,12 @@
       overlayMsg.style.display = 'block';
     }
     gameEnded = true;
-    // Reset peace period state when game ends
-    peacePeriodActive = false;
-    peaceTimeRemaining = 0.0;
     const buttons = document.getElementsByTagName('button');
     for (const b of buttons) {
       if (b.textContent === 'Forfeit') b.textContent = 'Quit';
     }
     // Do not clear board; leave last state visible (stale, no updates)
     redrawStatic();
-    // Hide peace period UI when game ends
-    const peaceIndicator = document.getElementById('peaceIndicator');
-    const peaceTimer = document.getElementById('peaceTimer');
-    if (peaceIndicator) peaceIndicator.style.display = 'none';
-    if (peaceTimer) peaceTimer.style.display = 'none';
     // Ensure menu elements are ready for return
     const menu = document.getElementById('menu');
     const lobby = document.getElementById('lobby');
@@ -508,7 +382,7 @@
     }
     if (Array.isArray(msg.gold)) {
       for (const [pid, val] of msg.gold) {
-        if (Number(pid) === myPlayerId) goldValue = Math.max(0, Math.min(7, Number(val) || 0));
+        if (Number(pid) === myPlayerId) goldValue = Math.max(0, Number(val) || 0);
       }
     }
     // Capital counts from backend
@@ -518,11 +392,6 @@
         if (Number(pid) === 2) player2Capitals = Number(count) || 0;
       }
     }
-    // Peace period info
-    if (msg.peace) {
-      peacePeriodActive = msg.peace.active || false;
-      peaceTimeRemaining = Number(msg.peace.timeRemaining) || 0.0;
-    }
     if (statusText) {
       statusText.setText(!myPicked ? 'Choose Starting Node' : '');
       statusText.setStyle({ font: '48px monospace', color: '#ffffff' });
@@ -531,7 +400,6 @@
       statusText.setVisible(!myPicked);
     }
     updateGoldBar();
-    updatePeacePeriodUI();
     redrawStatic();
   }
 
@@ -700,18 +568,14 @@
     const menuVisible = !document.getElementById('menu')?.classList.contains('hidden');
     if (menuVisible) {
       graphicsNodes.clear();
-      // Hide HUD when menu is visible (graph is not drawn)
-      if (hudContainer) hudContainer.style.display = 'none';
-      const goldNumber = document.getElementById('goldNumber');
-      if (goldNumber) goldNumber.style.display = 'none';
+      // Hide gold display when menu is visible (graph is not drawn)
+      if (goldDisplay) goldDisplay.style.display = 'none';
       return; // Do not draw game under menu
     }
     
-    // Show gold bar when graph is being drawn and we have nodes/game data
-    if (hudContainer && nodes.size > 0) {
-      hudContainer.style.display = 'block';
-      const goldNumber = document.getElementById('goldNumber');
-      if (goldNumber) goldNumber.style.display = 'block';
+    // Show gold display when graph is being drawn and we have nodes/game data
+    if (goldDisplay && nodes.size > 0) {
+      goldDisplay.style.display = 'block';
     }
     for (const [id, e] of edges.entries()) {
       const s = nodes.get(e.source);
@@ -770,17 +634,9 @@
           }
         } else if (bridgeFirstNode !== id) {
           // After selecting first node: highlight valid targets
-          // During peace period, don't highlight opponent's nodes
-          if (peacePeriodActive) {
-            if (n.owner === null || n.owner === myPlayerId) {
-              graphicsNodes.lineStyle(3, 0xffd700, 0.7); // semi-transparent gold
-              graphicsNodes.strokeCircle(nx, ny, r + 3);
-            }
-          } else {
-            // Normal behavior - highlight any other node as valid target
-            graphicsNodes.lineStyle(3, 0xffd700, 0.7); // semi-transparent gold
-            graphicsNodes.strokeCircle(nx, ny, r + 3);
-          }
+          // Highlight any other node as valid target
+          graphicsNodes.lineStyle(3, 0xffd700, 0.7); // semi-transparent gold
+          graphicsNodes.strokeCircle(nx, ny, r + 3);
         }
       }
       
@@ -835,7 +691,7 @@
     let minX = 0, minY = 0, maxX = 100, maxY = 100;
     // Nodes are already in 0..100 logical space; fit that rect to screen
     const padding = 60; // top/bottom padding
-    const rightReservedPx = 80; // space for gold bar and margins
+    const rightReservedPx = 40; // space for gold number and margins
     const width = Math.max(1, maxX - minX);
     const height = Math.max(1, maxY - minY);
     const scaleX = (viewW - padding * 2 - rightReservedPx) / width;
@@ -911,13 +767,6 @@
       if (edge.target === targetNodeId) {
         const sourceNode = nodes.get(edge.source);
         if (sourceNode && sourceNode.owner === myPlayerId) {
-          // During peace period, only allow targeting if it won't attack opponent's node
-          if (peacePeriodActive) {
-            const targetNode = nodes.get(edge.target);
-            if (targetNode && targetNode.owner !== null && targetNode.owner !== myPlayerId) {
-              return false; // Would attack during peace period
-            }
-          }
           return true; // Found at least one edge I can flow through to this node
         }
       }
@@ -990,14 +839,6 @@
         } else if (bridgeFirstNode !== nodeId) {
           // Complete bridge building - second node can be any node
           if (goldValue >= 3 && ws && ws.readyState === WebSocket.OPEN) {
-            // During peace period, check if this would attack
-            if (peacePeriodActive) {
-              const targetNode = nodes.get(nodeId);
-              if (targetNode && targetNode.owner !== null && targetNode.owner !== myPlayerId) {
-                showErrorMessage("Cannot build bridge to attack during peace period!");
-                return true; // Handled
-              }
-            }
             
             const token = localStorage.getItem('token');
             ws.send(JSON.stringify({
@@ -1289,7 +1130,7 @@
   }
 
   function handleAbilityClick(abilityName) {
-    // Allow abilities during peace and playing phases
+    // Allow abilities during playing phase
     
     const abilities = {
       'bridge1way': { cost: 3 },
@@ -1329,43 +1170,12 @@
 
 
   function updateGoldBar() {
-    const val = Math.max(0, Math.min(7, goldValue || 0));
-    const full = Math.floor(val);
-    const frac = val - full;
-    for (let i = 0; i < goldSegments.length; i++) {
-      const seg = goldSegments[i];
-      if (!seg) continue;
-      let h = 0;
-      if (i < full) h = 100;
-      else if (i === full) h = Math.max(0, Math.min(100, frac * 100));
-      else h = 0;
-      seg.fill.style.height = `${h}%`;
-    }
-    
-    // Update gold number display
-    const goldNumber = document.getElementById('goldNumber');
-    if (goldNumber) {
-      goldNumber.textContent = Math.floor(val).toString();
+    const val = Math.max(0, goldValue || 0);
+    if (goldDisplay) {
+      goldDisplay.textContent = Math.floor(val).toString();
     }
   }
 
-  function updatePeacePeriodUI() {
-    const peaceIndicator = document.getElementById('peaceIndicator');
-    const peaceTimer = document.getElementById('peaceTimer');
-    
-    if (peaceIndicator && peaceTimer) {
-      if (peacePeriodActive) {
-        peaceIndicator.style.display = 'block';
-        peaceIndicator.textContent = 'PEACE';
-        
-        peaceTimer.style.display = 'block';
-        peaceTimer.textContent = `${Math.ceil(peaceTimeRemaining)}s`;
-      } else {
-        peaceIndicator.style.display = 'none';
-        peaceTimer.style.display = 'none';
-      }
-    }
-  }
 
   function pickNearestNode(wx, wy, maxDist) {
     let bestId = null;
