@@ -85,12 +85,34 @@
     tryConnectWS();
     const menu = document.getElementById('menu');
     const playBtn = document.getElementById('playBtn');
+    const playBotBtn = document.getElementById('playBotBtn');
+    const buttonContainer = document.querySelector('.button-container');
+    
     if (playBtn) {
       playBtn.addEventListener('click', () => {
         console.log('poop');
         if (ws && ws.readyState === WebSocket.OPEN) {
           document.getElementById('lobby').style.display = 'block';
+          // Hide both buttons when entering lobby
+          if (buttonContainer) {
+            buttonContainer.style.display = 'none';
+          }
           ws.send(JSON.stringify({ type: 'joinLobby' }));
+        }
+      });
+    }
+    
+    if (playBotBtn) {
+      playBotBtn.addEventListener('click', () => {
+        console.log('Starting bot game');
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          document.getElementById('lobby').style.display = 'block';
+          document.getElementById('lobby').textContent = 'Starting bot game...';
+          // Hide both buttons when starting bot game
+          if (buttonContainer) {
+            buttonContainer.style.display = 'none';
+          }
+          ws.send(JSON.stringify({ type: 'startBotGame' }));
         }
       });
     }

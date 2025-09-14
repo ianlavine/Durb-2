@@ -10,9 +10,11 @@
       #menu { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: #111; flex-direction: column; gap: 48px; }
       #menu.hidden { display: none; }
       #title { font-size: 120px; font-weight: bold; color: white; font-family: Arial, sans-serif; text-shadow: 0 4px 16px rgba(0,0,0,0.8); margin-bottom: 32px; }
-      #playBtn { font-size: 64px; padding: 24px 64px; border-radius: 12px; border: none; background: #00cc66; color: #111; cursor: pointer; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
+      #playBtn, #playBotBtn { font-size: 64px; padding: 24px 64px; border-radius: 12px; border: none; background: #00cc66; color: #111; cursor: pointer; box-shadow: 0 8px 24px rgba(0,0,0,0.4); margin: 12px; }
+      #playBotBtn { background: #ff6600; }
       #lobby { display: none; color: #ddd; font: 20px/1.4 monospace; }
-      #playBtn:hover { filter: brightness(1.1); }
+      #playBtn:hover, #playBotBtn:hover { filter: brightness(1.1); }
+      .button-container { display: flex; flex-direction: column; align-items: center; gap: 12px; }
       
       /* Progress bar styles */
       #progressBar { 
@@ -139,7 +141,10 @@
     <div id="game"></div>
     <div id="menu">
       <div id="title">DURB 2</div>
-      <button id="playBtn">PLAY</button>
+      <div class="button-container">
+        <button id="playBtn">PLAY FRIEND</button>
+        <button id="playBotBtn">PLAY BOT</button>
+      </div>
       <div id="lobby">Joining lobby...</div>
     </div>
     

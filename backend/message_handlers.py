@@ -10,6 +10,7 @@ import websockets
 
 from .game_engine import GameEngine, GameValidationError
 from .graph_generator import graph_generator
+from .bot_player import bot_game_manager
 
 
 class BaseMessageHandler:
@@ -219,6 +220,57 @@ class JoinLobbyHandler(BaseMessageHandler):
         await player2_ws.send(json.dumps(init2))
 
 
+class StartBotGameHandler(BaseMessageHandler):
+    """Handle bot game start requests."""
+    
+    async def handle(self, websocket: websockets.WebSocketServerProtocol, 
+                    msg: Dict[str, Any], server_context: Dict[str, Any]) -> None:
+        token = msg.get("token")
+        
+        # Generate a token for the human player if not provided
+        if not token:
+            import uuid
+            token = uuid.uuid4().hex
+        
+        # Start the bot game
+        success, error_msg = bot_game_manager.start_bot_game(token)
+        
+        if not success:
+            await websocket.send(json.dumps({
+                "type": "botGameError",
+                "message": error_msg or "Failed to start bot game"
+            }))
+            return
+        
+        # Set up game client tracking
+        game_clients = server_context.setdefault("game_clients", {})
+        ws_to_token = server_context.setdefault("ws_to_token", {})
+        
+        game_clients[token] = websocket
+        ws_to_token[websocket] = token
+        
+        # Update server screen
+        server_context["screen"] = bot_game_manager.get_game_engine().screen
+        
+        # Send init message to human player
+        bot_game_engine = bot_game_manager.get_game_engine()
+        if bot_game_engine.state:
+            init_common = bot_game_engine.state.to_init_message(
+                server_context.get("screen", {}), 
+                server_context.get("tick_interval", 0.1),
+                time.time()
+            )
+            
+            init_msg = dict(init_common)
+            init_msg["type"] = "init"
+            init_msg["myPlayerId"] = 1  # Human is player 1
+            init_msg["token"] = token
+            await websocket.send(json.dumps(init_msg))
+            
+            # Make bot's initial move (pick starting node)
+            bot_game_manager.make_bot_move()
+
+
 class BuildBridgeHandler(BaseMessageHandler):
     """Handle bridge building requests."""
     
@@ -420,6 +472,7 @@ class MessageRouter:
             "newGame": NewGameHandler(game_engine),
             "requestInit": RequestInitHandler(game_engine),
             "joinLobby": JoinLobbyHandler(game_engine),
+            "startBotGame": StartBotGameHandler(game_engine),
             "buildBridge": BuildBridgeHandler(game_engine),
             "createCapital": CreateCapitalHandler(game_engine),
             "redirectEnergy": RedirectEnergyHandler(game_engine),
@@ -432,10 +485,162 @@ class MessageRouter:
                            msg: Dict[str, Any], server_context: Dict[str, Any]) -> None:
         """Route a message to the appropriate handler."""
         msg_type = msg.get("type")
+        
+        # Check if this is a bot game message (not startBotGame which is handled specially)
+        # Only route to bot game if bot game is active AND this player is in the bot game
+        if (msg_type != "startBotGame" and bot_game_manager.game_active and 
+            bot_game_manager.human_token and bot_game_manager.human_token in server_context.get("game_clients", {})):
+            # Route to bot game manager
+            await self._route_to_bot_game(websocket, msg, server_context)
+            return
+        
         handler = self.handlers.get(msg_type)
         
         if handler:
             await handler.handle(websocket, msg, server_context)
+    
+    async def _route_to_bot_game(self, websocket: websockets.WebSocketServerProtocol, 
+                                msg: Dict[str, Any], server_context: Dict[str, Any]) -> None:
+        """Route a message to the bot game manager."""
+        msg_type = msg.get("type")
+        token = msg.get("token")
+        
+        # Get the bot game engine
+        bot_game_engine = bot_game_manager.get_game_engine()
+        
+        # Handle different message types for bot games
+        if msg_type == "clickNode":
+            node_id = msg.get("nodeId")
+            if node_id is not None:
+                bot_game_engine.handle_node_click(token, node_id)
+        
+        elif msg_type == "clickEdge":
+            edge_id = msg.get("edgeId")
+            if edge_id is not None:
+                bot_game_engine.handle_edge_click(token, edge_id)
+        
+        elif msg_type == "reverseEdge":
+            edge_id = msg.get("edgeId")
+            cost = msg.get("cost", 1.0)
+            if edge_id is not None:
+                success = bot_game_engine.handle_reverse_edge(token, edge_id, cost)
+                if not success:
+                    await websocket.send(json.dumps({
+                        "type": "reverseEdgeError", 
+                        "message": "Pipe controlled by opponent"
+                    }))
+                else:
+                    # Send edge reversed message to frontend
+                    edge = bot_game_engine.state.edges.get(edge_id)
+                    if edge:
+                        edge_data = {
+                            "type": "edgeReversed",
+                            "edge": {
+                                "id": edge.id,
+                                "source": edge.source_node_id,
+                                "target": edge.target_node_id,
+                                "bidirectional": False,
+                                "forward": True,
+                                "on": edge.on,
+                                "flowing": edge.flowing
+                            }
+                        }
+                        await websocket.send(json.dumps(edge_data))
+        
+        elif msg_type == "buildBridge":
+            from_node_id = msg.get("fromNodeId")
+            to_node_id = msg.get("toNodeId")
+            cost = msg.get("cost", 1.0)
+            if from_node_id is not None and to_node_id is not None:
+                success, new_edge, error_msg = bot_game_engine.handle_build_bridge(
+                    token, from_node_id, to_node_id, cost
+                )
+                if not success:
+                    await websocket.send(json.dumps({
+                        "type": "bridgeError",
+                        "message": error_msg or "Failed to build bridge"
+                    }))
+                elif new_edge:
+                    # Send new edge message to frontend
+                    edge_data = {
+                        "type": "newEdge",
+                        "edge": {
+                            "id": new_edge.id,
+                            "source": new_edge.source_node_id,
+                            "target": new_edge.target_node_id,
+                            "bidirectional": False,
+                            "forward": True,
+                            "on": new_edge.on,
+                            "flowing": new_edge.flowing
+                        }
+                    }
+                    await websocket.send(json.dumps(edge_data))
+        
+        elif msg_type == "createCapital":
+            node_id = msg.get("nodeId")
+            cost = msg.get("cost", 3.0)
+            if node_id is not None:
+                success, error_msg = bot_game_engine.handle_create_capital(token, node_id, cost)
+                if not success:
+                    await websocket.send(json.dumps({
+                        "type": "capitalError",
+                        "message": error_msg or "Failed to create capital"
+                    }))
+                else:
+                    # Send new capital message to frontend
+                    capital_data = {
+                        "type": "newCapital",
+                        "nodeId": node_id
+                    }
+                    await websocket.send(json.dumps(capital_data))
+        
+        elif msg_type == "redirectEnergy":
+            target_node_id = msg.get("targetNodeId")
+            if target_node_id is not None:
+                bot_game_engine.handle_redirect_energy(token, target_node_id)
+        
+        elif msg_type == "destroyNode":
+            node_id = msg.get("nodeId")
+            cost = msg.get("cost", 3.0)
+            if node_id is not None:
+                success, error_msg = bot_game_engine.handle_destroy_node(token, node_id, cost)
+                if not success:
+                    await websocket.send(json.dumps({
+                        "type": "destroyError",
+                        "message": error_msg or "Failed to destroy node"
+                    }))
+                else:
+                    # Send node destroyed message to frontend
+                    destroy_data = {
+                        "type": "nodeDestroyed",
+                        "nodeId": node_id
+                    }
+                    await websocket.send(json.dumps(destroy_data))
+        
+        elif msg_type == "quitGame":
+            winner_id = bot_game_engine.handle_quit_game(token)
+            if winner_id is not None:
+                victory_msg = json.dumps({"type": "gameOver", "winnerId": winner_id})
+                await websocket.send(victory_msg)
+                bot_game_manager.end_game()
+        
+        elif msg_type == "toggleAutoExpand":
+            bot_game_engine.handle_toggle_auto_expand(token)
+        
+        elif msg_type == "requestInit":
+            # Send current bot game state
+            if bot_game_engine.state:
+                init_common = bot_game_engine.state.to_init_message(
+                    server_context.get("screen", {}), 
+                    server_context.get("tick_interval", 0.1),
+                    time.time()
+                )
+                
+                init_msg = dict(init_common)
+                init_msg["type"] = "init"
+                init_msg["myPlayerId"] = 1  # Human is player 1
+                init_msg["token"] = token
+                await websocket.send(json.dumps(init_msg))
 
 
 # Add broadcast utility to base handler

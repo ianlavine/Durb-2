@@ -10,6 +10,7 @@ import websockets
 from .game_engine import GameEngine
 from .message_handlers import MessageRouter
 from .state import GraphState
+from .bot_player import bot_game_manager
 
 
 GRAPH_PATH: Path = Path(__file__).resolve().parent.parent / "graph.json"
@@ -108,32 +109,68 @@ class WebSocketServer:
         while True:
             await asyncio.sleep(TICK_INTERVAL_SECONDS)
             
-            # Only tick/broadcast when a game is active
+            # Check for regular game
             game_clients = self.server_context.get("game_clients", {})
-            if not game_clients or not self.game_engine.is_game_active():
+            regular_game_active = game_clients and self.game_engine.is_game_active()
+            
+            # Check for bot game
+            bot_game_active = bot_game_manager.game_active
+            
+            if not regular_game_active and not bot_game_active:
                 continue
             
-            # Simulate game tick
-            winner_id = self.game_engine.simulate_tick(TICK_INTERVAL_SECONDS)
-            
-            # Always broadcast the current game state first (including the final state)
-            if self.game_engine.state:
-                msg = json.dumps(self.game_engine.state.to_tick_message(time.time()))
-                await self._broadcast(msg)
-            
-            # Check for game over after broadcasting the final state
-            if winner_id is not None:
-                victory_msg = json.dumps({"type": "gameOver", "winnerId": winner_id})
-                for client_ws in game_clients.values():
-                    try:
-                        await client_ws.send(victory_msg)
-                    except Exception:
-                        pass
+            # Handle regular game
+            if regular_game_active and not bot_game_active:
+                # Simulate game tick
+                winner_id = self.game_engine.simulate_tick(TICK_INTERVAL_SECONDS)
                 
-                # Clear server state
-                self.server_context["game_clients"] = {}
-                self.server_context["ws_to_token"] = {}
-                continue
+                # Always broadcast the current game state first (including the final state)
+                if self.game_engine.state:
+                    msg = json.dumps(self.game_engine.state.to_tick_message(time.time()))
+                    await self._broadcast(msg)
+                
+                # Check for game over after broadcasting the final state
+                if winner_id is not None:
+                    victory_msg = json.dumps({"type": "gameOver", "winnerId": winner_id})
+                    for client_ws in game_clients.values():
+                        try:
+                            await client_ws.send(victory_msg)
+                        except Exception:
+                            pass
+                    
+                    # Clear server state
+                    self.server_context["game_clients"] = {}
+                    self.server_context["ws_to_token"] = {}
+            
+            # Handle bot game
+            if bot_game_active:
+                bot_game_engine = bot_game_manager.get_game_engine()
+                
+                # Make bot move if needed
+                bot_game_manager.make_bot_move()
+                
+                # Simulate game tick
+                winner_id = bot_game_engine.simulate_tick(TICK_INTERVAL_SECONDS)
+                
+                # Broadcast the current game state
+                if bot_game_engine.state:
+                    msg = json.dumps(bot_game_engine.state.to_tick_message(time.time()))
+                    await self._broadcast(msg)
+                
+                # Check for game over
+                if winner_id is not None:
+                    victory_msg = json.dumps({"type": "gameOver", "winnerId": winner_id})
+                    for client_ws in game_clients.values():
+                        try:
+                            await client_ws.send(victory_msg)
+                        except Exception:
+                            pass
+                    
+                    # End bot game
+                    bot_game_manager.end_game()
+                    # Clear server state
+                    self.server_context["game_clients"] = {}
+                    self.server_context["ws_to_token"] = {}
 
 
     async def _broadcast(self, message: str) -> None:
