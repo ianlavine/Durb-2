@@ -147,7 +147,7 @@ class WebSocketServer:
                 bot_game_engine = bot_game_manager.get_game_engine()
                 
                 # Make bot move if needed
-                bot_game_manager.make_bot_move()
+                await bot_game_manager.make_bot_move()
                 
                 # Simulate game tick
                 winner_id = bot_game_engine.simulate_tick(TICK_INTERVAL_SECONDS)

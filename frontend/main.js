@@ -67,7 +67,9 @@
   
   // Auto-expand system
   let autoExpandToggle = null;
+  let homeAutoExpandToggle = null;
   let myAutoExpand = false; // my player's auto-expand setting
+  let persistentAutoExpand = false; // persistent setting stored in localStorage
   
   
   // Animation system for juice flow
@@ -77,16 +79,45 @@
 
   function preload() {}
 
+  // Auto-expand persistence functions
+  function loadPersistentAutoExpand() {
+    const saved = localStorage.getItem('autoExpand');
+    persistentAutoExpand = saved === 'true';
+    return persistentAutoExpand;
+  }
+
+  function savePersistentAutoExpand(value) {
+    persistentAutoExpand = value;
+    localStorage.setItem('autoExpand', value.toString());
+  }
+
+  function updateHomeAutoExpandToggle() {
+    if (!homeAutoExpandToggle) return;
+    
+    const toggleSwitch = homeAutoExpandToggle.querySelector('.toggle-switch');
+    if (toggleSwitch) {
+      if (persistentAutoExpand) {
+        toggleSwitch.classList.add('enabled');
+      } else {
+        toggleSwitch.classList.remove('enabled');
+      }
+    }
+  }
+
   function create() {
     graphicsEdges = this.add.graphics();
     graphicsNodes = this.add.graphics();
     statusText = this.add.text(10, 10, 'Connect to start a game', { font: '16px monospace', color: '#cccccc' });
+
+    // Load persistent auto-expand setting
+    loadPersistentAutoExpand();
 
     tryConnectWS();
     const menu = document.getElementById('menu');
     const playBtn = document.getElementById('playBtn');
     const playBotBtn = document.getElementById('playBotBtn');
     const buttonContainer = document.querySelector('.button-container');
+    const difficultyDropdown = document.getElementById('difficultyDropdown');
     
     if (playBtn) {
       playBtn.addEventListener('click', () => {
@@ -97,25 +128,58 @@
           if (buttonContainer) {
             buttonContainer.style.display = 'none';
           }
-          ws.send(JSON.stringify({ type: 'joinLobby' }));
+          ws.send(JSON.stringify({ 
+            type: 'joinLobby',
+            autoExpand: persistentAutoExpand 
+          }));
         }
       });
     }
     
     if (playBotBtn) {
       playBotBtn.addEventListener('click', () => {
-        console.log('Starting bot game');
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          document.getElementById('lobby').style.display = 'block';
-          document.getElementById('lobby').textContent = 'Starting bot game...';
-          // Hide both buttons when starting bot game
-          if (buttonContainer) {
-            buttonContainer.style.display = 'none';
-          }
-          ws.send(JSON.stringify({ type: 'startBotGame' }));
+        // Toggle difficulty dropdown
+        if (difficultyDropdown) {
+          const isVisible = difficultyDropdown.style.display === 'block';
+          difficultyDropdown.style.display = isVisible ? 'none' : 'block';
         }
       });
     }
+    
+    // Handle dropdown option clicks
+    if (difficultyDropdown) {
+      const options = difficultyDropdown.querySelectorAll('.dropdown-option');
+      options.forEach(option => {
+        option.addEventListener('click', () => {
+          const selectedDifficulty = option.getAttribute('data-difficulty');
+          if (selectedDifficulty && ws && ws.readyState === WebSocket.OPEN) {
+            console.log('Starting bot game with difficulty:', selectedDifficulty);
+            document.getElementById('lobby').style.display = 'block';
+            document.getElementById('lobby').textContent = `Starting ${selectedDifficulty} bot game...`;
+            // Hide buttons and dropdown when starting bot game
+            if (buttonContainer) {
+              buttonContainer.style.display = 'none';
+            }
+            difficultyDropdown.style.display = 'none'; // Hide dropdown
+            ws.send(JSON.stringify({ 
+              type: 'startBotGame', 
+              difficulty: selectedDifficulty,
+              autoExpand: persistentAutoExpand
+            }));
+          }
+        });
+      });
+    }
+    
+    // Close dropdown when clicking outside
+    document.addEventListener('click', (event) => {
+      const dropdownContainer = document.querySelector('.dropdown-container');
+      if (dropdownContainer && !dropdownContainer.contains(event.target)) {
+        if (difficultyDropdown) {
+          difficultyDropdown.style.display = 'none';
+        }
+      }
+    });
     // Quit overlay button
     const quitBtn = document.createElement('button');
     quitBtn.textContent = 'Forfeit';
@@ -146,6 +210,15 @@
         if (timerDisplay) timerDisplay.style.display = 'none';
         // Hide auto-expand toggle when returning to menu
         if (autoExpandToggle) autoExpandToggle.style.display = 'none';
+        // Show button container and reset dropdown
+        const buttonContainer = document.querySelector('.button-container');
+        const difficultyDropdown = document.getElementById('difficultyDropdown');
+        if (buttonContainer) buttonContainer.style.display = 'flex';
+        if (difficultyDropdown) {
+          difficultyDropdown.style.display = 'none';
+        }
+        // Update home screen toggle to reflect current persistent setting
+        updateHomeAutoExpandToggle();
         nodes.clear();
         edges.clear();
         capitalNodes.clear(); // Clear capital nodes when returning to menu
@@ -228,6 +301,21 @@
           }
         });
       }
+    }
+
+    // Initialize home screen auto-expand toggle
+    homeAutoExpandToggle = document.getElementById('homeAutoExpandToggle');
+    if (homeAutoExpandToggle) {
+      const toggleSwitch = homeAutoExpandToggle.querySelector('.toggle-switch');
+      if (toggleSwitch) {
+        toggleSwitch.addEventListener('click', () => {
+          const newValue = !persistentAutoExpand;
+          savePersistentAutoExpand(newValue);
+          updateHomeAutoExpandToggle();
+        });
+      }
+      // Initialize the toggle state
+      updateHomeAutoExpandToggle();
     }
 
 
@@ -375,7 +463,7 @@
     }
     
     // Initialize auto-expand settings
-    myAutoExpand = false;
+    myAutoExpand = persistentAutoExpand; // Start with persistent setting
     if (Array.isArray(msg.autoExpand)) {
       for (const [pid, enabled] of msg.autoExpand) {
         if (Number(pid) === myPlayerId) myAutoExpand = !!enabled;
@@ -433,13 +521,18 @@
     // Ensure menu elements are ready for return
     const menu = document.getElementById('menu');
     const lobby = document.getElementById('lobby');
-    const playBtn = document.getElementById('playBtn');
+    const buttonContainer = document.querySelector('.button-container');
+    const difficultyDropdown = document.getElementById('difficultyDropdown');
+    
     if (lobby) {
       lobby.textContent = '';
       lobby.style.display = 'none';
     }
-    if (playBtn) {
-      playBtn.style.display = 'block';
+    if (buttonContainer) {
+      buttonContainer.style.display = 'flex';
+    }
+    if (difficultyDropdown) {
+      difficultyDropdown.style.display = 'none'; // Hide dropdown
     }
     // Don't show menu immediately - wait for user to click Quit button
   }
@@ -507,7 +600,12 @@
     // Update auto-expand settings
     if (Array.isArray(msg.autoExpand)) {
       for (const [pid, enabled] of msg.autoExpand) {
-        if (Number(pid) === myPlayerId) myAutoExpand = !!enabled;
+        if (Number(pid) === myPlayerId) {
+          myAutoExpand = !!enabled;
+          // Sync the persistent setting when auto-expand is toggled in-game
+          savePersistentAutoExpand(myAutoExpand);
+          updateHomeAutoExpandToggle();
+        }
       }
     }
     updateAutoExpandToggle();

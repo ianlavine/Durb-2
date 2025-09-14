@@ -34,7 +34,7 @@ class GameEngine:
         """Check if a game is currently active."""
         return self.game_active and self.state is not None and len(self.token_to_player_id) >= 2
     
-    def join_lobby(self, token: Optional[str] = None) -> Tuple[str, str]:
+    def join_lobby(self, token: Optional[str] = None, auto_expand: bool = False) -> Tuple[str, str]:
         """
         Handle a player joining the lobby.
         Returns: (player_token, status) where status is 'waiting' or 'ready'
@@ -45,12 +45,19 @@ class GameEngine:
             # First player waiting
             self.lobby_waiting = player_token
             self.token_to_color[player_token] = "#ffcc00"
+            # Store auto-expand setting for when game starts
+            self.token_to_auto_expand = getattr(self, 'token_to_auto_expand', {})
+            self.token_to_auto_expand[player_token] = auto_expand
             return player_token, "waiting"
         else:
             # Second player joins - start game
             other_token = self.lobby_waiting
             self.lobby_waiting = None
             self.token_to_color[player_token] = "#66ccff"
+            
+            # Store auto-expand setting for when game starts
+            self.token_to_auto_expand = getattr(self, 'token_to_auto_expand', {})
+            self.token_to_auto_expand[player_token] = auto_expand
             
             # Initialize game with both players
             self._start_new_game(other_token, player_token)
@@ -72,6 +79,13 @@ class GameEngine:
         self.state.phase = "picking"
         self.token_to_player_id = {player1_token: 1, player2_token: 2}
         self.game_active = True
+        
+        # Apply auto-expand settings from tokens
+        token_to_auto_expand = getattr(self, 'token_to_auto_expand', {})
+        if player1_token in token_to_auto_expand:
+            self.state.player_auto_expand[1] = token_to_auto_expand[player1_token]
+        if player2_token in token_to_auto_expand:
+            self.state.player_auto_expand[2] = token_to_auto_expand[player2_token]
     
     def create_new_game(self) -> Tuple[GraphState, Dict[str, int]]:
         """Create a new single-player game for testing/development."""

@@ -149,8 +149,9 @@ class JoinLobbyHandler(BaseMessageHandler):
     async def handle(self, websocket: websockets.WebSocketServerProtocol, 
                     msg: Dict[str, Any], server_context: Dict[str, Any]) -> None:
         token = msg.get("token")
+        auto_expand = msg.get("autoExpand", False)
         
-        player_token, status = self.game_engine.join_lobby(token)
+        player_token, status = self.game_engine.join_lobby(token, auto_expand)
         
         if status == "waiting":
             # First player waiting
@@ -226,14 +227,16 @@ class StartBotGameHandler(BaseMessageHandler):
     async def handle(self, websocket: websockets.WebSocketServerProtocol, 
                     msg: Dict[str, Any], server_context: Dict[str, Any]) -> None:
         token = msg.get("token")
+        difficulty = msg.get("difficulty", "easy")  # Default to easy if not specified
+        auto_expand = msg.get("autoExpand", False)
         
         # Generate a token for the human player if not provided
         if not token:
             import uuid
             token = uuid.uuid4().hex
         
-        # Start the bot game
-        success, error_msg = bot_game_manager.start_bot_game(token)
+        # Start the bot game with specified difficulty
+        success, error_msg = bot_game_manager.start_bot_game(token, difficulty, auto_expand)
         
         if not success:
             await websocket.send(json.dumps({
@@ -267,8 +270,12 @@ class StartBotGameHandler(BaseMessageHandler):
             init_msg["token"] = token
             await websocket.send(json.dumps(init_msg))
             
+            # Set the websocket on the bot player for frontend responses
+            if bot_game_manager.bot_player:
+                bot_game_manager.bot_player.set_websocket(websocket)
+            
             # Make bot's initial move (pick starting node)
-            bot_game_manager.make_bot_move()
+            await bot_game_manager.make_bot_move()
 
 
 class BuildBridgeHandler(BaseMessageHandler):
