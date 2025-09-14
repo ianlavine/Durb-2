@@ -40,6 +40,10 @@ class GraphState:
         self.game_ended: bool = False
         self.winner_id: Optional[int] = None
         
+        # Timer system
+        self.game_start_time: Optional[float] = None
+        self.game_duration: float = 5 * 60  # 5 minutes in seconds
+        
 
     def add_player(self, player: Player) -> None:
         self.players[player.id] = player
@@ -101,6 +105,48 @@ class GraphState:
                 self.game_ended = True
                 self.winner_id = player_id
                 return player_id
+                
+        return None
+
+    def start_game_timer(self, current_time: float) -> None:
+        """Start the game timer when the game begins."""
+        if self.game_start_time is None:
+            self.game_start_time = current_time
+
+    def check_timer_expiration(self, current_time: float) -> Optional[int]:
+        """Check if the game timer has expired. Returns winner ID or None."""
+        if self.game_ended:
+            return self.winner_id
+            
+        # Only check timer after picking phase is complete
+        if self.phase == "picking":
+            return None
+            
+        if self.game_start_time is None:
+            return None
+            
+        elapsed_time = current_time - self.game_start_time
+        if elapsed_time >= self.game_duration:
+            # Timer expired - determine winner by node count
+            node_counts = {}
+            for node in self.nodes.values():
+                if node.owner is not None:
+                    node_counts[node.owner] = node_counts.get(node.owner, 0) + 1
+            
+            # Find player with most nodes
+            winner_id = None
+            max_nodes = -1
+            for player_id in self.players.keys():
+                player_nodes = node_counts.get(player_id, 0)
+                if player_nodes > max_nodes:
+                    max_nodes = player_nodes
+                    winner_id = player_id
+            
+            # If there's a tie, no winner (shouldn't happen often)
+            if winner_id is not None:
+                self.game_ended = True
+                self.winner_id = winner_id
+                return winner_id
                 
         return None
 

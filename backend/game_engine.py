@@ -511,6 +511,9 @@ class GameEngine:
             all_picked = all(self.state.players_who_picked.get(pid, False) for pid in self.state.players.keys())
             if all_picked:
                 self.state.phase = "playing"
+                # Start the game timer when transitioning to playing phase
+                import time
+                self.state.start_game_timer(time.time())
         
         self.state.simulate_tick(tick_interval_seconds)
         
@@ -528,6 +531,13 @@ class GameEngine:
         
         # Check for zero nodes loss condition
         winner_id = self.state.check_zero_nodes_loss()
+        if winner_id is not None:
+            self._end_game()
+            return winner_id
+        
+        # Check for timer expiration
+        import time
+        winner_id = self.state.check_timer_expiration(time.time())
         if winner_id is not None:
             self._end_game()
             return winner_id

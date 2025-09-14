@@ -63,6 +63,20 @@
       }
       .progressMarker.marker1 { left: 33.33%; }
       .progressMarker.marker2 { left: 66.67%; }
+      
+      /* Timer display */
+      #timerDisplay { 
+        position: absolute; 
+        top: 20px; 
+        right: 20px; 
+        color: #ffffff; 
+        font-family: monospace; 
+        font-size: 32px; 
+        font-weight: bold; 
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.8); 
+        z-index: 10; 
+        display: none; 
+      }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.0/dist/phaser.js"></script>
   </head>
@@ -83,6 +97,9 @@
         <div class="progressMarker marker2"></div>
       </div>
     </div>
+    
+    <!-- Timer display -->
+    <div id="timerDisplay">5:00</div>
     
     <script src="main.js"></script>
   </body>

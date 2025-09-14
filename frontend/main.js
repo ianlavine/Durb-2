@@ -60,6 +60,11 @@
   let player1Nodes = 0;
   let player2Nodes = 0;
   
+  // Timer system
+  let timerDisplay = null;
+  let gameStartTime = null;
+  let gameDuration = 5 * 60; // 5 minutes in seconds
+  
   
   // Animation system for juice flow
   let animationTime = 0; // Global animation timer
@@ -111,6 +116,8 @@
         if (goldDisplay) goldDisplay.style.display = 'none';
         // Hide progress bar when returning to menu
         if (progressBar) progressBar.style.display = 'none';
+        // Hide timer when returning to menu
+        if (timerDisplay) timerDisplay.style.display = 'none';
         nodes.clear();
         edges.clear();
         capitalNodes.clear(); // Clear capital nodes when returning to menu
@@ -176,6 +183,9 @@
 
     // Initialize progress bar
     progressBar = document.getElementById('progressBar');
+    
+    // Initialize timer display
+    timerDisplay = document.getElementById('timerDisplay');
 
 
     // Abilities container removed - abilities now only accessible via keyboard shortcuts and right-click
@@ -196,6 +206,15 @@
   function update() {
     // Update animation timer for juice flow
     animationTime += 1/60; // Assuming 60 FPS, increment by frame time
+    
+    // Update game timer
+    const remainingTime = updateTimer();
+    
+    // Check if timer has expired
+    if (remainingTime <= 0 && gameStartTime && !gameEnded) {
+      // Timer expired - game should end
+      // The backend will handle the actual game end logic
+    }
     
     // Redraw if there are any flowing edges (for animation)
     let hasFlowingEdges = false;
@@ -329,6 +348,9 @@
     if (progressBar) {
       progressBar.style.display = 'block';
     }
+    
+    // Start the game timer
+    startGameTimer();
   }
 
   function handleLobby(msg) {
@@ -609,6 +631,8 @@
       if (goldDisplay) goldDisplay.style.display = 'none';
       // Hide progress bar when menu is visible
       if (progressBar) progressBar.style.display = 'none';
+      // Hide timer when menu is visible
+      if (timerDisplay) timerDisplay.style.display = 'none';
       return; // Do not draw game under menu
     }
     
@@ -619,6 +643,10 @@
     // Show progress bar when graph is being drawn and we have nodes/game data
     if (progressBar && nodes.size > 0) {
       progressBar.style.display = 'block';
+    }
+    // Show timer when graph is being drawn and we have nodes/game data
+    if (timerDisplay && nodes.size > 0 && gameStartTime) {
+      timerDisplay.style.display = 'block';
     }
     for (const [id, e] of edges.entries()) {
       const s = nodes.get(e.source);
@@ -1287,6 +1315,37 @@
       marker1.style.left = `${marker1Percent}%`;
       marker2.style.left = `${marker2Percent}%`;
     }
+  }
+
+  function startGameTimer() {
+    gameStartTime = Date.now();
+    if (timerDisplay) {
+      timerDisplay.style.display = 'block';
+    }
+  }
+
+  function updateTimer() {
+    if (!timerDisplay || !gameStartTime) return;
+    
+    const elapsed = (Date.now() - gameStartTime) / 1000; // elapsed time in seconds
+    const remaining = Math.max(0, gameDuration - elapsed);
+    
+    const minutes = Math.floor(remaining / 60);
+    const seconds = Math.floor(remaining % 60);
+    
+    const timeString = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+    timerDisplay.textContent = timeString;
+    
+    // Change color when time is running low
+    if (remaining <= 30) {
+      timerDisplay.style.color = '#ff6666'; // red when under 30 seconds
+    } else if (remaining <= 60) {
+      timerDisplay.style.color = '#ffaa66'; // orange when under 1 minute
+    } else {
+      timerDisplay.style.color = '#ffffff'; // white normally
+    }
+    
+    return remaining;
   }
 
 
