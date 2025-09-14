@@ -4,6 +4,7 @@ import random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
+from .models import Node, Edge
 
 
 SEED: Optional[int] = 39
@@ -18,18 +19,7 @@ SCREEN_MARGIN: int = 40
 OUTPUT_PATH: str = "graph.json"
 
 
-@dataclass
-class Node:
-    id: int
-    x: float
-    y: float
-
-
-@dataclass
-class Edge:
-    id: int
-    source: int
-    target: int
+# Node and Edge classes are now imported from models.py
 
 
 def try_get_screen_size() -> Tuple[int, int]:
@@ -59,7 +49,7 @@ def generate_node_positions(num_nodes: int, width: int, height: int, margin: int
             cy = margin + (r + 0.5) * cell_h
             x = cx + random.uniform(-random_jitter_w, random_jitter_w)
             y = cy + random.uniform(-random_jitter_h, random_jitter_h)
-            nodes.append(Node(index, x, y))
+            nodes.append(Node(id=index, x=x, y=y, juice=2.0, cur_intake=0.0))
             index += 1
         if index >= num_nodes:
             break
@@ -137,9 +127,9 @@ def generate_planar_edges(nodes: List[Node], desired_edges: int, one_way_percent
                 source, target = i, j
             else:
                 source, target = j, i
-            edges.append(Edge(len(edges), source, target))
+            edges.append(Edge(id=len(edges), source_node_id=source, target_node_id=target))
         else:
-            edges.append(Edge(len(edges), i, j))
+            edges.append(Edge(id=len(edges), source_node_id=i, target_node_id=j))
         existing_segments.append(((nodes[i].x, nodes[i].y), (nodes[j].x, nodes[j].y)))
     return edges
 
@@ -152,8 +142,8 @@ def remove_isolated_nodes(nodes: List[Node], edges: List[Edge]) -> Tuple[List[No
     # Find nodes that are connected to at least one edge
     connected_node_ids = set()
     for edge in edges:
-        connected_node_ids.add(edge.source)
-        connected_node_ids.add(edge.target)
+        connected_node_ids.add(edge.source_node_id)
+        connected_node_ids.add(edge.target_node_id)
     
     # Filter out isolated nodes
     connected_nodes = [node for node in nodes if node.id in connected_node_ids]
@@ -167,14 +157,14 @@ def remove_isolated_nodes(nodes: List[Node], edges: List[Edge]) -> Tuple[List[No
     new_nodes = []
     for new_id, node in enumerate(connected_nodes):
         old_to_new_id[node.id] = new_id
-        new_nodes.append(Node(new_id, node.x, node.y))
+        new_nodes.append(Node(id=new_id, x=node.x, y=node.y, juice=node.juice, cur_intake=0.0))
     
     # Update edge IDs and node references
     new_edges = []
     for new_edge_id, edge in enumerate(edges):
-        new_source = old_to_new_id[edge.source]
-        new_target = old_to_new_id[edge.target]
-        new_edges.append(Edge(new_edge_id, new_source, new_target))
+        new_source = old_to_new_id[edge.source_node_id]
+        new_target = old_to_new_id[edge.target_node_id]
+        new_edges.append(Edge(id=new_edge_id, source_node_id=new_source, target_node_id=new_target))
     
     return new_nodes, new_edges
 
@@ -194,7 +184,7 @@ def main() -> None:
         "screen": {"width": width, "height": height, "margin": 0},
         "nodes": [{"id": n.id, "x": round(n.x, 3), "y": round(n.y, 3)} for n in nodes],
         "edges": [
-            {"id": e.id, "source": e.source, "target": e.target, "bidirectional": False}
+            {"id": e.id, "source": e.source_node_id, "target": e.target_node_id, "bidirectional": False}
             for e in edges
         ],
     }
@@ -223,7 +213,7 @@ def generate_graph_to_path(width: int, height: int, output_path: Path) -> None:
         "screen": {"width": width, "height": height, "margin": 0},
         "nodes": [{"id": n.id, "x": round(n.x, 3), "y": round(n.y, 3)} for n in nodes],
         "edges": [
-            {"id": e.id, "source": e.source, "target": e.target, "bidirectional": False}
+            {"id": e.id, "source": e.source_node_id, "target": e.target_node_id, "bidirectional": False}
             for e in edges
         ],
     }

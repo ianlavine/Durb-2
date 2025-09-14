@@ -259,6 +259,9 @@ class GraphState:
         # Direction/flow toggles are input-driven; no random changes here
         # Compute size deltas from production and flows
         size_delta: Dict[int, float] = {nid: 0.0 for nid in self.nodes.keys()}
+        
+        # Track juice intake for each node (from friendly nodes only)
+        intake_tracking: Dict[int, float] = {nid: 0.0 for nid in self.nodes.keys()}
 
         # Production for owned nodes (capitals get double rate)
         for node in self.nodes.values():
@@ -268,7 +271,7 @@ class GraphState:
                     base_rate *= 2.0  # Double growth for capitals
                 size_delta[node.id] += base_rate
 
-        # Flows using percentage-based transfer per source node, split across its outgoing flowing edges
+        # Flows using variable percentage based on cur_intake
         pending_ownership: Dict[int, int] = {}  # node_id -> new_owner_id
         outgoing_by_node: Dict[int, List[int]] = {}
         for e in self.edges.values():
@@ -277,20 +280,28 @@ class GraphState:
             src_id = e.source_node_id  # All edges flow from source to target
             outgoing_by_node.setdefault(src_id, []).append(e.id)
 
-        # Compute per-edge transfer amounts
+        # Compute per-edge transfer amounts using variable percentage
         per_edge_amount: Dict[int, float] = {}
         for src_id, edge_ids in outgoing_by_node.items():
             src_node = self.nodes.get(src_id)
             if src_node is None:
                 continue
-            total_transfer = src_node.juice * TRANSFER_PERCENT_PER_TICK
+            
+            # Calculate variable transfer percentage based on cur_intake
+            # Base percentage is 1%, plus bonus based on intake
+            # X = cur_intake / 100, so output = (1 + cur_intake/100)%
+            base_percentage = TRANSFER_PERCENT_PER_TICK  # 0.01 (1%)
+            intake_bonus = src_node.cur_intake / 100.0  # Convert intake to percentage bonus
+            variable_percentage = base_percentage + intake_bonus
+            
+            total_transfer = src_node.juice * variable_percentage
             if total_transfer <= 0 or len(edge_ids) == 0:
                 continue
             amount_each = total_transfer / len(edge_ids)
             for eid in edge_ids:
                 per_edge_amount[eid] = amount_each
 
-        # Apply transfers
+        # Apply transfers and track friendly intake
         for eid, amount in per_edge_amount.items():
             edge = self.edges.get(eid)
             if edge is None:
@@ -302,6 +313,11 @@ class GraphState:
             if from_node is None or to_node is None:
                 continue
             size_delta[from_id] -= amount
+            
+            # Track intake for target node (only from friendly nodes)
+            if from_node.owner is not None and to_node.owner == from_node.owner:
+                intake_tracking[to_id] += amount
+            
             if to_node.owner is None or (from_node.owner is not None and to_node.owner != from_node.owner):
                 size_delta[to_id] -= amount
                 projected = max(NODE_MIN_JUICE, to_node.juice + size_delta[to_id])
@@ -309,6 +325,10 @@ class GraphState:
                     pending_ownership[to_id] = from_node.owner
             else:
                 size_delta[to_id] += amount
+
+        # Update cur_intake for all nodes
+        for nid, intake in intake_tracking.items():
+            self.nodes[nid].cur_intake = intake
 
         # Apply deltas and clamp
         for nid, delta in size_delta.items():
@@ -336,7 +356,7 @@ def load_graph(graph_path: Path) -> Tuple[GraphState, Dict[str, int]]:
     screen = data.get("screen", {})
     nodes_raw = data["nodes"]
     edges_raw = data["edges"]
-    nodes: List[Node] = [Node(id=n["id"], x=n["x"], y=n["y"], juice=2.0) for n in nodes_raw]
+    nodes: List[Node] = [Node(id=n["id"], x=n["x"], y=n["y"], juice=2.0, cur_intake=0.0) for n in nodes_raw]
     edges: List[Edge] = [
         Edge(id=e["id"], source_node_id=e["source"], target_node_id=e["target"])
         for e in edges_raw
@@ -349,7 +369,7 @@ def build_state_from_dict(data: Dict) -> Tuple[GraphState, Dict[str, int]]:
     nodes_raw = data["nodes"]
     edges_raw = data["edges"]
     # Start nodes very small (juice units)
-    nodes: List[Node] = [Node(id=n["id"], x=n["x"], y=n["y"], juice=2.0) for n in nodes_raw]
+    nodes: List[Node] = [Node(id=n["id"], x=n["x"], y=n["y"], juice=2.0, cur_intake=0.0) for n in nodes_raw]
     edges: List[Edge] = [
         Edge(id=e["id"], source_node_id=e["source"], target_node_id=e["target"])
         for e in edges_raw
