@@ -53,6 +53,13 @@
   let player1Capitals = 0; // capital count from backend
   let player2Capitals = 0; // capital count from backend
   
+  // Progress bar for node count victory
+  let progressBar = null;
+  let winThreshold = 40; // default, will be updated from backend
+  let totalNodes = 60; // default, will be updated from backend
+  let player1Nodes = 0;
+  let player2Nodes = 0;
+  
   
   // Animation system for juice flow
   let animationTime = 0; // Global animation timer
@@ -102,6 +109,8 @@
         if (overlayMsg) overlayMsg.style.display = 'none';
         // Hide gold display when returning to menu
         if (goldDisplay) goldDisplay.style.display = 'none';
+        // Hide progress bar when returning to menu
+        if (progressBar) progressBar.style.display = 'none';
         nodes.clear();
         edges.clear();
         capitalNodes.clear(); // Clear capital nodes when returning to menu
@@ -164,6 +173,9 @@
     
     document.body.appendChild(goldNumber);
     goldDisplay = goldNumber;
+
+    // Initialize progress bar
+    progressBar = document.getElementById('progressBar');
 
 
     // Abilities container removed - abilities now only accessible via keyboard shortcuts and right-click
@@ -289,19 +301,34 @@
         if (Number(pid) === 2) player2Capitals = Number(count) || 0;
       }
     }
+    
+    // Win threshold and total nodes for progress bar
+    if (typeof msg.winThreshold === 'number') winThreshold = msg.winThreshold;
+    if (typeof msg.totalNodes === 'number') totalNodes = msg.totalNodes;
+    
+    // Initialize node counts from counts data
+    if (msg.counts) {
+      player1Nodes = Number(msg.counts[1]) || 0;
+      player2Nodes = Number(msg.counts[2]) || 0;
+    }
+    
     computeTransform(game.scale.gameSize.width, game.scale.gameSize.height);
     const menu = document.getElementById('menu');
     menu && menu.classList.add('hidden');
     if (overlayMsg) overlayMsg.style.display = 'none';
     redrawStatic();
     if (statusText) {
-      statusText.setText(!myPicked ? 'Choose Starting Node' : '');
-      statusText.setStyle({ font: '48px monospace', color: '#ffffff' });
-      statusText.setPosition(game.scale.gameSize.width / 2 - statusText.width / 2, 16);
-      statusText.setDepth(10);
-      statusText.setVisible(!myPicked);
+      statusText.setText(''); // Remove the "Choose Starting Node" text
+      statusText.setVisible(false); // Hide the status text completely
     }
     updateGoldBar();
+    setProgressBarColors(); // Set colors based on actual player colors
+    updateProgressBar();
+    
+    // Show progress bar when game starts
+    if (progressBar) {
+      progressBar.style.display = 'block';
+    }
   }
 
   function handleLobby(msg) {
@@ -392,14 +419,24 @@
         if (Number(pid) === 2) player2Capitals = Number(count) || 0;
       }
     }
+    
+    // Update win threshold and total nodes for progress bar
+    if (typeof msg.winThreshold === 'number') winThreshold = msg.winThreshold;
+    if (typeof msg.totalNodes === 'number') totalNodes = msg.totalNodes;
+    
+    // Update node counts from counts data
+    if (msg.counts) {
+      player1Nodes = Number(msg.counts[1]) || 0;
+      player2Nodes = Number(msg.counts[2]) || 0;
+    }
+    
     if (statusText) {
-      statusText.setText(!myPicked ? 'Choose Starting Node' : '');
-      statusText.setStyle({ font: '48px monospace', color: '#ffffff' });
-      statusText.setPosition(game.scale.gameSize.width / 2 - statusText.width / 2, 16);
-      statusText.setDepth(10);
-      statusText.setVisible(!myPicked);
+      statusText.setText(''); // Remove the "Choose Starting Node" text
+      statusText.setVisible(false); // Hide the status text completely
     }
     updateGoldBar();
+    setProgressBarColors(); // Ensure colors are up to date
+    updateProgressBar();
     redrawStatic();
   }
 
@@ -570,12 +607,18 @@
       graphicsNodes.clear();
       // Hide gold display when menu is visible (graph is not drawn)
       if (goldDisplay) goldDisplay.style.display = 'none';
+      // Hide progress bar when menu is visible
+      if (progressBar) progressBar.style.display = 'none';
       return; // Do not draw game under menu
     }
     
     // Show gold display when graph is being drawn and we have nodes/game data
     if (goldDisplay && nodes.size > 0) {
       goldDisplay.style.display = 'block';
+    }
+    // Show progress bar when graph is being drawn and we have nodes/game data
+    if (progressBar && nodes.size > 0) {
+      progressBar.style.display = 'block';
     }
     for (const [id, e] of edges.entries()) {
       const s = nodes.get(e.source);
@@ -690,16 +733,17 @@
     if (nodes.size === 0) return;
     let minX = 0, minY = 0, maxX = 100, maxY = 100;
     // Nodes are already in 0..100 logical space; fit that rect to screen
-    const padding = 60; // top/bottom padding
+    const topPadding = 100; // increased top padding to avoid progress bar
+    const bottomPadding = 60; // bottom padding
     const rightReservedPx = 40; // space for gold number and margins
     const width = Math.max(1, maxX - minX);
     const height = Math.max(1, maxY - minY);
-    const scaleX = (viewW - padding * 2 - rightReservedPx) / width;
-    const scaleY = (viewH - padding * 2) / height;
+    const scaleX = (viewW - 60 * 2 - rightReservedPx) / width; // keep side padding same
+    const scaleY = (viewH - topPadding - bottomPadding) / height;
     // Use independent scaling for x and y to fully utilize window aspect
-    // Left edge can go to the edge; anchor left and center vertically
-    const offsetX = padding - scaleX * minX;
-    const offsetY = (viewH - scaleY * height) / 2 - scaleY * minY;
+    // Left edge can go to the edge; anchor left and center vertically with top offset
+    const offsetX = 60 - scaleX * minX; // keep side padding same
+    const offsetY = topPadding + (viewH - topPadding - bottomPadding - scaleY * height) / 2 - scaleY * minY;
     view = { minX, minY, maxX, maxY, scaleX, scaleY, offsetX, offsetY };
   }
 
@@ -1173,6 +1217,75 @@
     const val = Math.max(0, goldValue || 0);
     if (goldDisplay) {
       goldDisplay.textContent = Math.floor(val).toString();
+    }
+  }
+
+  function setProgressBarColors() {
+    // Get player colors from the players map
+    const player1 = players.get(1);
+    const player2 = players.get(2);
+    
+    if (player1 && player2) {
+      const player1Color = player1.color;
+      const player2Color = player2.color;
+      
+      // Create lighter versions of the colors for gradients
+      const player1ColorLight = lightenColor(player1Color, 0.3);
+      const player2ColorLight = lightenColor(player2Color, 0.3);
+      
+      // Set CSS custom properties
+      document.documentElement.style.setProperty('--player1-color', player1Color);
+      document.documentElement.style.setProperty('--player1-color-light', player1ColorLight);
+      document.documentElement.style.setProperty('--player2-color', player2Color);
+      document.documentElement.style.setProperty('--player2-color-light', player2ColorLight);
+    }
+  }
+
+  function lightenColor(color, factor) {
+    // Convert hex color to RGB, lighten it, and convert back to hex
+    const hex = color.replace('#', '');
+    const r = parseInt(hex.substr(0, 2), 16);
+    const g = parseInt(hex.substr(2, 2), 16);
+    const b = parseInt(hex.substr(4, 2), 16);
+    
+    const newR = Math.min(255, Math.floor(r + (255 - r) * factor));
+    const newG = Math.min(255, Math.floor(g + (255 - g) * factor));
+    const newB = Math.min(255, Math.floor(b + (255 - b) * factor));
+    
+    return `#${newR.toString(16).padStart(2, '0')}${newG.toString(16).padStart(2, '0')}${newB.toString(16).padStart(2, '0')}`;
+  }
+
+  function updateProgressBar() {
+    if (!progressBar) return;
+    
+    // Calculate percentages
+    const player1Percent = (player1Nodes / totalNodes) * 100;
+    const player2Percent = (player2Nodes / totalNodes) * 100;
+    
+    // Update the progress bar widths
+    const progressBarLeft = document.getElementById('progressBarLeft');
+    const progressBarRight = document.getElementById('progressBarRight');
+    
+    if (progressBarLeft) {
+      progressBarLeft.style.width = `${player1Percent}%`;
+    }
+    if (progressBarRight) {
+      progressBarRight.style.width = `${player2Percent}%`;
+    }
+    
+    // Update marker positions based on win threshold
+    const marker1 = document.querySelector('.progressMarker.marker1');
+    const marker2 = document.querySelector('.progressMarker.marker2');
+    
+    if (marker1 && marker2) {
+      // Calculate marker positions based on win threshold
+      // Marker 1: win threshold from left (player 1 perspective)
+      const marker1Percent = (winThreshold / totalNodes) * 100;
+      // Marker 2: win threshold from right (player 2 perspective) 
+      const marker2Percent = ((totalNodes - winThreshold) / totalNodes) * 100;
+      
+      marker1.style.left = `${marker1Percent}%`;
+      marker2.style.left = `${marker2Percent}%`;
     }
   }
 

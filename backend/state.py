@@ -68,6 +68,42 @@ class GraphState:
                 
         return None
 
+    def calculate_win_threshold(self) -> int:
+        """Calculate the number of nodes needed to win based on total nodes (2/3 rule)."""
+        total_nodes = len(self.nodes)
+        if total_nodes % 3 == 0:
+            # If divisible by 3, need exactly 2/3
+            return (total_nodes * 2) // 3
+        else:
+            # If not divisible by 3, get as close to 2/3 as possible
+            return (total_nodes * 2 + 2) // 3  # This rounds up to get closest to 2/3
+
+    def check_node_count_victory(self) -> Optional[int]:
+        """Check if any player has reached the win threshold. Returns winner ID or None."""
+        if self.game_ended:
+            return self.winner_id
+            
+        # Only check after picking phase is complete
+        if self.phase == "picking":
+            return None
+            
+        win_threshold = self.calculate_win_threshold()
+        
+        # Count nodes owned by each player
+        node_counts = {}
+        for node in self.nodes.values():
+            if node.owner is not None:
+                node_counts[node.owner] = node_counts.get(node.owner, 0) + 1
+        
+        # Check if any player has reached the win threshold
+        for player_id in self.players.keys():
+            if node_counts.get(player_id, 0) >= win_threshold:
+                self.game_ended = True
+                self.winner_id = player_id
+                return player_id
+                
+        return None
+
     def check_zero_nodes_loss(self) -> Optional[int]:
         """Check if any player has 0 nodes. Returns winner ID (the other player) or None."""
         if self.game_ended:
@@ -117,6 +153,9 @@ class GraphState:
                 capital_counts[node.owner] = capital_counts.get(node.owner, 0) + 1
         capital_arr = [[pid, capital_counts.get(pid, 0)] for pid in self.players.keys()]
         
+        # Calculate win threshold for progress bar
+        win_threshold = self.calculate_win_threshold()
+        
         return {
             "type": "init",
             "screen": screen,
@@ -129,6 +168,8 @@ class GraphState:
             "gold": gold_arr,
             "picked": picked_arr,
             "capitals": capital_arr,
+            "winThreshold": win_threshold,
+            "totalNodes": len(self.nodes),
         }
 
     def to_tick_message(self, current_time: float = 0.0) -> Dict:
@@ -152,6 +193,9 @@ class GraphState:
                 capital_counts[node.owner] = capital_counts.get(node.owner, 0) + 1
         capital_arr = [[pid, capital_counts.get(pid, 0)] for pid in self.players.keys()]
         
+        # Calculate win threshold for progress bar
+        win_threshold = self.calculate_win_threshold()
+        
         return {
             "type": "tick",
             "edges": edges_arr,
@@ -162,6 +206,7 @@ class GraphState:
             "gold": gold_arr,
             "picked": picked_arr,
             "capitals": capital_arr,
+            "winThreshold": win_threshold,
         }
 
     def simulate_tick(self, tick_interval_seconds: float) -> None:

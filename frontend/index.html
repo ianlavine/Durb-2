@@ -13,6 +13,56 @@
       #playBtn { font-size: 64px; padding: 24px 64px; border-radius: 12px; border: none; background: #00cc66; color: #111; cursor: pointer; box-shadow: 0 8px 24px rgba(0,0,0,0.4); }
       #lobby { display: none; color: #ddd; font: 20px/1.4 monospace; }
       #playBtn:hover { filter: brightness(1.1); }
+      
+      /* Progress bar styles */
+      #progressBar { 
+        position: absolute; 
+        top: 20px; 
+        left: 50%; 
+        transform: translateX(-50%); 
+        width: 80%; 
+        max-width: 800px; 
+        height: 30px; 
+        background: #333; 
+        border: 2px solid #666; 
+        border-radius: 15px; 
+        overflow: hidden; 
+        z-index: 10; 
+        display: none; 
+      }
+      #progressBarInner { 
+        height: 100%; 
+        position: relative; 
+        transition: width 0.3s ease; 
+      }
+      #progressBarLeft { 
+        position: absolute; 
+        left: 0; 
+        top: 0; 
+        height: 100%; 
+        background: linear-gradient(to right, var(--player1-color), var(--player1-color-light)); 
+        transition: width 0.3s ease; 
+      }
+      #progressBarRight { 
+        position: absolute; 
+        right: 0; 
+        top: 0; 
+        height: 100%; 
+        background: linear-gradient(to left, var(--player2-color), var(--player2-color-light)); 
+        transition: width 0.3s ease; 
+      }
+      .progressMarker { 
+        position: absolute; 
+        top: -2px; 
+        width: 4px; 
+        height: 34px; 
+        background: #fff; 
+        border: 1px solid #000; 
+        border-radius: 2px; 
+        z-index: 11; 
+      }
+      .progressMarker.marker1 { left: 33.33%; }
+      .progressMarker.marker2 { left: 66.67%; }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.0/dist/phaser.js"></script>
   </head>
@@ -23,6 +73,17 @@
       <button id="playBtn">PLAY</button>
       <div id="lobby">Joining lobby...</div>
     </div>
+    
+    <!-- Progress bar for node count victory -->
+    <div id="progressBar">
+      <div id="progressBarInner">
+        <div id="progressBarLeft"></div>
+        <div id="progressBarRight"></div>
+        <div class="progressMarker marker1"></div>
+        <div class="progressMarker marker2"></div>
+      </div>
+    </div>
+    
     <script src="main.js"></script>
   </body>
   </html>

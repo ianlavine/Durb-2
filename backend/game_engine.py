@@ -114,6 +114,15 @@ class GameEngine:
         if getattr(self.state, "phase", "picking") != required_phase:
             raise GameValidationError(f"Not in {required_phase} phase")
     
+    def validate_player_can_act(self, player_id: int) -> None:
+        """Validate that a player can perform actions (has picked starting node)."""
+        if not self.state:
+            raise GameValidationError("No game state")
+        
+        # Player can act if they have picked their starting node
+        if not self.state.players_who_picked.get(player_id, False):
+            raise GameValidationError("Must pick starting node first")
+    
     def validate_node_exists(self, node_id: int) -> Node:
         """Validate that a node exists and return it."""
         if not self.state:
@@ -185,9 +194,8 @@ class GameEngine:
             self.validate_game_active()
             player_id = self.validate_player(token)
             
-            # Allow edge clicks in playing phase
-            if self.state.phase != "playing":
-                raise GameValidationError("Game not in playing phase")
+            # Allow edge clicks if player has picked starting node
+            self.validate_player_can_act(player_id)
             
             edge = self.validate_edge_exists(edge_id)
             
@@ -219,9 +227,8 @@ class GameEngine:
             self.validate_game_active()
             player_id = self.validate_player(token)
             
-            # Allow reverse edge in playing phase
-            if self.state.phase != "playing":
-                raise GameValidationError("Not in playing phase")
+            # Allow reverse edge if player has picked starting node
+            self.validate_player_can_act(player_id)
                 
             edge = self.validate_edge_exists(edge_id)
             
@@ -277,9 +284,8 @@ class GameEngine:
             self.validate_game_active()
             player_id = self.validate_player(token)
             
-            # Allow bridge building in playing phase
-            if self.state.phase != "playing":
-                raise GameValidationError("Not in playing phase")
+            # Allow bridge building if player has picked starting node
+            self.validate_player_can_act(player_id)
             
             # Validate nodes
             from_node = self.validate_node_exists(from_node_id)
@@ -335,7 +341,7 @@ class GameEngine:
         try:
             self.validate_game_active()
             player_id = self.validate_player(token)
-            self.validate_phase("playing")
+            self.validate_player_can_act(player_id)
             
             # Validate node
             node = self.validate_node_exists(node_id)
@@ -514,6 +520,12 @@ class GameEngine:
             self._end_game()
             return winner_id
         
+        # Check for node count victory (2/3 rule)
+        winner_id = self.state.check_node_count_victory()
+        if winner_id is not None:
+            self._end_game()
+            return winner_id
+        
         # Check for zero nodes loss condition
         winner_id = self.state.check_zero_nodes_loss()
         if winner_id is not None:
@@ -531,7 +543,7 @@ class GameEngine:
         try:
             self.validate_game_active()
             player_id = self.validate_player(token)
-            self.validate_phase("playing")
+            self.validate_player_can_act(player_id)
             target_node = self.validate_node_exists(target_node_id)
             
             # Get all nodes owned by the player
@@ -569,7 +581,7 @@ class GameEngine:
         try:
             self.validate_game_active()
             player_id = self.validate_player(token)
-            self.validate_phase("playing")
+            self.validate_player_can_act(player_id)
             
             # Validate node
             node = self.validate_node_exists(node_id)
