@@ -60,7 +60,7 @@ class GraphGenerator:
             "screen": {"width": w, "height": h, "margin": 0},
             "nodes": [{"id": n.id, "x": round(n.x, 3), "y": round(n.y, 3)} for n in nodes],
             "edges": [
-                {"id": e.id, "source": e.source, "target": e.target, "bidirectional": False}
+                {"id": e.id, "source": e.source_node_id, "target": e.target_node_id, "bidirectional": False}
                 for e in edges
             ],
         }

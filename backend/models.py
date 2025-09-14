@@ -16,6 +16,8 @@ class Node:
     juice: float = 2.0
     owner: Optional[int] = None  # player id
     attached_edge_ids: List[int] = field(default_factory=list)
+    cur_intake: float = 0.0  # amount of juice received from friendly nodes in last tick
+    
 
 
 @dataclass
