@@ -116,7 +116,12 @@ class WebSocketServer:
             # Simulate game tick
             winner_id = self.game_engine.simulate_tick(TICK_INTERVAL_SECONDS)
             
-            # Check for game over
+            # Always broadcast the current game state first (including the final state)
+            if self.game_engine.state:
+                msg = json.dumps(self.game_engine.state.to_tick_message(time.time()))
+                await self._broadcast(msg)
+            
+            # Check for game over after broadcasting the final state
             if winner_id is not None:
                 victory_msg = json.dumps({"type": "gameOver", "winnerId": winner_id})
                 for client_ws in game_clients.values():
@@ -129,11 +134,6 @@ class WebSocketServer:
                 self.server_context["game_clients"] = {}
                 self.server_context["ws_to_token"] = {}
                 continue
-            
-            # Broadcast game state update
-            if self.game_engine.state:
-                msg = json.dumps(self.game_engine.state.to_tick_message(time.time()))
-                await self._broadcast(msg)
 
 
     async def _broadcast(self, message: str) -> None:

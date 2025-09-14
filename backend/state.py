@@ -255,7 +255,49 @@ class GraphState:
             "winThreshold": win_threshold,
         }
 
+    def _update_edge_flowing_status(self) -> None:
+        """
+        Update the flowing status of all edges based on whether their target nodes can receive flow.
+        An edge can only flow if:
+        1. It is turned on (on = True)
+        2. For friendly flows: target node is not full (juice < NODE_MAX_JUICE)
+        3. For attacking flows: always flow when on (regardless of target capacity)
+        """
+        for edge in self.edges.values():
+            if not edge.on:
+                # Edge is not turned on, so it cannot flow
+                edge.flowing = False
+                continue
+            
+            # Get source and target nodes
+            source_node = self.nodes.get(edge.source_node_id)
+            target_node = self.nodes.get(edge.target_node_id)
+            
+            if source_node is None or target_node is None:
+                edge.flowing = False
+                continue
+            
+            # Check if this is an attacking flow (source and target have different owners)
+            if (source_node.owner is not None and 
+                target_node.owner is not None and 
+                source_node.owner != target_node.owner):
+                # This is an attacking flow - it can always flow when on
+                edge.flowing = True
+            elif (source_node.owner is not None and 
+                  (target_node.owner is None or target_node.owner == source_node.owner)):
+                # This is a friendly flow - it can only flow if target is not full
+                if target_node.juice >= NODE_MAX_JUICE:
+                    edge.flowing = False
+                else:
+                    edge.flowing = True
+            else:
+                # Edge is on but cannot flow for other reasons
+                edge.flowing = False
+
     def simulate_tick(self, tick_interval_seconds: float) -> None:
+        # Update flowing status for all edges based on target node capacity
+        self._update_edge_flowing_status()
+        
         # Direction/flow toggles are input-driven; no random changes here
         # Compute size deltas from production and flows
         size_delta: Dict[int, float] = {nid: 0.0 for nid in self.nodes.keys()}

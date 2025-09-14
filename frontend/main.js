@@ -1548,7 +1548,7 @@
     const p3 = rotatePoint(cx - height / 2, cy + halfW, cx, cy, angle); // base right
     
     if (e.flowing) {
-      // Animated juice flow effect
+      // Animated juice flow effect - filled triangles
       const animatedColor = getAnimatedJuiceColor(color, triangleIndex || 0, totalTriangles || 1, e.flowStartTime);
       
       if (animatedColor === null) {
@@ -1560,7 +1560,21 @@
         graphicsEdges.fillStyle(animatedColor.color, animatedColor.alpha);
         graphicsEdges.fillTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
       }
+    } else if (e.on) {
+      // Edge is on but not flowing - show hollow triangles with same animation pattern
+      const animatedColor = getAnimatedJuiceColor(color, triangleIndex || 0, totalTriangles || 1, e.flowStartTime);
+      
+      if (animatedColor === null) {
+        // Triangle not yet reached in animation - show grey outline
+        graphicsEdges.lineStyle(2, 0x999999, 1);
+        graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
+      } else {
+        // Triangle is in animation cycle - show hollow triangle with animated color outline
+        graphicsEdges.lineStyle(3, animatedColor.color, animatedColor.alpha);
+        graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
+      }
     } else {
+      // Edge is not on - show grey outline
       graphicsEdges.lineStyle(2, 0x999999, 1);
       graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
     }
@@ -1573,8 +1587,8 @@
   }
 
   function edgeColor(e, fromNodeOrNull) {
-    // If flowing, use source node owner color; else grey
-    if (!e.flowing) return 0x999999;
+    // If edge is on (flowing or not), use source node owner color; else grey
+    if (!e.on) return 0x999999;
     let fromNode = fromNodeOrNull;
     if (!fromNode) {
       fromNode = nodes.get(e.source);  // Always use source node

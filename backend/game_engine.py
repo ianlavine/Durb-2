@@ -199,17 +199,16 @@ class GameEngine:
             
             edge = self.validate_edge_exists(edge_id)
             
-            # Toggle behavior
-            if edge.on or edge.flowing:
+            # Toggle behavior - only toggle the 'on' property
+            # The 'flowing' property will be updated automatically each tick
+            if edge.on:
                 edge.on = False
-                edge.flowing = False
             else:
                 # Check if player owns the source node
                 source_node = self.validate_node_exists(edge.source_node_id)
                 
                 if source_node.owner == player_id:
                     edge.on = True
-                    edge.flowing = True
                 else:
                     raise GameValidationError("You must own the source node")
             
@@ -256,15 +255,13 @@ class GameEngine:
             # Reverse the edge by swapping source and target
             edge.source_node_id, edge.target_node_id = edge.target_node_id, edge.source_node_id
             
-            # Only start flowing if the new source node is owned by the swapping player
+            # Only turn on if the new source node is owned by the swapping player
             new_source_node = self.validate_node_exists(edge.source_node_id)
             if new_source_node.owner == player_id:
                 edge.on = True
-                edge.flowing = True
             else:
-                # Edge is swapped but not flowing since player doesn't own new source
+                # Edge is swapped but not turned on since player doesn't own new source
                 edge.on = False
-                edge.flowing = False
             
             # Deduct gold
             self.state.player_gold[player_id] = max(0.0, self.state.player_gold[player_id] - cost)
@@ -317,7 +314,7 @@ class GameEngine:
                 source_node_id=from_node_id,
                 target_node_id=to_node_id,
                 on=True,
-                flowing=True
+                flowing=False  # Will be set to True by _update_edge_flowing_status if conditions are met
             )
             
             # Add to state
@@ -686,17 +683,14 @@ class GameEngine:
             # (we want energy flowing INTO the target, not OUT of it)
             if edge.source_node_id == target_node_id:
                 edge.on = False
-                edge.flowing = False
             # If this node has a path to target and this is the optimal edge
             elif (edge.source_node_id in best_next_hop and 
                   best_next_hop[edge.source_node_id] == edge.id):
                 # This is the ONE edge this node should use
                 edge.on = True
-                edge.flowing = True
             else:
                 # Turn off all other edges from nodes that can reach target
                 if edge.source_node_id in best_next_hop:
                     edge.on = False
-                    edge.flowing = False
                 # For nodes that can't reach target, leave their edges as-is
                 # (they might be defending other areas)
