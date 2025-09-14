@@ -65,6 +65,10 @@
   let gameStartTime = null;
   let gameDuration = 5 * 60; // 5 minutes in seconds
   
+  // Auto-expand system
+  let autoExpandToggle = null;
+  let myAutoExpand = false; // my player's auto-expand setting
+  
   
   // Animation system for juice flow
   let animationTime = 0; // Global animation timer
@@ -118,6 +122,8 @@
         if (progressBar) progressBar.style.display = 'none';
         // Hide timer when returning to menu
         if (timerDisplay) timerDisplay.style.display = 'none';
+        // Hide auto-expand toggle when returning to menu
+        if (autoExpandToggle) autoExpandToggle.style.display = 'none';
         nodes.clear();
         edges.clear();
         capitalNodes.clear(); // Clear capital nodes when returning to menu
@@ -136,10 +142,11 @@
       quitBtn.style.display = menuVisible ? 'none' : 'block';
     });
     observer.observe(menu, { attributes: true, attributeFilter: ['class'] });
-    // Also hide win/lose overlay when menu is visible
+    // Also hide win/lose overlay and auto-expand toggle when menu is visible
     const menuObserver = new MutationObserver(() => {
       const menuVisible = !menu.classList.contains('hidden');
       if (menuVisible && overlayMsg) overlayMsg.style.display = 'none';
+      if (menuVisible && autoExpandToggle) autoExpandToggle.style.display = 'none';
     });
     menuObserver.observe(menu, { attributes: true, attributeFilter: ['class'] });
 
@@ -186,6 +193,20 @@
     
     // Initialize timer display
     timerDisplay = document.getElementById('timerDisplay');
+    
+    // Initialize auto-expand toggle
+    autoExpandToggle = document.getElementById('autoExpandToggle');
+    if (autoExpandToggle) {
+      const toggleSwitch = autoExpandToggle.querySelector('.toggle-switch');
+      if (toggleSwitch) {
+        toggleSwitch.addEventListener('click', () => {
+          if (ws && ws.readyState === WebSocket.OPEN && !gameEnded) {
+            const token = localStorage.getItem('token');
+            ws.send(JSON.stringify({ type: 'toggleAutoExpand', token }));
+          }
+        });
+      }
+    }
 
 
     // Abilities container removed - abilities now only accessible via keyboard shortcuts and right-click
@@ -331,6 +352,15 @@
       player2Nodes = Number(msg.counts[2]) || 0;
     }
     
+    // Initialize auto-expand settings
+    myAutoExpand = false;
+    if (Array.isArray(msg.autoExpand)) {
+      for (const [pid, enabled] of msg.autoExpand) {
+        if (Number(pid) === myPlayerId) myAutoExpand = !!enabled;
+      }
+    }
+    updateAutoExpandToggle();
+    
     computeTransform(game.scale.gameSize.width, game.scale.gameSize.height);
     const menu = document.getElementById('menu');
     menu && menu.classList.add('hidden');
@@ -451,6 +481,14 @@
       player1Nodes = Number(msg.counts[1]) || 0;
       player2Nodes = Number(msg.counts[2]) || 0;
     }
+    
+    // Update auto-expand settings
+    if (Array.isArray(msg.autoExpand)) {
+      for (const [pid, enabled] of msg.autoExpand) {
+        if (Number(pid) === myPlayerId) myAutoExpand = !!enabled;
+      }
+    }
+    updateAutoExpandToggle();
     
     if (statusText) {
       statusText.setText(''); // Remove the "Choose Starting Node" text
@@ -633,6 +671,8 @@
       if (progressBar) progressBar.style.display = 'none';
       // Hide timer when menu is visible
       if (timerDisplay) timerDisplay.style.display = 'none';
+      // Hide auto-expand toggle when menu is visible
+      if (autoExpandToggle) autoExpandToggle.style.display = 'none';
       return; // Do not draw game under menu
     }
     
@@ -647,6 +687,10 @@
     // Show timer when graph is being drawn and we have nodes/game data
     if (timerDisplay && nodes.size > 0 && gameStartTime) {
       timerDisplay.style.display = 'block';
+    }
+    // Show auto-expand toggle when graph is being drawn and we have nodes/game data
+    if (autoExpandToggle && nodes.size > 0) {
+      autoExpandToggle.style.display = 'block';
     }
     for (const [id, e] of edges.entries()) {
       const s = nodes.get(e.source);
@@ -1346,6 +1390,19 @@
     }
     
     return remaining;
+  }
+
+  function updateAutoExpandToggle() {
+    if (!autoExpandToggle) return;
+    
+    const toggleSwitch = autoExpandToggle.querySelector('.toggle-switch');
+    if (toggleSwitch) {
+      if (myAutoExpand) {
+        toggleSwitch.classList.add('enabled');
+      } else {
+        toggleSwitch.classList.remove('enabled');
+      }
+    }
   }
 
 

@@ -176,6 +176,11 @@ class GameEngine:
                 self.state.player_gold[player_id] = self.state.player_gold.get(player_id, 0.0) + GOLD_REWARD_FOR_CAPTURE
                 node.owner = player_id
                 self.state.players_who_picked[player_id] = True
+                
+                # Check for auto-expand if enabled
+                if self.state.player_auto_expand.get(player_id, False):
+                    self.state._auto_expand_from_node(node_id, player_id)
+                
                 return True
             
             # For all other cases (already picked, node already owned, etc.), 
@@ -694,3 +699,43 @@ class GameEngine:
                     edge.on = False
                 # For nodes that can't reach target, leave their edges as-is
                 # (they might be defending other areas)
+    
+    def handle_toggle_auto_expand(self, token: str) -> bool:
+        """
+        Handle toggling the auto-expand setting for a player.
+        Returns True if the action was successful.
+        """
+        try:
+            self.validate_game_active()
+            player_id = self.validate_player(token)
+            
+            # Allow toggling auto-expand even before picking starting node
+            # (just validate that player exists and game is active)
+            
+            # Toggle the setting
+            new_state = self.state.toggle_auto_expand(player_id)
+            
+            # If auto-expand was just turned ON, immediately check for expansion opportunities
+            if new_state:
+                self._check_auto_expand_opportunities(player_id)
+            
+            return True
+            
+        except GameValidationError:
+            return False
+    
+    def _check_auto_expand_opportunities(self, player_id: int) -> None:
+        """
+        Check all owned nodes for auto-expand opportunities and turn on edges to unowned nodes.
+        This is called when auto-expand is turned on to immediately check existing owned nodes.
+        """
+        if not self.state:
+            return
+        
+        # Find all nodes owned by this player
+        owned_nodes = [node_id for node_id, node in self.state.nodes.items() 
+                      if node.owner == player_id]
+        
+        # For each owned node, check for auto-expand opportunities
+        for node_id in owned_nodes:
+            self.state._auto_expand_from_node(node_id, player_id)

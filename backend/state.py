@@ -44,12 +44,17 @@ class GraphState:
         self.game_start_time: Optional[float] = None
         self.game_duration: float = 5 * 60  # 5 minutes in seconds
         
+        # Auto-expand settings per player
+        self.player_auto_expand: Dict[int, bool] = {}
+        
 
     def add_player(self, player: Player) -> None:
         self.players[player.id] = player
         # Initialize player economy and pick status
         self.player_gold[player.id] = STARTING_GOLD
         self.players_who_picked[player.id] = False
+        # Initialize auto-expand setting (default: off)
+        self.player_auto_expand[player.id] = False
 
 
     def check_capital_victory(self) -> Optional[int]:
@@ -190,6 +195,7 @@ class GraphState:
         players_arr = [[pid, p.color] for pid, p in self.players.items()]
         gold_arr = [[pid, round(self.player_gold.get(pid, 0.0), 4)] for pid in self.players.keys()]
         picked_arr = [[pid, bool(self.players_who_picked.get(pid, False))] for pid in self.players.keys()]
+        auto_expand_arr = [[pid, bool(self.player_auto_expand.get(pid, False))] for pid in self.players.keys()]
         
         # Count capitals by player for init
         capital_counts: Dict[int, int] = {}
@@ -216,6 +222,7 @@ class GraphState:
             "capitals": capital_arr,
             "winThreshold": win_threshold,
             "totalNodes": len(self.nodes),
+            "autoExpand": auto_expand_arr,
         }
 
     def to_tick_message(self, current_time: float = 0.0) -> Dict:
@@ -230,6 +237,7 @@ class GraphState:
                 counts[n.owner] = counts.get(n.owner, 0) + 1
         gold_arr = [[pid, round(self.player_gold.get(pid, 0.0), 4)] for pid in self.players.keys()]
         picked_arr = [[pid, bool(self.players_who_picked.get(pid, False))] for pid in self.players.keys()]
+        auto_expand_arr = [[pid, bool(self.player_auto_expand.get(pid, False))] for pid in self.players.keys()]
         
         # Count capitals by player
         capital_counts: Dict[int, int] = {}
@@ -253,6 +261,7 @@ class GraphState:
             "picked": picked_arr,
             "capitals": capital_arr,
             "winThreshold": win_threshold,
+            "autoExpand": auto_expand_arr,
         }
 
     def _update_edge_flowing_status(self) -> None:
@@ -390,6 +399,52 @@ class GraphState:
                 node.owner = new_owner
 
         # All edges are now one-way only - no auto-adjustment needed
+        
+        # Handle auto-expand for newly captured nodes
+        for nid, new_owner in pending_ownership.items():
+            if self.player_auto_expand.get(new_owner, False):
+                self._auto_expand_from_node(nid, new_owner)
+
+    def _auto_expand_from_node(self, node_id: int, player_id: int) -> None:
+        """
+        Auto-expand from a newly captured node by turning on edges to unowned surrounding nodes.
+        This method finds all edges from the captured node to unowned nodes and turns them on.
+        """
+        captured_node = self.nodes.get(node_id)
+        if not captured_node:
+            return
+        
+        # Find all edges from this node to unowned nodes
+        for edge_id in captured_node.attached_edge_ids:
+            edge = self.edges.get(edge_id)
+            if not edge:
+                continue
+            
+            # Check if this edge goes from the captured node to an unowned node
+            target_node_id = None
+            if edge.source_node_id == node_id:
+                target_node_id = edge.target_node_id
+            elif edge.target_node_id == node_id:
+                # This edge goes TO the captured node, so we need to reverse it first
+                # But for auto-expand, we only want to turn on edges that already point outward
+                continue
+            
+            if target_node_id:
+                target_node = self.nodes.get(target_node_id)
+                if target_node and target_node.owner is None:
+                    # This is an unowned node that can be captured - turn on the edge
+                    edge.on = True
+
+    def toggle_auto_expand(self, player_id: int) -> bool:
+        """
+        Toggle the auto-expand setting for a player.
+        Returns the new state of the setting.
+        """
+        if player_id not in self.player_auto_expand:
+            self.player_auto_expand[player_id] = False
+        
+        self.player_auto_expand[player_id] = not self.player_auto_expand[player_id]
+        return self.player_auto_expand[player_id]
 
 
 def load_graph(graph_path: Path) -> Tuple[GraphState, Dict[str, int]]:

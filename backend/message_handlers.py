@@ -388,6 +388,26 @@ class QuitGameHandler(BaseMessageHandler):
                 pass
 
 
+class ToggleAutoExpandHandler(BaseMessageHandler):
+    """Handle auto-expand toggle requests."""
+    
+    async def handle(self, websocket: websockets.WebSocketServerProtocol, 
+                    msg: Dict[str, Any], server_context: Dict[str, Any]) -> None:
+        token = msg.get("token")
+        
+        success = self.game_engine.handle_toggle_auto_expand(token)
+        
+        if not success:
+            await websocket.send(json.dumps({
+                "type": "autoExpandError", 
+                "message": "Failed to toggle auto-expand"
+            }))
+            return
+        
+        # The auto-expand setting will be included in the next tick message
+        # No immediate response needed as the setting is broadcast with game state
+
+
 class MessageRouter:
     """Routes messages to appropriate handlers."""
     
@@ -405,6 +425,7 @@ class MessageRouter:
             "redirectEnergy": RedirectEnergyHandler(game_engine),
             "destroyNode": DestroyNodeHandler(game_engine),
             "quitGame": QuitGameHandler(game_engine),
+            "toggleAutoExpand": ToggleAutoExpandHandler(game_engine),
         }
     
     async def route_message(self, websocket: websockets.WebSocketServerProtocol, 
