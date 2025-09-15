@@ -329,7 +329,8 @@ class BuildBridgeHandler(BaseMessageHandler):
                     "forward": True,
                     "on": new_edge.on,
                     "flowing": new_edge.flowing
-                }
+                },
+                "cost": cost  # Include the cost for frontend animation
             }
             
             game_clients = server_context.get("game_clients", {})
@@ -636,7 +637,8 @@ class MessageRouter:
                             "forward": True,
                             "on": new_edge.on,
                             "flowing": new_edge.flowing
-                        }
+                        },
+                        "cost": cost  # Include the cost for frontend animation
                     }
                     await websocket.send(json.dumps(edge_data))
         

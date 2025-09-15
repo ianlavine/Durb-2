@@ -49,6 +49,7 @@
   let bridgeFirstNode = null; // first selected node for bridge building
   let mouseWorldX = 0; // current mouse position in world coordinates
   let mouseWorldY = 0;
+  let bridgeCostDisplay = null; // current bridge cost display text object
   let capitalNodes = new Set(); // node IDs that are capitals
   let player1Capitals = 0; // capital count from backend
   let player2Capitals = 0; // capital count from backend
@@ -151,6 +152,67 @@
     if (typeof hex === 'string') return hex;
     return '#' + (hex >>> 0).toString(16).padStart(6, '0');
   }
+
+  // Bridge cost calculation
+  function calculateBridgeCost(fromNode, toNode) {
+    if (!fromNode || !toNode) return 0;
+    
+    // Calculate distance between nodes using original world coordinates
+    const dx = toNode.x - fromNode.x;
+    const dy = toNode.y - fromNode.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    
+    // If nodes are the same, cost is 0
+    if (distance === 0) return 0;
+    
+    // Base cost of 1 gold + 0.09 gold per unit distance
+    // This means a bridge across the full map (distance ~141) would cost ~13.7 gold
+    // Corner to corner (distance ~141) should cost around $10
+    const cost = 1 + (distance * 0.09);
+    
+    // Round to 1 decimal place for display
+    return Math.round(cost * 10) / 10;
+  }
+
+// Replace the whole function with this Phaser version:
+function updateBridgeCostDisplay(fromNode, toNode) {
+  if (!sceneRef || !fromNode || !toNode) return;
+
+  // midpoint between nodes (reads nicely, like your reversal capture $ signs)
+  const midX = (fromNode.x + toNode.x) / 2;
+  const midY = (fromNode.y + toNode.y) / 2;
+  const [sx, sy] = worldToScreen(midX, midY);
+
+  const cost = calculateBridgeCost(fromNode, toNode);
+  const canAfford = goldValue >= cost;
+  const text = `$${cost}`;
+
+  if (!bridgeCostDisplay) {
+    bridgeCostDisplay = sceneRef.add.text(sx, sy - 20, text, {
+      fontFamily: 'monospace',
+      fontSize: '20px',
+      fontStyle: 'bold',
+      color: canAfford ? '#00ff00' : '#ff0000',
+      stroke: '#000000',
+      strokeThickness: 3,
+    })
+    .setOrigin(0.5, 0.5)
+    .setDepth(1000);
+  } else {
+    bridgeCostDisplay.setText(text);
+    bridgeCostDisplay.setPosition(sx, sy - 20);
+    bridgeCostDisplay.setColor(canAfford ? '#00ff00' : '#ff0000');
+    bridgeCostDisplay.setVisible(true);
+  }
+}
+
+function hideBridgeCostDisplay() {
+  if (bridgeCostDisplay) {
+    bridgeCostDisplay.destroy();
+    bridgeCostDisplay = null;
+  }
+}
+
 
   // Money indicator functions
   // Create an animated text indicator that rises & fades out
@@ -373,6 +435,11 @@
         // Reset ability state when returning to menu
         activeAbility = null;
         bridgeFirstNode = null;
+        // Remove cost display
+        if (bridgeCostDisplay) {
+          app.stage.removeChild(bridgeCostDisplay);
+          bridgeCostDisplay = null;
+        }
         
         // Clean up money indicators
         clearMoneyIndicators();
@@ -585,6 +652,11 @@
     // Reset ability state from previous game
     activeAbility = null;
     bridgeFirstNode = null;
+    // Remove cost display
+    if (bridgeCostDisplay && app && app.stage) {
+      app.stage.removeChild(bridgeCostDisplay);
+      bridgeCostDisplay = null;
+    }
 
     for (const arr of msg.nodes) {
       const [id, x, y, size, owner] = arr;
@@ -810,6 +882,27 @@
         flowing: edge.flowing,
         flowStartTime: edge.flowing ? animationTime : null
       });
+      
+      // Show cost indicator for bridge building
+      if (activeAbility === 'bridge1way' && msg.cost) {
+        // Position the indicator at the midpoint of the new bridge
+        const sourceNode = nodes.get(edge.source);
+        const targetNode = nodes.get(edge.target);
+        if (sourceNode && targetNode) {
+          const midX = (sourceNode.x + targetNode.x) / 2;
+          const midY = (sourceNode.y + targetNode.y) / 2;
+          const [screenX, screenY] = worldToScreen(midX, midY);
+          
+          createMoneyIndicator(
+            screenX, 
+            screenY, 
+            `-$${msg.cost}`, 
+            0xcd853f, // browner gold color (peru)
+            2000 // 2 seconds
+          );
+        }
+      }
+      
       redrawStatic();
     }
     
@@ -817,6 +910,11 @@
     if (activeAbility === 'bridge1way') {
       activeAbility = null;
       bridgeFirstNode = null;
+      // Remove cost display
+      if (bridgeCostDisplay && app && app.stage) {
+        app.stage.removeChild(bridgeCostDisplay);
+        bridgeCostDisplay = null;
+      }
     }
   }
 
@@ -1087,12 +1185,18 @@
             graphicsNodes.lineStyle(3, 0xffd700, 0.8); // gold highlight
             graphicsNodes.strokeCircle(nx, ny, r + 3);
           }
-        } else if (bridgeFirstNode !== id) {
-          // After selecting first node: highlight valid targets
-          // Highlight any other node as valid target
-          graphicsNodes.lineStyle(3, 0xffd700, 0.7); // semi-transparent gold
-          graphicsNodes.strokeCircle(nx, ny, r + 3);
-        }
+          // AFTER
+          } else if (bridgeFirstNode !== id) {
+            const firstNode = nodes.get(bridgeFirstNode);
+
+            // gold highlight on the target
+            graphicsNodes.lineStyle(3, 0xffd700, 0.8);
+            graphicsNodes.strokeCircle(nx, ny, r + 3);
+
+            // show static, live-updating midpoint label
+            updateBridgeCostDisplay(firstNode, n);
+          }
+
       }
       
       // Capital creation hover: show player secondary color highlight for valid capital locations
@@ -1115,6 +1219,12 @@
         drawStar(nx, ny, r * 0.6, starColor);
       }
     }
+
+    // After drawing nodes / previews:
+    if (!(activeAbility === 'bridge1way' && bridgeFirstNode !== null && hoveredNodeId !== null)) {
+      hideBridgeCostDisplay();
+    }
+
     
     // Draw bridge preview using actual edge drawing logic
     if (bridgeFirstNode !== null && activeAbility === 'bridge1way') {
@@ -1137,6 +1247,9 @@
         
         // Draw the preview edge using the same logic as real edges
         drawBridgePreview(previewEdge, firstNode, mouseNode);
+        
+        // Update cost display
+        updateBridgeCostDisplay(firstNode, mouseNode);
       }
     }
     
@@ -1286,37 +1399,39 @@
         if (bridgeFirstNode === null) {
           // Start bridge building - first node must be owned by player
           if (node.owner === myPlayerId) {
-            if (goldValue >= 3) {
-              bridgeFirstNode = nodeId;
-              return true; // Handled
-            } else {
-              // Not enough gold for bridge building
-              showErrorMessage("Not enough gold! Need 3 gold for new pipe.");
-              return true; // Handled
-            }
+            bridgeFirstNode = nodeId;
+            return true; // Handled
           }
         } else if (bridgeFirstNode !== nodeId) {
           // Complete bridge building - second node can be any node
-          if (goldValue >= 3 && ws && ws.readyState === WebSocket.OPEN) {
+          const firstNode = nodes.get(bridgeFirstNode);
+          const cost = calculateBridgeCost(firstNode, node);
+          
+          if (goldValue >= cost && ws && ws.readyState === WebSocket.OPEN) {
             
             const token = localStorage.getItem('token');
             ws.send(JSON.stringify({
               type: 'buildBridge',
               fromNodeId: bridgeFirstNode,
               toNodeId: nodeId,
-              cost: 3,
+              cost: cost,
               token: token
             }));
             // Don't reset bridge building state here - wait for server response
             return true; // Handled
-          } else if (goldValue < 3) {
-            // Not enough gold to complete bridge building
-            showErrorMessage("Not enough gold! Need 3 gold for new pipe.");
+          } else if (goldValue < cost) {
+            // Not enough gold to complete bridge building - don't show error, just ignore click
+            // The visual feedback (red highlight) already shows this
             return true; // Handled
           }
         } else {
           // Clicked same node, cancel selection
           bridgeFirstNode = null;
+          // Remove cost display
+          if (bridgeCostDisplay) {
+            app.stage.removeChild(bridgeCostDisplay);
+            bridgeCostDisplay = null;
+          }
           return true; // Handled
         }
       }
@@ -1326,6 +1441,11 @@
     // Cancel bridge building
     activeAbility = null;
     bridgeFirstNode = null;
+    // Remove cost display
+    if (bridgeCostDisplay && app && app.stage) {
+      app.stage.removeChild(bridgeCostDisplay);
+      bridgeCostDisplay = null;
+    }
     return true; // Handled
   }
 
@@ -1518,10 +1638,15 @@
         break;
       case 'escape':
         // Cancel active ability
-        if (activeAbility) {
-          activeAbility = null;
-          bridgeFirstNode = null;
-        }
+    if (activeAbility) {
+      activeAbility = null;
+      bridgeFirstNode = null;
+      // Remove cost display
+      if (bridgeCostDisplay && app && app.stage) {
+        app.stage.removeChild(bridgeCostDisplay);
+        bridgeCostDisplay = null;
+      }
+    }
         break;
     }
   });
@@ -1610,6 +1735,11 @@
       // Deactivate
       activeAbility = null;
       bridgeFirstNode = null;
+      // Remove cost display
+      if (bridgeCostDisplay && app && app.stage) {
+        app.stage.removeChild(bridgeCostDisplay);
+        bridgeCostDisplay = null;
+      }
     } else if (abilityName === 'bridge1way') {
       // Activate bridge building
       activeAbility = abilityName;

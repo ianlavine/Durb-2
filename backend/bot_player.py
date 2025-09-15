@@ -281,27 +281,45 @@ class BotPlayer:
                     
                     # Check if this would be a good expansion opportunity
                     if self._is_good_bridge_target(target_node_id):
-                        cost = 1.0  # Bridge cost
-                        if self.game_engine.state.player_gold.get(self.player_id, 0) >= cost:
-                            # Try to build the bridge
-                            success, new_edge, error_msg = self.game_engine.handle_build_bridge(
-                                self.bot_token, owned_node_id, target_node_id, cost
-                            )
-                            if success and new_edge:
-                                # Send frontend response
-                                await self._send_frontend_response({
-                                    "type": "newEdge",
-                                    "edge": {
-                                        "id": new_edge.id,
-                                        "source": new_edge.source_node_id,
-                                        "target": new_edge.target_node_id,
-                                        "bidirectional": False,
-                                        "forward": True,
-                                        "on": new_edge.on,
-                                        "flowing": new_edge.flowing
-                                    }
-                                })
-                                return True
+                        # Calculate actual bridge cost based on distance
+                        owned_node = self.game_engine.state.nodes.get(owned_node_id)
+                        target_node = self.game_engine.state.nodes.get(target_node_id)
+                        if owned_node and target_node:
+                            # Calculate distance between nodes
+                            dx = target_node.x - owned_node.x
+                            dy = target_node.y - owned_node.y
+                            distance = (dx * dx + dy * dy) ** 0.5
+                            
+                            # If nodes are the same, cost is 0
+                            if distance == 0:
+                                cost = 0
+                            else:
+                                # Base cost of 1 gold + 0.09 gold per unit distance
+                                # This means a bridge across the full map (distance ~141) would cost ~13.7 gold
+                                # Corner to corner (distance ~141) should cost around $10
+                                cost = 1 + (distance * 0.09)
+                            
+                            if self.game_engine.state.player_gold.get(self.player_id, 0) >= cost:
+                                # Try to build the bridge
+                                success, new_edge, error_msg = self.game_engine.handle_build_bridge(
+                                    self.bot_token, owned_node_id, target_node_id, cost
+                                )
+                                if success and new_edge:
+                                    # Send frontend response
+                                    await self._send_frontend_response({
+                                        "type": "newEdge",
+                                        "edge": {
+                                            "id": new_edge.id,
+                                            "source": new_edge.source_node_id,
+                                            "target": new_edge.target_node_id,
+                                            "bidirectional": False,
+                                            "forward": True,
+                                            "on": new_edge.on,
+                                            "flowing": new_edge.flowing
+                                        },
+                                        "cost": cost  # Include the cost for frontend animation
+                                    })
+                                    return True
         
         return False
     
