@@ -294,10 +294,11 @@ class BotPlayer:
                             if distance == 0:
                                 cost = 0
                             else:
-                                # Base cost of 1 gold + 0.09 gold per unit distance
-                                # This means a bridge across the full map (distance ~141) would cost ~13.7 gold
-                                # Corner to corner (distance ~141) should cost around $10
-                                cost = 1 + (distance * 0.09)
+                                # Base cost of 1 gold, then scales after distance 10
+                                # Stays at 1 gold for distances 0-10, then adds 0.1 gold per unit beyond 10
+                                # This means a bridge across the full map (distance ~141) would cost ~14.1 gold
+                                # Corner to corner (distance ~141) should cost around $14
+                                cost = round(1 + max(0, (distance - 8) * 0.1))
                             
                             if self.game_engine.state.player_gold.get(self.player_id, 0) >= cost:
                                 # Try to build the bridge

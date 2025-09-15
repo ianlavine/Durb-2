@@ -165,13 +165,14 @@
     // If nodes are the same, cost is 0
     if (distance === 0) return 0;
     
-    // Base cost of 1 gold + 0.09 gold per unit distance
-    // This means a bridge across the full map (distance ~141) would cost ~13.7 gold
-    // Corner to corner (distance ~141) should cost around $10
-    const cost = 1 + (distance * 0.09);
+    // Base cost of 1 gold, then scales after distance 10
+    // Stays at 1 gold for distances 0-10, then adds 0.1 gold per unit beyond 10
+    // This means a bridge across the full map (distance ~141) would cost ~14.1 gold
+    // Corner to corner (distance ~141) should cost around $14
+    const cost = 1 + Math.max(0, (distance - 8) * 0.1);
     
-    // Round to 1 decimal place for display
-    return Math.round(cost * 10) / 10;
+    // Round to whole number for display
+    return Math.round(cost);
   }
 
 // Replace the whole function with this Phaser version:
@@ -192,8 +193,8 @@ function updateBridgeCostDisplay(fromNode, toNode) {
       fontFamily: 'monospace',
       fontSize: '20px',
       fontStyle: 'bold',
-      color: canAfford ? '#00ff00' : '#ff0000',
-      stroke: '#000000',
+      color: canAfford ? '#cd853f' : '#000000', // Use browny gold color when affordable, black when not
+      stroke: canAfford ? '#000000' : '#ffffff', // Black outline when affordable, white outline when unaffordable
       strokeThickness: 3,
     })
     .setOrigin(0.5, 0.5)
@@ -201,7 +202,8 @@ function updateBridgeCostDisplay(fromNode, toNode) {
   } else {
     bridgeCostDisplay.setText(text);
     bridgeCostDisplay.setPosition(sx, sy - 20);
-    bridgeCostDisplay.setColor(canAfford ? '#00ff00' : '#ff0000');
+    bridgeCostDisplay.setColor(canAfford ? '#cd853f' : '#000000'); // Use browny gold color when affordable, black when not
+    bridgeCostDisplay.setStroke(canAfford ? '#000000' : '#ffffff', 3); // Black outline when affordable, white outline when unaffordable
     bridgeCostDisplay.setVisible(true);
   }
 }
@@ -894,8 +896,8 @@ function hideBridgeCostDisplay() {
           const [screenX, screenY] = worldToScreen(midX, midY);
           
           createMoneyIndicator(
-            screenX, 
-            screenY, 
+            midX, 
+            midY, 
             `-$${msg.cost}`, 
             0xcd853f, // browner gold color (peru)
             2000 // 2 seconds
@@ -1173,24 +1175,27 @@ function hideBridgeCostDisplay() {
       
       // Bridge building highlight: selected first node
       if (bridgeFirstNode === id && activeAbility === 'bridge1way') {
-        graphicsNodes.lineStyle(4, 0xffd700, 1); // gold color
+        const playerSecondaryColor = ownerToSecondaryColor(myPlayerId);
+        graphicsNodes.lineStyle(4, playerSecondaryColor, 1); // secondary color
         graphicsNodes.strokeCircle(nx, ny, r + 4);
       }
       
-      // Bridge building hover: show gold highlight for valid nodes
+      // Bridge building hover: show secondary color highlight for valid nodes
       if (hoveredNodeId === id && activeAbility === 'bridge1way') {
         if (bridgeFirstNode === null) {
           // Before selecting first node: highlight owned nodes
           if (n.owner === myPlayerId) {
-            graphicsNodes.lineStyle(3, 0xffd700, 0.8); // gold highlight
+            const playerSecondaryColor = ownerToSecondaryColor(myPlayerId);
+            graphicsNodes.lineStyle(3, playerSecondaryColor, 0.8); // secondary color highlight
             graphicsNodes.strokeCircle(nx, ny, r + 3);
           }
           // AFTER
           } else if (bridgeFirstNode !== id) {
             const firstNode = nodes.get(bridgeFirstNode);
 
-            // gold highlight on the target
-            graphicsNodes.lineStyle(3, 0xffd700, 0.8);
+            // secondary color highlight on the target
+            const playerSecondaryColor = ownerToSecondaryColor(myPlayerId);
+            graphicsNodes.lineStyle(3, playerSecondaryColor, 0.8);
             graphicsNodes.strokeCircle(nx, ny, r + 3);
 
             // show static, live-updating midpoint label
@@ -1246,10 +1251,25 @@ function hideBridgeCostDisplay() {
         };
         
         // Draw the preview edge using the same logic as real edges
-        drawBridgePreview(previewEdge, firstNode, mouseNode);
+        // Use node center if hovering over a node, otherwise use mouse position
+        let previewTargetNode = mouseNode;
+        if (hoveredNodeId !== null && hoveredNodeId !== bridgeFirstNode) {
+          const hoveredNode = nodes.get(hoveredNodeId);
+          if (hoveredNode) {
+            previewTargetNode = hoveredNode;
+          }
+        }
+        drawBridgePreview(previewEdge, firstNode, previewTargetNode);
         
-        // Update cost display
-        updateBridgeCostDisplay(firstNode, mouseNode);
+        // Update cost display - use node center if hovering over a node, otherwise use mouse position
+        let targetNode = mouseNode;
+        if (hoveredNodeId !== null && hoveredNodeId !== bridgeFirstNode) {
+          const hoveredNode = nodes.get(hoveredNodeId);
+          if (hoveredNode) {
+            targetNode = hoveredNode;
+          }
+        }
+        updateBridgeCostDisplay(firstNode, targetNode);
       }
     }
     
@@ -1601,13 +1621,8 @@ function hideBridgeCostDisplay() {
       const node = nodes.get(nodeId);
       if (node && node.owner === myPlayerId) {
         ev.preventDefault(); // Always prevent default when clicking on owned node
-        if (goldValue >= 3) {
-          activeAbility = 'bridge1way';
-          bridgeFirstNode = nodeId;
-        } else {
-          // Not enough gold for bridge building
-          showErrorMessage("Not enough gold! Need 3 gold for new pipe.");
-        }
+        activeAbility = 'bridge1way';
+        bridgeFirstNode = nodeId;
         return;
       }
     }
@@ -1965,7 +1980,12 @@ function hideBridgeCostDisplay() {
     const uy = dy / len;
     const angle = Math.atan2(uy, ux);
 
-    const previewColor = 0xffd700; // gold color for preview
+    // Check if the player can afford this bridge
+    const cost = calculateBridgeCost(from, to);
+    const canAfford = goldValue >= cost;
+    
+    // Use black when unaffordable, secondary color when affordable
+    const previewColor = canAfford ? ownerToSecondaryColor(from.owner) : 0x000000;
 
     // All edges are now one-way: chain of triangles pointing to target
     const triH = 16;
