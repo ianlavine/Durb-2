@@ -34,7 +34,7 @@ class GameEngine:
         """Check if a game is currently active."""
         return self.game_active and self.state is not None and len(self.token_to_player_id) >= 2
     
-    def join_lobby(self, token: Optional[str] = None, auto_expand: bool = False) -> Tuple[str, str]:
+    def join_lobby(self, token: Optional[str] = None, auto_expand: bool = False, speed_level: int = 6) -> Tuple[str, str]:
         """
         Handle a player joining the lobby.
         Returns: (player_token, status) where status is 'waiting' or 'ready'
@@ -48,6 +48,9 @@ class GameEngine:
             # Store auto-expand setting for when game starts
             self.token_to_auto_expand = getattr(self, 'token_to_auto_expand', {})
             self.token_to_auto_expand[player_token] = auto_expand
+            # Store speed level setting for when game starts (first player determines speed)
+            self.token_to_speed_level = getattr(self, 'token_to_speed_level', {})
+            self.token_to_speed_level[player_token] = speed_level
             return player_token, "waiting"
         else:
             # Second player joins - start game
@@ -86,6 +89,11 @@ class GameEngine:
             self.state.player_auto_expand[1] = token_to_auto_expand[player1_token]
         if player2_token in token_to_auto_expand:
             self.state.player_auto_expand[2] = token_to_auto_expand[player2_token]
+        
+        # Apply speed level setting from first player (who determines game speed)
+        token_to_speed_level = getattr(self, 'token_to_speed_level', {})
+        if player1_token in token_to_speed_level:
+            self.state.speed_level = token_to_speed_level[player1_token]
     
     def create_new_game(self) -> Tuple[GraphState, Dict[str, int]]:
         """Create a new single-player game for testing/development."""
@@ -195,6 +203,14 @@ class GameEngine:
                 if self.state.player_auto_expand.get(player_id, False):
                     self.state._auto_expand_from_node(node_id, player_id)
                 
+                # Store the capture event for frontend notification
+                if not hasattr(self.state, 'pending_node_captures'):
+                    self.state.pending_node_captures = []
+                self.state.pending_node_captures.append({
+                    'nodeId': node_id,
+                    'reward': GOLD_REWARD_FOR_CAPTURE
+                })
+                
                 return True
             
             # For all other cases (already picked, node already owned, etc.), 
@@ -284,6 +300,12 @@ class GameEngine:
             
             # Deduct gold
             self.state.player_gold[player_id] = max(0.0, self.state.player_gold[player_id] - cost)
+            
+            # Store the edge reversal event for frontend notification
+            self.state.pending_edge_reversal = {
+                'edgeId': edge_id,
+                'cost': cost
+            }
             
             return True
             

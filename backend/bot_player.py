@@ -351,7 +351,7 @@ class BotGameManager:
         self.human_token: Optional[str] = None
         self.game_active = False
     
-    def start_bot_game(self, human_token: str, difficulty: str = "easy", auto_expand: bool = False) -> Tuple[bool, Optional[str]]:
+    def start_bot_game(self, human_token: str, difficulty: str = "easy", auto_expand: bool = False, speed_level: int = 6) -> Tuple[bool, Optional[str]]:
         """
         Start a new bot vs human game with specified difficulty.
         Returns: (success, error_message)
@@ -381,6 +381,9 @@ class BotGameManager:
             self.game_engine.token_to_color = {human_token: "#ff3333", self.bot_player.bot_token: "#3388ff"}
             self.game_engine.game_active = True
             self.game_active = True
+            
+            # Set speed level for the game
+            self.game_engine.state.speed_level = speed_level
             
             # Apply auto-expand setting for human player
             self.game_engine.state.player_auto_expand[1] = auto_expand

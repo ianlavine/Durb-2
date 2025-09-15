@@ -37,6 +37,21 @@ class NodeClickHandler(BaseMessageHandler):
             return
         
         success = self.game_engine.handle_node_click(token, node_id)
+        
+        # If this was a successful node capture (starting node pick), send the capture message immediately
+        if success and self.game_engine.state and hasattr(self.game_engine.state, 'pending_node_captures') and self.game_engine.state.pending_node_captures:
+            # Send all pending node capture messages
+            for capture_data in self.game_engine.state.pending_node_captures:
+                capture_msg = {
+                    "type": "nodeCaptured",
+                    "nodeId": capture_data['nodeId'],
+                    "reward": capture_data['reward']
+                }
+                await websocket.send(json.dumps(capture_msg))
+            
+            # Clear the pending capture events
+            self.game_engine.state.pending_node_captures = []
+        
         # Success/failure is handled implicitly through game state changes
         # Server will broadcast updated state in next tick
 
@@ -92,7 +107,8 @@ class ReverseEdgeHandler(BaseMessageHandler):
                         "forward": True,
                         "on": edge.on,
                         "flowing": edge.flowing
-                    }
+                    },
+                    "cost": cost  # Include the cost for the frontend
                 }
                 
                 game_clients = server_context.get("game_clients", {})
@@ -150,8 +166,9 @@ class JoinLobbyHandler(BaseMessageHandler):
                     msg: Dict[str, Any], server_context: Dict[str, Any]) -> None:
         token = msg.get("token")
         auto_expand = msg.get("autoExpand", False)
+        speed_level = msg.get("speedLevel", 6)
         
-        player_token, status = self.game_engine.join_lobby(token, auto_expand)
+        player_token, status = self.game_engine.join_lobby(token, auto_expand, speed_level)
         
         if status == "waiting":
             # First player waiting
@@ -229,6 +246,7 @@ class StartBotGameHandler(BaseMessageHandler):
         token = msg.get("token")
         difficulty = msg.get("difficulty", "easy")  # Default to easy if not specified
         auto_expand = msg.get("autoExpand", False)
+        speed_level = msg.get("speedLevel", 6)
         
         # Generate a token for the human player if not provided
         if not token:
@@ -236,7 +254,7 @@ class StartBotGameHandler(BaseMessageHandler):
             token = uuid.uuid4().hex
         
         # Start the bot game with specified difficulty
-        success, error_msg = bot_game_manager.start_bot_game(token, difficulty, auto_expand)
+        success, error_msg = bot_game_manager.start_bot_game(token, difficulty, auto_expand, speed_level)
         
         if not success:
             await websocket.send(json.dumps({
@@ -467,6 +485,31 @@ class ToggleAutoExpandHandler(BaseMessageHandler):
         # No immediate response needed as the setting is broadcast with game state
 
 
+class NodeCaptureHandler(BaseMessageHandler):
+    """Handle node capture notifications."""
+    
+    async def handle(self, websocket: websockets.WebSocketServerProtocol, 
+                    msg: Dict[str, Any], server_context: Dict[str, Any]) -> None:
+        # This handler is called by the server to broadcast node capture events
+        if not self.game_engine.state or not hasattr(self.game_engine.state, 'pending_node_captures'):
+            return
+        
+        if self.game_engine.state.pending_node_captures:
+            game_clients = server_context.get("game_clients", {})
+            
+            # Broadcast all pending node capture events
+            for capture_data in self.game_engine.state.pending_node_captures:
+                capture_msg = {
+                    "type": "nodeCaptured",
+                    "nodeId": capture_data['nodeId'],
+                    "reward": capture_data['reward']
+                }
+                await self._broadcast_to_game_clients(json.dumps(capture_msg), game_clients)
+            
+            # Clear the pending capture events
+            self.game_engine.state.pending_node_captures = []
+
+
 class MessageRouter:
     """Routes messages to appropriate handlers."""
     
@@ -486,6 +529,7 @@ class MessageRouter:
             "destroyNode": DestroyNodeHandler(game_engine),
             "quitGame": QuitGameHandler(game_engine),
             "toggleAutoExpand": ToggleAutoExpandHandler(game_engine),
+            "nodeCaptured": NodeCaptureHandler(game_engine),
         }
     
     async def route_message(self, websocket: websockets.WebSocketServerProtocol, 
@@ -519,7 +563,19 @@ class MessageRouter:
         if msg_type == "clickNode":
             node_id = msg.get("nodeId")
             if node_id is not None:
-                bot_game_engine.handle_node_click(token, node_id)
+                success = bot_game_engine.handle_node_click(token, node_id)
+                # If this was a successful node capture (starting node pick), send the capture message immediately
+                if success and bot_game_engine.state and hasattr(bot_game_engine.state, 'pending_node_captures') and bot_game_engine.state.pending_node_captures:
+                    for capture_data in bot_game_engine.state.pending_node_captures:
+                        capture_msg = {
+                            "type": "nodeCaptured",
+                            "nodeId": capture_data['nodeId'],
+                            "reward": capture_data['reward']
+                        }
+                        await websocket.send(json.dumps(capture_msg))
+                    
+                    # Clear the pending capture events
+                    bot_game_engine.state.pending_node_captures = []
         
         elif msg_type == "clickEdge":
             edge_id = msg.get("edgeId")
@@ -550,7 +606,8 @@ class MessageRouter:
                                 "forward": True,
                                 "on": edge.on,
                                 "flowing": edge.flowing
-                            }
+                            },
+                            "cost": cost  # Include the cost for the frontend
                         }
                         await websocket.send(json.dumps(edge_data))
         

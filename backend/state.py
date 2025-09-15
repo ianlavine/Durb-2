@@ -13,10 +13,15 @@ NODE_MAX_JUICE: float = 120.0
 # Flow model
 PRODUCTION_RATE_PER_NODE: float = 0.15  # owned nodes generate this per tick (constant growth)
 TRANSFER_PERCENT_PER_TICK: float = 0.01  # fraction of source juice transferred per tick (split across outgoing edges)
+INTAKE_BONUS_DIVISOR: float = 100.0  # divisor for intake bonus calculation in transfer rate
 
 # Gold economy - no limit, no natural generation
 GOLD_REWARD_FOR_CAPTURE: float = 2.0  # gold awarded when capturing unowned nodes
 STARTING_GOLD: float = 3.0  # gold each player starts with
+
+# Unowned node sizing
+UNOWNED_NODE_BASE_SIZE: float = 2.0  # base juice amount for unowned nodes (back to original)
+UNOWNED_NODE_BASE_JUICE: float = 2.0  # base juice amount for unowned nodes
 
 
 class GraphState:
@@ -47,6 +52,9 @@ class GraphState:
         # Auto-expand settings per player
         self.player_auto_expand: Dict[int, bool] = {}
         
+        # Game speed level (1-10, default 6 for 1x speed)
+        self.speed_level: int = 6
+        
 
     def add_player(self, player: Player) -> None:
         self.players[player.id] = player
@@ -55,6 +63,29 @@ class GraphState:
         self.players_who_picked[player.id] = False
         # Initialize auto-expand setting (default: off)
         self.player_auto_expand[player.id] = False
+
+    def get_speed_multiplier(self) -> float:
+        """Get speed multiplier based on speed level (1-10)."""
+        speed_multipliers = [0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.25, 1.5, 1.75, 2.0]
+        # Speed levels are 1-10, but array is 0-9 indexed
+        level_index = max(0, min(9, self.speed_level - 1))
+        return speed_multipliers[level_index]
+
+    def get_scaled_production_rate(self) -> float:
+        """Get production rate scaled by speed level."""
+        speed_multiplier = self.get_speed_multiplier()
+        return PRODUCTION_RATE_PER_NODE * speed_multiplier
+
+    def get_scaled_transfer_percent(self) -> float:
+        """Get transfer percentage scaled by speed level."""
+        speed_multiplier = self.get_speed_multiplier()
+        return TRANSFER_PERCENT_PER_TICK * speed_multiplier
+
+    def get_scaled_intake_divisor(self) -> float:
+        """Get intake bonus divisor scaled by speed level."""
+        speed_multiplier = self.get_speed_multiplier()
+        return INTAKE_BONUS_DIVISOR / speed_multiplier
+
 
 
     def check_capital_victory(self) -> Optional[int]:
@@ -315,9 +346,10 @@ class GraphState:
         intake_tracking: Dict[int, float] = {nid: 0.0 for nid in self.nodes.keys()}
 
         # Production for owned nodes (capitals get double rate)
+        scaled_production_rate = self.get_scaled_production_rate()
         for node in self.nodes.values():
             if node.owner is not None:
-                base_rate = PRODUCTION_RATE_PER_NODE
+                base_rate = scaled_production_rate
                 if node.id in self.capital_nodes:
                     base_rate *= 2.0  # Double growth for capitals
                 size_delta[node.id] += base_rate
@@ -340,9 +372,9 @@ class GraphState:
             
             # Calculate variable transfer percentage based on cur_intake
             # Base percentage is 1%, plus bonus based on intake
-            # X = cur_intake / 100, so output = (1 + cur_intake/100)%
-            base_percentage = TRANSFER_PERCENT_PER_TICK  # 0.01 (1%)
-            intake_bonus = src_node.cur_intake / 100.0  # Convert intake to percentage bonus
+            # X = cur_intake / INTAKE_BONUS_DIVISOR, so output = (1 + cur_intake/INTAKE_BONUS_DIVISOR)%
+            base_percentage = self.get_scaled_transfer_percent()  # Scaled transfer percentage
+            intake_bonus = src_node.cur_intake / self.get_scaled_intake_divisor()  # Scaled intake bonus
             variable_percentage = base_percentage + intake_bonus
             
             total_transfer = src_node.juice * variable_percentage
@@ -396,6 +428,13 @@ class GraphState:
                 if node.owner is None:
                     # Award gold for capturing unowned node
                     self.player_gold[new_owner] = self.player_gold.get(new_owner, 0.0) + GOLD_REWARD_FOR_CAPTURE
+                    # Store the capture event for frontend notification
+                    if not hasattr(self, 'pending_node_captures'):
+                        self.pending_node_captures = []
+                    self.pending_node_captures.append({
+                        'nodeId': nid,
+                        'reward': GOLD_REWARD_FOR_CAPTURE
+                    })
                 node.owner = new_owner
 
         # All edges are now one-way only - no auto-adjustment needed

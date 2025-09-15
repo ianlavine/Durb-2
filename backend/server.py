@@ -124,6 +124,11 @@ class WebSocketServer:
                 # Simulate game tick
                 winner_id = self.game_engine.simulate_tick(TICK_INTERVAL_SECONDS)
                 
+                # Check for node capture events and broadcast them
+                if self.game_engine.state and hasattr(self.game_engine.state, 'pending_node_captures') and self.game_engine.state.pending_node_captures:
+                    capture_handler = self.message_router.handlers["nodeCaptured"]
+                    await capture_handler.handle(None, {}, self.server_context)
+                
                 # Always broadcast the current game state first (including the final state)
                 if self.game_engine.state:
                     msg = json.dumps(self.game_engine.state.to_tick_message(time.time()))
@@ -151,6 +156,19 @@ class WebSocketServer:
                 
                 # Simulate game tick
                 winner_id = bot_game_engine.simulate_tick(TICK_INTERVAL_SECONDS)
+                
+                # Check for node capture events and broadcast them
+                if bot_game_engine.state and hasattr(bot_game_engine.state, 'pending_node_captures') and bot_game_engine.state.pending_node_captures:
+                    for capture_data in bot_game_engine.state.pending_node_captures:
+                        capture_msg = {
+                            "type": "nodeCaptured",
+                            "nodeId": capture_data['nodeId'],
+                            "reward": capture_data['reward']
+                        }
+                        await self._broadcast(json.dumps(capture_msg))
+                    
+                    # Clear the pending capture events
+                    bot_game_engine.state.pending_node_captures = []
                 
                 # Broadcast the current game state
                 if bot_game_engine.state:

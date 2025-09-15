@@ -134,6 +134,14 @@
         display: none; 
       }
       
+      #speedDisplay { 
+        position: absolute; 
+        bottom: 80px; 
+        left: 20px; 
+        z-index: 10; 
+        display: none; 
+      }
+      
       .toggle-container {
         display: flex;
         align-items: center;
@@ -178,6 +186,70 @@
       
       .toggle-switch.enabled .toggle-slider {
         transform: translateX(28px);
+      }
+      
+      /* Home screen speed slider styling */
+      .home-speed-container {
+        position: absolute;
+        bottom: 80px;
+        left: 20px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        z-index: 10;
+      }
+      
+      .speed-label {
+        color: #ffffff;
+        font-family: monospace;
+        font-size: 18px;
+        font-weight: bold;
+        user-select: none;
+        min-width: 60px;
+      }
+      
+      .speed-range {
+        width: 120px;
+        height: 6px;
+        background: #666;
+        border-radius: 3px;
+        outline: none;
+        cursor: pointer;
+        -webkit-appearance: none;
+        appearance: none;
+        background: linear-gradient(to right, #00cc66 0%, #66ff99 100%);
+      }
+      
+      .speed-range::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 20px;
+        height: 20px;
+        background: #ffffff;
+        border-radius: 50%;
+        cursor: pointer;
+        border: 2px solid #00aa55;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+      }
+      
+      .speed-range::-moz-range-thumb {
+        width: 20px;
+        height: 20px;
+        background: #ffffff;
+        border-radius: 50%;
+        cursor: pointer;
+        border: 2px solid #00aa55;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+      }
+      
+      .speed-value {
+        color: #ffffff;
+        font-family: monospace;
+        font-size: 18px;
+        font-weight: bold;
+        user-select: none;
+        min-width: 20px;
+        text-align: center;
       }
       
       /* Home screen toggle styling - match in-game positioning and font size */
@@ -247,6 +319,13 @@
             <button class="dropdown-option" data-difficulty="hard">Hard</button>
           </div>
         </div>
+        <!-- Speed slider for home screen -->
+        <div id="homeSpeedSlider" class="home-speed-container">
+          <span class="speed-label">Speed</span>
+          <input type="range" id="homeSpeedRange" min="1" max="10" value="6" class="speed-range">
+          <span id="homeSpeedValue" class="speed-value">1x</span>
+        </div>
+        
         <!-- Auto-expand toggle for home screen -->
         <div id="homeAutoExpandToggle" class="home-toggle-container">
           <span class="toggle-label">Auto-Expand</span>
@@ -278,6 +357,14 @@
         <div class="toggle-switch">
           <div class="toggle-slider"></div>
         </div>
+      </div>
+    </div>
+    
+    <!-- Speed display -->
+    <div id="speedDisplay">
+      <div class="toggle-container">
+        <span class="toggle-label">Speed</span>
+        <span id="speedValue" class="speed-value">6x</span>
       </div>
     </div>
     

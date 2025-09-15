@@ -71,11 +71,43 @@
   let myAutoExpand = false; // my player's auto-expand setting
   let persistentAutoExpand = false; // persistent setting stored in localStorage
   
+  // Speed system
+  let speedSlider = null;
+  let speedRange = null;
+  let speedValue = null;
+  let homeSpeedSlider = null;
+  let homeSpeedRange = null;
+  let homeSpeedValue = null;
+  let mySpeedLevel = 6; // my player's speed level setting
+  let persistentSpeedLevel = 6; // persistent setting stored in localStorage
+  
+  // Money transparency system
+  let moneyIndicators = []; // Array of {x, y, text, color, startTime, duration}
+
+  let sceneRef = null;
+  
   
   // Animation system for juice flow
   let animationTime = 0; // Global animation timer
   const JUICE_ANIMATION_SPEED = 4.0; // Speed of juice animation (higher = faster)
   const JUICE_ANIMATION_PHASES = 3; // Number of distinct color phases for juice animation
+  
+  function calculateNodeRadius(node, baseScale) {
+    if (node.owner === null) {
+      // Unowned nodes: use original logic but with better shrinking and double the radius
+      const juiceVal = (node.juice != null ? node.juice : (node.size || 0));
+      
+      // Use the original square root logic but with a much smaller minimum
+      // This allows nodes to shrink to almost nothing before dying
+      // Double the radius to make unowned nodes twice as big
+      const radius = Math.max(0.2, 1.0 * Math.sqrt(Math.max(0, juiceVal))) * baseScale;
+      
+      return radius;
+    } else {
+      // Owned nodes: use original logic
+      return Math.max(0.3, 0.5 * Math.sqrt(Math.max(0, node.size ?? node.juice ?? 0.3))) * baseScale;
+    }
+  }
 
   function preload() {}
 
@@ -91,6 +123,107 @@
     localStorage.setItem('autoExpand', value.toString());
   }
 
+  // Speed persistence functions
+  function loadPersistentSpeedLevel() {
+    const saved = localStorage.getItem('speedLevel');
+    persistentSpeedLevel = saved ? parseInt(saved) : 6;
+    return persistentSpeedLevel;
+  }
+
+  function savePersistentSpeedLevel(value) {
+    persistentSpeedLevel = value;
+    localStorage.setItem('speedLevel', value.toString());
+  }
+
+  function getSpeedMultiplier(level) {
+    const speedMultipliers = [0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.25, 1.5, 1.75, 2.0];
+    const levelIndex = Math.max(0, Math.min(9, level - 1));
+    return speedMultipliers[levelIndex];
+  }
+
+  function formatSpeedDisplay(level) {
+    const multiplier = getSpeedMultiplier(level);
+    return multiplier === 1.0 ? '1x' : `${multiplier}x`;
+  }
+
+  // Helper: convert 0xRRGGBB -> "#rrggbb"
+  function toCssColor(hex) {
+    if (typeof hex === 'string') return hex;
+    return '#' + (hex >>> 0).toString(16).padStart(6, '0');
+  }
+
+  // Money indicator functions
+  // Create an animated text indicator that rises & fades out
+  function createMoneyIndicator(x, y, text, color, duration = 2000) {
+    const indicator = {
+      x,
+      y,
+      text,
+      color,
+      startTime: Date.now(),
+      duration,
+      textObj: null
+    };
+
+    const [sx, sy] = worldToScreen(x, y);
+    if (sceneRef) {
+      indicator.textObj = sceneRef.add.text(sx, sy, text, {
+        fontFamily: 'monospace',
+        fontSize: '20px',
+        fontStyle: 'bold',
+        color: toCssColor(color),
+        stroke: '#000000',
+        strokeThickness: 3
+      })
+      .setOrigin(0.5, 0.5)
+      .setDepth(1000)
+      .setAlpha(1);
+
+      indicator.textObj.setShadow(2, 2, '#000000', 4, false, true);
+    }
+
+    moneyIndicators.push(indicator);
+  }
+
+  // Update positions/opacity each frame, and clean up expired indicators
+  function updateMoneyIndicators() {
+    const now = Date.now();
+    moneyIndicators = moneyIndicators.filter(indicator => {
+      const elapsed = now - indicator.startTime;
+      const progress = elapsed / indicator.duration;
+
+      if (progress >= 1) {
+        if (indicator.textObj) indicator.textObj.destroy();
+        return false;
+      }
+
+      // Rise & fade
+      const alpha = 1 - progress;
+      const offsetY = progress * 30;
+      const [sx, sy] = worldToScreen(indicator.x, indicator.y - offsetY);
+
+      if (indicator.textObj) {
+        indicator.textObj.setPosition(sx, sy);
+        indicator.textObj.setAlpha(alpha);
+        indicator.textObj.setVisible(true);
+      }
+      return true;
+    });
+  }
+
+  // Called from redrawStatic(); now just toggles visibility if menu is open
+  function drawMoneyIndicators() {
+    const menuVisible = !document.getElementById('menu')?.classList.contains('hidden');
+    moneyIndicators.forEach(ind => {
+      if (ind.textObj) ind.textObj.setVisible(!menuVisible);
+    });
+  }
+
+  function clearMoneyIndicators() {
+    moneyIndicators.forEach(ind => ind.textObj && ind.textObj.destroy());
+    moneyIndicators = [];
+  }
+
   function updateHomeAutoExpandToggle() {
     if (!homeAutoExpandToggle) return;
     
@@ -104,13 +237,23 @@
     }
   }
 
+  function updateHomeSpeedSlider() {
+    if (!homeSpeedRange || !homeSpeedValue) return;
+    
+    homeSpeedRange.value = persistentSpeedLevel;
+    homeSpeedValue.textContent = persistentSpeedLevel;
+    mySpeedLevel = persistentSpeedLevel;
+  }
+
   function create() {
+    sceneRef = this;
     graphicsEdges = this.add.graphics();
     graphicsNodes = this.add.graphics();
     statusText = this.add.text(10, 10, 'Connect to start a game', { font: '16px monospace', color: '#cccccc' });
 
-    // Load persistent auto-expand setting
+    // Load persistent settings
     loadPersistentAutoExpand();
+    loadPersistentSpeedLevel();
 
     tryConnectWS();
     const menu = document.getElementById('menu');
@@ -130,7 +273,8 @@
           }
           ws.send(JSON.stringify({ 
             type: 'joinLobby',
-            autoExpand: persistentAutoExpand 
+            autoExpand: persistentAutoExpand,
+            speedLevel: persistentSpeedLevel
           }));
         }
       });
@@ -162,9 +306,10 @@
             }
             difficultyDropdown.style.display = 'none'; // Hide dropdown
             ws.send(JSON.stringify({ 
-              type: 'startBotGame', 
+              type: 'startBotGame',
               difficulty: selectedDifficulty,
-              autoExpand: persistentAutoExpand
+              autoExpand: persistentAutoExpand,
+              speedLevel: persistentSpeedLevel
             }));
           }
         });
@@ -208,8 +353,10 @@
         if (progressBar) progressBar.style.display = 'none';
         // Hide timer when returning to menu
         if (timerDisplay) timerDisplay.style.display = 'none';
-        // Hide auto-expand toggle when returning to menu
-        if (autoExpandToggle) autoExpandToggle.style.display = 'none';
+      // Hide auto-expand toggle when returning to menu
+      if (autoExpandToggle) autoExpandToggle.style.display = 'none';
+      // Hide speed display when returning to menu
+      if (speedDisplay) speedDisplay.style.display = 'none';
         // Show button container and reset dropdown
         const buttonContainer = document.querySelector('.button-container');
         const difficultyDropdown = document.getElementById('difficultyDropdown');
@@ -227,6 +374,8 @@
         activeAbility = null;
         bridgeFirstNode = null;
         
+        // Clean up money indicators
+        clearMoneyIndicators();
         
         redrawStatic();
       }
@@ -289,8 +438,12 @@
     // Initialize timer display
     timerDisplay = document.getElementById('timerDisplay');
     
-    // Initialize auto-expand toggle
-    autoExpandToggle = document.getElementById('autoExpandToggle');
+
+  // Initialize auto-expand toggle
+  autoExpandToggle = document.getElementById('autoExpandToggle');
+  
+  // Initialize speed display
+  speedDisplay = document.getElementById('speedDisplay');
     if (autoExpandToggle) {
       const toggleSwitch = autoExpandToggle.querySelector('.toggle-switch');
       if (toggleSwitch) {
@@ -301,6 +454,24 @@
           }
         });
       }
+    }
+
+    // Initialize home screen speed slider
+    homeSpeedSlider = document.getElementById('homeSpeedSlider');
+    homeSpeedRange = document.getElementById('homeSpeedRange');
+    homeSpeedValue = document.getElementById('homeSpeedValue');
+    if (homeSpeedRange && homeSpeedValue) {
+      // Initialize with persistent value
+      homeSpeedRange.value = persistentSpeedLevel;
+      homeSpeedValue.textContent = formatSpeedDisplay(persistentSpeedLevel);
+      mySpeedLevel = persistentSpeedLevel;
+      
+      homeSpeedRange.addEventListener('input', () => {
+        const newSpeed = parseInt(homeSpeedRange.value);
+        homeSpeedValue.textContent = formatSpeedDisplay(newSpeed);
+        mySpeedLevel = newSpeed;
+        savePersistentSpeedLevel(newSpeed);
+      });
     }
 
     // Initialize home screen auto-expand toggle
@@ -338,6 +509,9 @@
     // Update animation timer for juice flow
     animationTime += 1/60; // Assuming 60 FPS, increment by frame time
     
+    // Update money indicators
+    updateMoneyIndicators();
+    
     // Update game timer
     const remainingTime = updateTimer();
     
@@ -347,7 +521,7 @@
       // The backend will handle the actual game end logic
     }
     
-    // Redraw if there are any flowing edges (for animation)
+    // Redraw if there are any flowing edges (for animation) or money indicators
     let hasFlowingEdges = false;
     for (const [id, edge] of edges.entries()) {
       if (edge.flowing) {
@@ -356,7 +530,7 @@
       }
     }
     
-    if (hasFlowingEdges) {
+    if (hasFlowingEdges || moneyIndicators.length > 0) {
       redrawStatic();
     }
   }
@@ -391,6 +565,7 @@
       else if (msg.type === 'capitalError') handleCapitalError(msg);
       else if (msg.type === 'nodeDestroyed') handleNodeDestroyed(msg);
       else if (msg.type === 'destroyError') handleDestroyError(msg);
+      else if (msg.type === 'nodeCaptured') handleNodeCaptured(msg);
     };
   }
 
@@ -483,6 +658,7 @@
     updateGoldBar();
     setProgressBarColors(); // Set colors based on actual player colors
     updateProgressBar();
+    updateSpeedDisplay(); // Update speed display
     
     // Show progress bar when game starts
     if (progressBar) {
@@ -516,6 +692,8 @@
     for (const b of buttons) {
       if (b.textContent === 'Forfeit') b.textContent = 'Quit';
     }
+    // Clean up money indicators when game ends
+    clearMoneyIndicators();
     // Do not clear board; leave last state visible (stale, no updates)
     redrawStatic();
     // Ensure menu elements are ready for return
@@ -617,6 +795,7 @@
     updateGoldBar();
     setProgressBarColors(); // Ensure colors are up to date
     updateProgressBar();
+    updateSpeedDisplay(); // Update speed display
     redrawStatic();
   }
 
@@ -660,6 +839,21 @@
         } else if (!existingEdge.flowing) {
           existingEdge.flowStartTime = null;
         }
+        
+        // Show -$1 cost indicator near the mouse position (but offset to the side)
+        if (msg.cost) {
+          // Position the indicator much closer to the mouse
+          const offsetX = 5; // much smaller offset to the right of mouse
+          const offsetY = -5; // much smaller offset upward from mouse
+          createMoneyIndicator(
+            mouseWorldX + offsetX, 
+            mouseWorldY + offsetY, 
+            `-$${msg.cost}`, 
+            0xcd853f, // browner gold color (peru)
+            2000 // 2 seconds
+          );
+        }
+        
         redrawStatic();
       }
     }
@@ -743,6 +937,25 @@
     showErrorMessage(msg.message || "Can't destroy this node!");
   }
 
+  function handleNodeCaptured(msg) {
+    // Show $2 reward indicator when a neutral node is captured
+    if (msg.nodeId && msg.reward) {
+      const node = nodes.get(msg.nodeId);
+      if (node) {
+        // Position the indicator much closer to the node - just slightly above and to the right
+        const offsetX = 2; // much smaller offset to the right
+        const offsetY = -2; // much smaller offset upward
+        createMoneyIndicator(
+          node.x + offsetX, 
+          node.y + offsetY, 
+          `+$${msg.reward}`, 
+          0xffd700, // golden color
+          2000 // 2 seconds
+        );
+      }
+    }
+  }
+
   function showErrorMessage(message) {
     // Create or update error message element
     let errorMsg = document.getElementById('errorMessage');
@@ -793,6 +1006,8 @@
       if (timerDisplay) timerDisplay.style.display = 'none';
       // Hide auto-expand toggle when menu is visible
       if (autoExpandToggle) autoExpandToggle.style.display = 'none';
+      // Hide speed display when menu is visible
+      if (speedDisplay) speedDisplay.style.display = 'none';
       return; // Do not draw game under menu
     }
     
@@ -812,6 +1027,10 @@
     if (autoExpandToggle && nodes.size > 0) {
       autoExpandToggle.style.display = 'block';
     }
+    // Show speed display when graph is being drawn and we have nodes/game data
+    if (speedDisplay && nodes.size > 0) {
+      speedDisplay.style.display = 'block';
+    }
     for (const [id, e] of edges.entries()) {
       const s = nodes.get(e.source);
       const t = nodes.get(e.target);
@@ -825,7 +1044,8 @@
       const color = ownerToColor(n.owner);
       graphicsNodes.fillStyle(color, 1);
       const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
-      const radius = Math.max(0.3, 0.5 * Math.sqrt(Math.max(0, n.size ?? n.juice ?? 0.3))) * baseScale;
+      
+      const radius = calculateNodeRadius(n, baseScale);
       const r = Math.max(1, radius);
       graphicsNodes.fillCircle(nx, ny, r);
       
@@ -919,6 +1139,9 @@
         drawBridgePreview(previewEdge, firstNode, mouseNode);
       }
     }
+    
+    // Draw money indicators
+    drawMoneyIndicators();
   }
 
   function computeTransform(viewW, viewH) {
@@ -1525,6 +1748,16 @@
     }
   }
 
+  function updateSpeedDisplay() {
+    if (!speedDisplay) return;
+    
+    const speedValueElement = speedDisplay.querySelector('#speedValue');
+    if (speedValueElement) {
+      const speedText = formatSpeedDisplay(mySpeedLevel);
+      speedValueElement.textContent = speedText;
+    }
+  }
+
 
   function pickNearestNode(wx, wy, maxDist) {
     let bestId = null;
@@ -1581,8 +1814,8 @@
     
     // Offset start/end by node radius so edges don't overlap nodes visually
     const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
-    const fromR = Math.max(1, (0.5 * Math.sqrt(Math.max(0, from.juice ?? from.size ?? 0.3))) * baseScale) + 1;
-    const toR = Math.max(1, (0.5 * Math.sqrt(Math.max(0, to.juice ?? to.size ?? 0.3))) * baseScale) + 1;
+    const fromR = Math.max(1, calculateNodeRadius(from, baseScale)) + 1;
+    const toR = Math.max(1, calculateNodeRadius(to, baseScale)) + 1;
     const [sx0, sy0] = worldToScreen(from.x, from.y);
     const [tx0, ty0] = worldToScreen(to.x, to.y);
     const dx0 = tx0 - sx0;
@@ -1665,8 +1898,8 @@
     
     // Offset start/end by node radius so edges don't overlap nodes visually
     const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
-    const fromR = Math.max(1, (0.5 * Math.sqrt(Math.max(0, from.juice ?? from.size ?? 0.3))) * baseScale) + 1;
-    const toR = Math.max(1, (0.5 * Math.sqrt(Math.max(0, to.juice ?? to.size ?? 0.3))) * baseScale) + 1;
+    const fromR = Math.max(1, calculateNodeRadius(from, baseScale)) + 1;
+    const toR = Math.max(1, calculateNodeRadius(to, baseScale)) + 1;
     const [sx0, sy0] = worldToScreen(from.x, from.y);
     const [tx0, ty0] = worldToScreen(to.x, to.y);
     const dx0 = tx0 - sx0;
