@@ -169,7 +169,7 @@
     // Stays at 1 gold for distances 0-10, then adds 0.1 gold per unit beyond 10
     // This means a bridge across the full map (distance ~141) would cost ~14.1 gold
     // Corner to corner (distance ~141) should cost around $14
-    const cost = 1 + Math.max(0, (distance - 8) * 0.1);
+    const cost = 1 + Math.max(0, (distance - 4) * 0.15);
     
     // Round to whole number for display
     return Math.round(cost);

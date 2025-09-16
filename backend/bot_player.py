@@ -22,6 +22,9 @@ class BotPlayer:
         self.has_acted = False
         self.last_action_time = 0.0
         self.action_cooldown = 2.0  # Minimum seconds between actions
+        self.last_bridge_time = 0.0
+        self.bridge_cooldown = 8.0  # Extra delay between bridge builds
+        self.bridge_gold_reserve = 1.0  # Keep a small gold buffer when bridging
         self.websocket = None  # Will be set by the bot game manager
     
     def join_game(self, game_engine: GameEngine) -> None:
@@ -68,12 +71,20 @@ class BotPlayer:
         
         # Game is in playing phase - make moves based on difficulty
         if self.difficulty == "easy":
-            # Easy bot: only auto-expand (handled automatically)
-            return False
+            success = await self._make_medium_move()
+            if success:
+                self.last_action_time = current_time
+            return success
         elif self.difficulty == "medium":
-            return await self._make_medium_move()
+            success = await self._make_medium_plus_bridge_move()
+            if success:
+                self.last_action_time = current_time
+            return success
         elif self.difficulty == "hard":
-            return await self._make_hard_move()
+            success = await self._make_hard_move()
+            if success:
+                self.last_action_time = current_time
+            return success
         
         return False
     
@@ -179,17 +190,25 @@ class BotPlayer:
         
         return False
     
-    async def _make_hard_move(self) -> bool:
-        """
-        Hard bot strategy: medium strategy + bridge building for expansion.
-        Returns True if a move was made.
-        """
-        # First try medium strategy
+    async def _make_medium_plus_bridge_move(self) -> bool:
+        """Medium strategy plus opportunistic bridge building."""
         if await self._make_medium_move():
             return True
-        
-        # Then try bridge building for expansion
+
         if await self._try_bridge_building():
+            return True
+
+        return False
+
+    async def _make_hard_move(self) -> bool:
+        """
+        Hard bot strategy: medium+bridge plan plus targeted offensive bridges.
+        Returns True if a move was made.
+        """
+        if await self._make_medium_plus_bridge_move():
+            return True
+        
+        if await self._try_offensive_bridge_building():
             return True
         
         return False
@@ -263,11 +282,26 @@ class BotPlayer:
         
         return False
     
+    def _calculate_bridge_cost(self, distance: float) -> int:
+        """Calculate the gold cost for building a bridge based on distance."""
+        if distance <= 0:
+            return 0
+        # Base cost of 1 gold, ramping up faster (0.15 gold per unit beyond distance 4)
+        return round(1 + max(0.0, (distance - 4) * 0.15))
+
     async def _try_bridge_building(self) -> bool:
         """Try to build bridges for expansion opportunities."""
         if not self.game_engine or not self.game_engine.state:
             return False
-        
+
+        current_time = time.time()
+        if current_time - self.last_bridge_time < self.bridge_cooldown:
+            return False
+
+        available_gold = self.game_engine.state.player_gold.get(self.player_id, 0)
+        if available_gold <= self.bridge_gold_reserve:
+            return False
+
         # Find good bridge building opportunities
         for owned_node_id, owned_node in self.game_engine.state.nodes.items():
             if owned_node.owner != self.player_id:
@@ -292,36 +326,129 @@ class BotPlayer:
                             
                             # If nodes are the same, cost is 0
                             if distance == 0:
-                                cost = 0
+                                cost = 0 
                             else:
-                                # Base cost of 1 gold, then scales after distance 10
-                                # Stays at 1 gold for distances 0-10, then adds 0.1 gold per unit beyond 10
-                                # This means a bridge across the full map (distance ~141) would cost ~14.1 gold
-                                # Corner to corner (distance ~141) should cost around $14
-                                cost = round(1 + max(0, (distance - 8) * 0.1))
+                                cost = self._calculate_bridge_cost(distance)
                             
-                            if self.game_engine.state.player_gold.get(self.player_id, 0) >= cost:
-                                # Try to build the bridge
-                                success, new_edge, error_msg = self.game_engine.handle_build_bridge(
-                                    self.bot_token, owned_node_id, target_node_id, cost
-                                )
-                                if success and new_edge:
-                                    # Send frontend response
-                                    await self._send_frontend_response({
-                                        "type": "newEdge",
-                                        "edge": {
-                                            "id": new_edge.id,
-                                            "source": new_edge.source_node_id,
-                                            "target": new_edge.target_node_id,
-                                            "bidirectional": False,
-                                            "forward": True,
-                                            "on": new_edge.on,
-                                            "flowing": new_edge.flowing
-                                        },
-                                        "cost": cost  # Include the cost for frontend animation
-                                    })
-                                    return True
-        
+                            current_gold = self.game_engine.state.player_gold.get(self.player_id, 0)
+                            if current_gold < cost:
+                                continue
+
+                            if current_gold - cost < self.bridge_gold_reserve:
+                                continue
+
+                            # Try to build the bridge
+                            success, new_edge, error_msg = self.game_engine.handle_build_bridge(
+                                self.bot_token, owned_node_id, target_node_id, cost
+                            )
+                            if success and new_edge:
+                                # Send frontend response
+                                await self._send_frontend_response({
+                                    "type": "newEdge",
+                                    "edge": {
+                                        "id": new_edge.id,
+                                        "source": new_edge.source_node_id,
+                                        "target": new_edge.target_node_id,
+                                        "bidirectional": False,
+                                        "forward": True,
+                                        "on": new_edge.on,
+                                        "flowing": new_edge.flowing
+                                    },
+                                    "cost": cost  # Include the cost for frontend animation
+                                })
+                                self.last_bridge_time = current_time
+                                return True
+
+        return False
+
+    async def _try_offensive_bridge_building(self) -> bool:
+        """Bridge to high-value opponent nodes that are hard to defend."""
+        if not self.game_engine or not self.game_engine.state:
+            return False
+
+        current_time = time.time()
+        if current_time - self.last_bridge_time < self.bridge_cooldown:
+            return False
+
+        available_gold = self.game_engine.state.player_gold.get(self.player_id, 0)
+        if available_gold <= self.bridge_gold_reserve:
+            return False
+
+        state = self.game_engine.state
+        enemy_candidates = []
+        for target_node_id, target_node in state.nodes.items():
+            if target_node.owner is None or target_node.owner == self.player_id:
+                continue
+
+            outflow_edges = 0
+            for edge_id in target_node.attached_edge_ids:
+                edge = state.edges.get(edge_id)
+                if not edge:
+                    continue
+                if edge.source_node_id == target_node_id:
+                    outflow_edges += 1
+
+            if outflow_edges == 0:
+                continue
+
+            inflow_intake = max(0.0, target_node.cur_intake)
+            pressure_score = outflow_edges / (1.0 + inflow_intake)
+            if pressure_score < 0.5:
+                continue
+
+            enemy_candidates.append((pressure_score, outflow_edges, inflow_intake, target_node_id))
+
+        if not enemy_candidates:
+            return False
+
+        enemy_candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+
+        for _, _, _, target_node_id in enemy_candidates:
+            target_node = state.nodes.get(target_node_id)
+            if not target_node:
+                continue
+
+            candidate_sources = []
+            for owned_node_id, owned_node in state.nodes.items():
+                if owned_node.owner != self.player_id or owned_node_id == target_node_id:
+                    continue
+                if self._edge_exists_between_nodes(owned_node_id, target_node_id):
+                    continue
+
+                dx = target_node.x - owned_node.x
+                dy = target_node.y - owned_node.y
+                distance = (dx * dx + dy * dy) ** 0.5
+                cost = self._calculate_bridge_cost(distance)
+                candidate_sources.append((cost, distance, owned_node_id))
+
+            candidate_sources.sort(key=lambda item: (item[0], item[1]))
+
+            for cost, distance, owned_node_id in candidate_sources:
+                current_gold = state.player_gold.get(self.player_id, 0)
+                if current_gold < cost or current_gold - cost < self.bridge_gold_reserve:
+                    continue
+
+                success, new_edge, error_msg = self.game_engine.handle_build_bridge(
+                    self.bot_token, owned_node_id, target_node_id, cost
+                )
+                if success and new_edge:
+                    await self._send_frontend_response({
+                        "type": "newEdge",
+                        "edge": {
+                            "id": new_edge.id,
+                            "source": new_edge.source_node_id,
+                            "target": new_edge.target_node_id,
+                            "bidirectional": False,
+                            "forward": True,
+                            "on": new_edge.on,
+                            "flowing": new_edge.flowing
+                        },
+                        "cost": cost,
+                        "strategy": "offensive"
+                    })
+                    self.last_bridge_time = current_time
+                    return True
+
         return False
     
     def _is_good_bridge_target(self, target_node_id: int) -> bool:

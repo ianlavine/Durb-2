@@ -4,7 +4,7 @@ Handles game state management, validation, and game rules.
 """
 import uuid
 import time
-from typing import Dict, List, Optional, Tuple, Set
+from typing import Dict, List, Optional, Tuple
 from .models import Player, Node, Edge
 from .state import GraphState, build_state_from_dict
 from .graph_generator import graph_generator
@@ -94,7 +94,30 @@ class GameEngine:
         token_to_speed_level = getattr(self, 'token_to_speed_level', {})
         if player1_token in token_to_speed_level:
             self.state.speed_level = token_to_speed_level[player1_token]
-    
+
+    def _try_start_play_phase(self) -> None:
+        """Transition from picking to playing once everyone has chosen a starting node."""
+        if not self.state or self.state.phase != "picking":
+            return
+
+        if not self.state.players:
+            return
+
+        all_picked = all(
+            self.state.players_who_picked.get(pid, False)
+            for pid in self.state.players.keys()
+        )
+        if not all_picked:
+            return
+
+        self.state.phase = "playing"
+        self.state.start_game_timer(time.time())
+        self.state.process_pending_auto_expands()
+
+        for player_id, auto_enabled in self.state.player_auto_expand.items():
+            if auto_enabled:
+                self._check_auto_expand_opportunities(player_id)
+
     def create_new_game(self) -> Tuple[GraphState, Dict[str, int]]:
         """Create a new single-player game for testing/development."""
         data = graph_generator.generate_game_data_sync()
@@ -202,7 +225,7 @@ class GameEngine:
                 # Check for auto-expand if enabled
                 if self.state.player_auto_expand.get(player_id, False):
                     self.state._auto_expand_from_node(node_id, player_id)
-                
+
                 # Store the capture event for frontend notification
                 if not hasattr(self.state, 'pending_node_captures'):
                     self.state.pending_node_captures = []
@@ -210,7 +233,10 @@ class GameEngine:
                     'nodeId': node_id,
                     'reward': GOLD_REWARD_FOR_CAPTURE
                 })
-                
+
+                # Transition to playing state if everyone has picked
+                self._try_start_play_phase()
+
                 return True
             
             # For all other cases (already picked, node already owned, etc.), 
@@ -543,16 +569,11 @@ class GameEngine:
         if not self.state or not self.game_active:
             return None
         
-        # Check if we should transition from picking to playing phase
-        if self.state.phase == "picking":
-            # Check if all players have picked their starting nodes
-            all_picked = all(self.state.players_who_picked.get(pid, False) for pid in self.state.players.keys())
-            if all_picked:
-                self.state.phase = "playing"
-                # Start the game timer when transitioning to playing phase
-                import time
-                self.state.start_game_timer(time.time())
-        
+        # Transition from picking to playing when ready and block simulation until then
+        self._try_start_play_phase()
+        if self.state.phase != "playing":
+            return None
+
         self.state.simulate_tick(tick_interval_seconds)
         
         # Check for capital victory
@@ -574,7 +595,6 @@ class GameEngine:
             return winner_id
         
         # Check for timer expiration
-        import time
         winner_id = self.state.check_timer_expiration(time.time())
         if winner_id is not None:
             self._end_game()

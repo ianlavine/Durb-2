@@ -1,7 +1,7 @@
 import json
 import random
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from .models import Edge, Node, Player
 
@@ -51,6 +51,7 @@ class GraphState:
         
         # Auto-expand settings per player
         self.player_auto_expand: Dict[int, bool] = {}
+        self.pending_auto_expand_nodes: Dict[int, Set[int]] = {}
         
         # Game speed level (1-10, default 6 for 1x speed)
         self.speed_level: int = 6
@@ -444,21 +445,43 @@ class GraphState:
             if self.player_auto_expand.get(new_owner, False):
                 self._auto_expand_from_node(nid, new_owner)
 
+    def process_pending_auto_expands(self) -> None:
+        """Run any auto-expand operations that were deferred during the picking phase."""
+        if not self.pending_auto_expand_nodes:
+            return
+
+        for player_id, node_ids in list(self.pending_auto_expand_nodes.items()):
+            if not self.player_auto_expand.get(player_id, False):
+                continue
+
+            for node_id in list(node_ids):
+                self._apply_auto_expand_from_node(node_id, player_id)
+
+        self.pending_auto_expand_nodes.clear()
+
     def _auto_expand_from_node(self, node_id: int, player_id: int) -> None:
         """
         Auto-expand from a newly captured node by turning on edges to unowned surrounding nodes.
         This method finds all edges from the captured node to unowned nodes and turns them on.
         """
-        captured_node = self.nodes.get(node_id)
-        if not captured_node:
+        if self.phase == "picking":
+            pending = self.pending_auto_expand_nodes.setdefault(player_id, set())
+            pending.add(node_id)
             return
-        
+
+        self._apply_auto_expand_from_node(node_id, player_id)
+
+    def _apply_auto_expand_from_node(self, node_id: int, player_id: int) -> None:
+        captured_node = self.nodes.get(node_id)
+        if not captured_node or captured_node.owner != player_id:
+            return
+
         # Find all edges from this node to unowned nodes
         for edge_id in captured_node.attached_edge_ids:
             edge = self.edges.get(edge_id)
             if not edge:
                 continue
-            
+
             # Check if this edge goes from the captured node to an unowned node
             target_node_id = None
             if edge.source_node_id == node_id:
@@ -467,7 +490,7 @@ class GraphState:
                 # This edge goes TO the captured node, so we need to reverse it first
                 # But for auto-expand, we only want to turn on edges that already point outward
                 continue
-            
+
             if target_node_id:
                 target_node = self.nodes.get(target_node_id)
                 if target_node and target_node.owner is None:
@@ -511,5 +534,4 @@ def build_state_from_dict(data: Dict) -> Tuple[GraphState, Dict[str, int]]:
         for e in edges_raw
     ]
     return GraphState(nodes, edges), screen
-
 
