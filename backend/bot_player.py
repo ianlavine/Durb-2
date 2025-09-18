@@ -3,6 +3,7 @@ Bot Player - Simple AI that can play the game automatically.
 The bot uses the existing game engine methods directly without going through web UI.
 """
 
+import math
 import time
 from typing import Dict, List, Optional, Tuple
 from .models import Player
@@ -282,12 +283,11 @@ class BotPlayer:
         
         return False
     
-    def _calculate_bridge_cost(self, distance: float) -> int:
-        """Calculate the gold cost for building a bridge based on distance."""
-        if distance <= 0:
+    def _calculate_bridge_cost(self, from_node, to_node) -> int:
+        """Delegate bridge cost calculation to the game engine for consistency."""
+        if not self.game_engine:
             return 0
-        # Base cost of 1 gold, ramping up faster (0.15 gold per unit beyond distance 4)
-        return round(1 + max(0.0, (distance - 4) * 0.15))
+        return self.game_engine.calculate_bridge_cost(from_node, to_node)
 
     async def _try_bridge_building(self) -> bool:
         """Try to build bridges for expansion opportunities."""
@@ -319,17 +319,8 @@ class BotPlayer:
                         owned_node = self.game_engine.state.nodes.get(owned_node_id)
                         target_node = self.game_engine.state.nodes.get(target_node_id)
                         if owned_node and target_node:
-                            # Calculate distance between nodes
-                            dx = target_node.x - owned_node.x
-                            dy = target_node.y - owned_node.y
-                            distance = (dx * dx + dy * dy) ** 0.5
-                            
-                            # If nodes are the same, cost is 0
-                            if distance == 0:
-                                cost = 0 
-                            else:
-                                cost = self._calculate_bridge_cost(distance)
-                            
+                            cost = self._calculate_bridge_cost(owned_node, target_node)
+
                             current_gold = self.game_engine.state.player_gold.get(self.player_id, 0)
                             if current_gold < cost:
                                 continue
@@ -338,7 +329,7 @@ class BotPlayer:
                                 continue
 
                             # Try to build the bridge
-                            success, new_edge, error_msg = self.game_engine.handle_build_bridge(
+                            success, new_edge, actual_cost, error_msg = self.game_engine.handle_build_bridge(
                                 self.bot_token, owned_node_id, target_node_id, cost
                             )
                             if success and new_edge:
@@ -354,7 +345,7 @@ class BotPlayer:
                                         "on": new_edge.on,
                                         "flowing": new_edge.flowing
                                     },
-                                    "cost": cost  # Include the cost for frontend animation
+                                    "cost": actual_cost  # Include the verified cost for frontend animation
                                 })
                                 self.last_bridge_time = current_time
                                 return True
@@ -417,8 +408,8 @@ class BotPlayer:
 
                 dx = target_node.x - owned_node.x
                 dy = target_node.y - owned_node.y
-                distance = (dx * dx + dy * dy) ** 0.5
-                cost = self._calculate_bridge_cost(distance)
+                distance = math.hypot(dx, dy)
+                cost = self._calculate_bridge_cost(owned_node, target_node)
                 candidate_sources.append((cost, distance, owned_node_id))
 
             candidate_sources.sort(key=lambda item: (item[0], item[1]))
@@ -428,7 +419,7 @@ class BotPlayer:
                 if current_gold < cost or current_gold - cost < self.bridge_gold_reserve:
                     continue
 
-                success, new_edge, error_msg = self.game_engine.handle_build_bridge(
+                success, new_edge, actual_cost, error_msg = self.game_engine.handle_build_bridge(
                     self.bot_token, owned_node_id, target_node_id, cost
                 )
                 if success and new_edge:
@@ -443,7 +434,7 @@ class BotPlayer:
                             "on": new_edge.on,
                             "flowing": new_edge.flowing
                         },
-                        "cost": cost,
+                        "cost": actual_cost,
                         "strategy": "offensive"
                     })
                     self.last_bridge_time = current_time

@@ -17,7 +17,7 @@ INTAKE_BONUS_DIVISOR: float = 100.0  # divisor for intake bonus calculation in t
 
 # Gold economy - no limit, no natural generation
 GOLD_REWARD_FOR_CAPTURE: float = 2.0  # gold awarded when capturing unowned nodes
-STARTING_GOLD: float = 3.0  # gold each player starts with
+STARTING_GOLD: float = 0.0  # players now start empty and earn gold from captures
 
 # Unowned node sizing
 UNOWNED_NODE_BASE_SIZE: float = 2.0  # base juice amount for unowned nodes (back to original)
@@ -534,4 +534,3 @@ def build_state_from_dict(data: Dict) -> Tuple[GraphState, Dict[str, int]]:
         for e in edges_raw
     ]
     return GraphState(nodes, edges), screen
-
