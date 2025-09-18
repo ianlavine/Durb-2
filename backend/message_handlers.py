@@ -306,7 +306,7 @@ class BuildBridgeHandler(BaseMessageHandler):
         to_node_id = msg.get("toNodeId")
         cost = msg.get("cost", 0)
         
-        success, new_edge, error_msg = self.game_engine.handle_build_bridge(
+        success, new_edge, actual_cost, error_msg = self.game_engine.handle_build_bridge(
             token, from_node_id, to_node_id, cost
         )
         
@@ -330,7 +330,7 @@ class BuildBridgeHandler(BaseMessageHandler):
                     "on": new_edge.on,
                     "flowing": new_edge.flowing
                 },
-                "cost": cost  # Include the cost for frontend animation
+                "cost": actual_cost  # Include the verified cost for frontend animation
             }
             
             game_clients = server_context.get("game_clients", {})
@@ -617,7 +617,7 @@ class MessageRouter:
             to_node_id = msg.get("toNodeId")
             cost = msg.get("cost", 1.0)
             if from_node_id is not None and to_node_id is not None:
-                success, new_edge, error_msg = bot_game_engine.handle_build_bridge(
+                success, new_edge, actual_cost, error_msg = bot_game_engine.handle_build_bridge(
                     token, from_node_id, to_node_id, cost
                 )
                 if not success:
@@ -638,7 +638,7 @@ class MessageRouter:
                             "on": new_edge.on,
                             "flowing": new_edge.flowing
                         },
-                        "cost": cost  # Include the cost for frontend animation
+                        "cost": actual_cost  # Include the verified cost for frontend animation
                     }
                     await websocket.send(json.dumps(edge_data))
         

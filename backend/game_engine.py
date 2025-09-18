@@ -4,6 +4,7 @@ Handles game state management, validation, and game rules.
 """
 import uuid
 import time
+import math
 from typing import Dict, List, Optional, Tuple
 from .models import Player, Node, Edge
 from .state import GraphState, build_state_from_dict
@@ -338,11 +339,32 @@ class GameEngine:
         except GameValidationError:
             return False
     
+    def _normalize_coordinate_scale(self) -> Tuple[float, float]:
+        """Return factors that normalize node coordinates to a 100x100 space."""
+        width = max(1.0, float(self.screen.get("width", 100)))
+        height = max(1.0, float(self.screen.get("height", 100)))
+        return 100.0 / width, 100.0 / height
+
+    def calculate_bridge_cost(self, from_node: Node, to_node: Node) -> int:
+        """Calculate the gold cost for a bridge using normalized coordinates."""
+        norm_x, norm_y = self._normalize_coordinate_scale()
+        dx = (to_node.x - from_node.x) * norm_x
+        dy = (to_node.y - from_node.y) * norm_y
+        distance = math.hypot(dx, dy)
+        if distance <= 0:
+            return 0
+
+        base_cost = 1.0
+        cost_per_unit = 0.2  # scale immediately with a slightly lighter slope
+
+        total_cost = base_cost + distance * cost_per_unit
+        return int(round(total_cost))
+
     def handle_build_bridge(self, token: str, from_node_id: int, to_node_id: int, 
-                          cost: float) -> Tuple[bool, Optional[Edge], Optional[str]]:
+                          client_reported_cost: float) -> Tuple[bool, Optional[Edge], float, Optional[str]]:
         """
         Handle building a bridge between two nodes.
-        Returns: (success, new_edge, error_message)
+        Returns: (success, new_edge, actual_cost, error_message)
         """
         try:
             self.validate_game_active()
@@ -362,8 +384,9 @@ class GameEngine:
             self.validate_player_owns_node(from_node, player_id)
             
             
-            # Validate gold
-            self.validate_sufficient_gold(player_id, cost)
+            # Calculate and validate gold using server-side formula
+            actual_cost = self.calculate_bridge_cost(from_node, to_node)
+            self.validate_sufficient_gold(player_id, actual_cost)
             
             # Check if edge already exists
             if self._edge_exists_between_nodes(from_node_id, to_node_id):
@@ -389,13 +412,19 @@ class GameEngine:
             from_node.attached_edge_ids.append(new_edge_id)
             to_node.attached_edge_ids.append(new_edge_id)
             
-            # Deduct gold
-            self.state.player_gold[player_id] = max(0.0, self.state.player_gold[player_id] - cost)
+            # Deduct gold using verified cost
+            self.state.player_gold[player_id] = max(0.0, self.state.player_gold[player_id] - actual_cost)
+
+            # Basic mismatch logging (could be extended to real logging system)
+            if client_reported_cost and abs(client_reported_cost - actual_cost) > 1:
+                print(
+                    f"[bridge] cost mismatch: client reported {client_reported_cost}, server calculated {actual_cost}"
+                )
             
-            return True, new_edge, None
+            return True, new_edge, actual_cost, None
             
         except GameValidationError as e:
-            return False, None, str(e)
+            return False, None, 0.0, str(e)
     
     def handle_create_capital(self, token: str, node_id: int, cost: float) -> Tuple[bool, Optional[str]]:
         """

@@ -156,22 +156,23 @@
   // Bridge cost calculation
   function calculateBridgeCost(fromNode, toNode) {
     if (!fromNode || !toNode) return 0;
-    
-    // Calculate distance between nodes using original world coordinates
-    const dx = toNode.x - fromNode.x;
-    const dy = toNode.y - fromNode.y;
+
+    const baseWidth = screen && Number.isFinite(screen.width) ? screen.width : 100;
+    const baseHeight = screen && Number.isFinite(screen.height) ? screen.height : 100;
+    const normX = 100 / Math.max(1, baseWidth);
+    const normY = 100 / Math.max(1, baseHeight);
+
+    // Normalize distance so it matches backend math regardless of viewport stretch
+    const dx = (toNode.x - fromNode.x) * normX;
+    const dy = (toNode.y - fromNode.y) * normY;
     const distance = Math.sqrt(dx * dx + dy * dy);
-    
-    // If nodes are the same, cost is 0
+
     if (distance === 0) return 0;
-    
-    // Base cost of 1 gold, then scales after distance 10
-    // Stays at 1 gold for distances 0-10, then adds 0.1 gold per unit beyond 10
-    // This means a bridge across the full map (distance ~141) would cost ~14.1 gold
-    // Corner to corner (distance ~141) should cost around $14
-    const cost = 1 + Math.max(0, (distance - 4) * 0.15);
-    
-    // Round to whole number for display
+
+    const BASE_COST = 1;
+    const COST_PER_UNIT = 0.2; // scale immediately with a slightly lighter slope
+
+    const cost = BASE_COST + distance * COST_PER_UNIT;
     return Math.round(cost);
   }
 
@@ -2225,5 +2226,3 @@ function hideBridgeCostDisplay() {
     return [cx + dx * cos - dy * sin, cy + dx * sin + dy * cos];
   }
 })();
-
-
