@@ -39,11 +39,13 @@ class GraphState:
         self.phase: str = "picking"
         # Track which players have completed their starting pick
         self.players_who_picked: Dict[int, bool] = {}
-        # Track capital nodes (double growth rate)
-        self.capital_nodes: set = set()
-        # Track if game has ended due to capital victory
+        # Track if game has ended
         self.game_ended: bool = False
         self.winner_id: Optional[int] = None
+
+        # Track eliminated players so they can remain as spectators
+        self.eliminated_players: Set[int] = set()
+        self.pending_eliminations: List[int] = []
         
         # Timer system
         self.game_start_time: Optional[float] = None
@@ -64,6 +66,7 @@ class GraphState:
         self.players_who_picked[player.id] = False
         # Initialize auto-expand setting (default: off)
         self.player_auto_expand[player.id] = False
+        self.eliminated_players.discard(player.id)
 
     def get_speed_multiplier(self) -> float:
         """Get speed multiplier based on speed level (1-10)."""
@@ -87,27 +90,19 @@ class GraphState:
         speed_multiplier = self.get_speed_multiplier()
         return INTAKE_BONUS_DIVISOR / speed_multiplier
 
+    def get_player_node_counts(self) -> Dict[int, int]:
+        """Return a mapping of player id to number of nodes they currently own."""
+        counts: Dict[int, int] = {pid: 0 for pid in self.players.keys()}
+        for node in self.nodes.values():
+            if node.owner is not None:
+                counts[node.owner] = counts.get(node.owner, 0) + 1
+        return counts
+
+    def get_active_player_ids(self) -> List[int]:
+        """Return the list of players still alive in the match."""
+        return [pid for pid in self.players.keys() if pid not in self.eliminated_players]
 
 
-    def check_capital_victory(self) -> Optional[int]:
-        """Check if any player has 5 capitals. Returns winner ID or None."""
-        if self.game_ended:
-            return self.winner_id
-            
-        capital_counts = {}
-        for capital_id in self.capital_nodes:
-            node = self.nodes.get(capital_id)
-            if node and node.owner is not None:
-                capital_counts[node.owner] = capital_counts.get(node.owner, 0) + 1
-                
-        # Check for victory condition (5 capitals)
-        for player_id, count in capital_counts.items():
-            if count >= 5:
-                self.game_ended = True
-                self.winner_id = player_id
-                return player_id
-                
-        return None
 
     def calculate_win_threshold(self) -> int:
         """Calculate the number of nodes needed to win based on total nodes (2/3 rule)."""
@@ -129,21 +124,26 @@ class GraphState:
             return None
             
         win_threshold = self.calculate_win_threshold()
-        
-        # Count nodes owned by each player
-        node_counts = {}
-        for node in self.nodes.values():
-            if node.owner is not None:
-                node_counts[node.owner] = node_counts.get(node.owner, 0) + 1
-        
-        # Check if any player has reached the win threshold
-        for player_id in self.players.keys():
-            if node_counts.get(player_id, 0) >= win_threshold:
-                self.game_ended = True
-                self.winner_id = player_id
-                return player_id
-                
-        return None
+        node_counts = self.get_player_node_counts()
+
+        # Collect players meeting or exceeding the threshold who are still active
+        candidates = [
+            pid for pid, count in node_counts.items()
+            if pid not in self.eliminated_players and count >= win_threshold
+        ]
+
+        if not candidates:
+            return None
+
+        # Determine top candidate and ensure there is no tie on node count
+        best_pid = max(candidates, key=lambda pid: node_counts.get(pid, 0))
+        best_count = node_counts.get(best_pid, 0)
+        if sum(1 for pid in candidates if node_counts.get(pid, 0) == best_count) > 1:
+            return None
+
+        self.game_ended = True
+        self.winner_id = best_pid
+        return best_pid
 
     def start_game_timer(self, current_time: float) -> None:
         """Start the game timer when the game begins."""
@@ -165,30 +165,25 @@ class GraphState:
         elapsed_time = current_time - self.game_start_time
         if elapsed_time >= self.game_duration:
             # Timer expired - determine winner by node count
-            node_counts = {}
-            for node in self.nodes.values():
-                if node.owner is not None:
-                    node_counts[node.owner] = node_counts.get(node.owner, 0) + 1
-            
-            # Find player with most nodes
-            winner_id = None
-            max_nodes = -1
-            for player_id in self.players.keys():
-                player_nodes = node_counts.get(player_id, 0)
-                if player_nodes > max_nodes:
-                    max_nodes = player_nodes
-                    winner_id = player_id
-            
-            # If there's a tie, no winner (shouldn't happen often)
-            if winner_id is not None:
-                self.game_ended = True
-                self.winner_id = winner_id
-                return winner_id
+            node_counts = self.get_player_node_counts()
+            active_players = [pid for pid in self.players.keys() if pid not in self.eliminated_players]
+
+            if not active_players:
+                return None
+
+            winner_id = max(active_players, key=lambda pid: node_counts.get(pid, 0))
+            max_nodes = node_counts.get(winner_id, 0)
+            if sum(1 for pid in active_players if node_counts.get(pid, 0) == max_nodes) > 1:
+                return None
+
+            self.game_ended = True
+            self.winner_id = winner_id
+            return winner_id
                 
         return None
 
     def check_zero_nodes_loss(self) -> Optional[int]:
-        """Check if any player has 0 nodes. Returns winner ID (the other player) or None."""
+        """Eliminate players with zero nodes. Returns winner ID when only one remains."""
         if self.game_ended:
             return self.winner_id
         
@@ -196,23 +191,25 @@ class GraphState:
         if self.phase == "picking":
             return None
             
-        # Count nodes owned by each player
-        node_counts = {}
-        for node in self.nodes.values():
-            if node.owner is not None:
-                node_counts[node.owner] = node_counts.get(node.owner, 0) + 1
-        
-        # Check if any player has 0 nodes
+        node_counts = self.get_player_node_counts()
+        newly_eliminated: List[int] = []
+
         for player_id in self.players.keys():
+            if player_id in self.eliminated_players:
+                continue
             if node_counts.get(player_id, 0) == 0:
-                # This player has no nodes - they lose
-                # Winner is the other player
-                for other_player_id in self.players.keys():
-                    if other_player_id != player_id:
-                        self.game_ended = True
-                        self.winner_id = other_player_id
-                        return other_player_id
-        
+                self.eliminated_players.add(player_id)
+                newly_eliminated.append(player_id)
+
+        if newly_eliminated:
+            self.pending_eliminations.extend(newly_eliminated)
+
+        active_players = [pid for pid in self.players.keys() if pid not in self.eliminated_players]
+        if len(active_players) == 1:
+            self.game_ended = True
+            self.winner_id = active_players[0]
+            return self.winner_id
+
         return None
 
     def to_init_message(self, screen: Dict[str, int], tick_interval: float, current_time: float = 0.0) -> Dict:
@@ -224,18 +221,18 @@ class GraphState:
             [eid, e.source_node_id, e.target_node_id, 0, 1]  # Always one-way, always forward
             for eid, e in self.edges.items()
         ]
-        players_arr = [[pid, p.color] for pid, p in self.players.items()]
+        players_arr = [
+            {
+                "id": pid,
+                "color": p.color,
+                "secondaryColors": list(getattr(p, "secondary_colors", [])),
+                "eliminated": pid in self.eliminated_players,
+            }
+            for pid, p in self.players.items()
+        ]
         gold_arr = [[pid, round(self.player_gold.get(pid, 0.0), 4)] for pid in self.players.keys()]
         picked_arr = [[pid, bool(self.players_who_picked.get(pid, False))] for pid in self.players.keys()]
         auto_expand_arr = [[pid, bool(self.player_auto_expand.get(pid, False))] for pid in self.players.keys()]
-        
-        # Count capitals by player for init
-        capital_counts: Dict[int, int] = {}
-        for capital_id in self.capital_nodes:
-            node = self.nodes.get(capital_id)
-            if node and node.owner is not None:
-                capital_counts[node.owner] = capital_counts.get(node.owner, 0) + 1
-        capital_arr = [[pid, capital_counts.get(pid, 0)] for pid in self.players.keys()]
         
         # Calculate win threshold for progress bar
         win_threshold = self.calculate_win_threshold()
@@ -251,10 +248,10 @@ class GraphState:
             "phase": self.phase,
             "gold": gold_arr,
             "picked": picked_arr,
-            "capitals": capital_arr,
             "winThreshold": win_threshold,
             "totalNodes": len(self.nodes),
             "autoExpand": auto_expand_arr,
+            "eliminatedPlayers": sorted(self.eliminated_players),
         }
 
     def to_tick_message(self, current_time: float = 0.0) -> Dict:
@@ -263,24 +260,16 @@ class GraphState:
             [nid, round(n.juice, 3), (n.owner if n.owner is not None else None)]
             for nid, n in self.nodes.items()
         ]
-        counts: Dict[int, int] = {}
-        for n in self.nodes.values():
-            if n.owner is not None:
-                counts[n.owner] = counts.get(n.owner, 0) + 1
+        counts = self.get_player_node_counts()
         gold_arr = [[pid, round(self.player_gold.get(pid, 0.0), 4)] for pid in self.players.keys()]
         picked_arr = [[pid, bool(self.players_who_picked.get(pid, False))] for pid in self.players.keys()]
         auto_expand_arr = [[pid, bool(self.player_auto_expand.get(pid, False))] for pid in self.players.keys()]
         
-        # Count capitals by player
-        capital_counts: Dict[int, int] = {}
-        for capital_id in self.capital_nodes:
-            node = self.nodes.get(capital_id)
-            if node and node.owner is not None:
-                capital_counts[node.owner] = capital_counts.get(node.owner, 0) + 1
-        capital_arr = [[pid, capital_counts.get(pid, 0)] for pid in self.players.keys()]
-        
         # Calculate win threshold for progress bar
         win_threshold = self.calculate_win_threshold()
+        eliminated_players = sorted(self.eliminated_players)
+        recent_eliminations = list(self.pending_eliminations)
+        self.pending_eliminations = []
         
         return {
             "type": "tick",
@@ -291,9 +280,10 @@ class GraphState:
             "phase": self.phase,
             "gold": gold_arr,
             "picked": picked_arr,
-            "capitals": capital_arr,
             "winThreshold": win_threshold,
             "autoExpand": auto_expand_arr,
+            "eliminatedPlayers": eliminated_players,
+            "recentEliminations": recent_eliminations,
         }
 
     def _update_edge_flowing_status(self) -> None:
@@ -346,13 +336,11 @@ class GraphState:
         # Track juice intake for each node (from friendly nodes only)
         intake_tracking: Dict[int, float] = {nid: 0.0 for nid in self.nodes.keys()}
 
-        # Production for owned nodes (capitals get double rate)
+        # Production for owned nodes
         scaled_production_rate = self.get_scaled_production_rate()
         for node in self.nodes.values():
             if node.owner is not None:
                 base_rate = scaled_production_rate
-                if node.id in self.capital_nodes:
-                    base_rate *= 2.0  # Double growth for capitals
                 size_delta[node.id] += base_rate
 
         # Flows using variable percentage based on cur_intake
@@ -445,6 +433,8 @@ class GraphState:
             if self.player_auto_expand.get(new_owner, False):
                 self._auto_expand_from_node(nid, new_owner)
 
+        self.enforce_eliminated_edges_off()
+
     def process_pending_auto_expands(self) -> None:
         """Run any auto-expand operations that were deferred during the picking phase."""
         if not self.pending_auto_expand_nodes:
@@ -470,6 +460,14 @@ class GraphState:
             return
 
         self._apply_auto_expand_from_node(node_id, player_id)
+
+    def enforce_eliminated_edges_off(self) -> None:
+        """Force edges owned by eliminated players to remain off."""
+        for edge in self.edges.values():
+            source_node = self.nodes.get(edge.source_node_id)
+            if source_node and source_node.owner in self.eliminated_players:
+                edge.on = False
+                edge.flowing = False
 
     def _apply_auto_expand_from_node(self, node_id: int, player_id: int) -> None:
         captured_node = self.nodes.get(node_id)

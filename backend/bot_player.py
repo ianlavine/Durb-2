@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Tuple
 from .models import Player
 from .game_engine import GameEngine
 from .state import GraphState
+from .constants import PLAYER_COLOR_SCHEMES
 
 
 class BotPlayer:
@@ -31,10 +32,6 @@ class BotPlayer:
     def join_game(self, game_engine: GameEngine) -> None:
         """Join the game engine as a bot player."""
         self.game_engine = game_engine
-        
-        # Register the bot in the game engine
-        self.game_engine.token_to_player_id[self.bot_token] = self.player_id
-        self.game_engine.token_to_color[self.bot_token] = self.color
     
     def set_websocket(self, websocket) -> None:
         """Set the websocket for sending frontend responses."""
@@ -497,39 +494,32 @@ class BotGameManager:
             # Create bot player with specified difficulty
             self.bot_player = BotPlayer(player_id=2, color="#3388ff", difficulty=difficulty)
             self.human_token = human_token
-            
-            # Set up the game with human as player 1, bot as player 2
-            p1 = Player(id=1, color="#ff3333")
-            p2 = Player(id=2, color="#3388ff")
-            
-            # Generate new map
-            from .graph_generator import graph_generator
-            data = graph_generator.generate_game_data_sync()
-            from .state import build_state_from_dict
-            self.game_engine.state, self.game_engine.screen = build_state_from_dict(data)
-            
-            # Add players
-            self.game_engine.state.add_player(p1)
-            self.game_engine.state.add_player(p2)
-            
-            # Set up game state
-            self.game_engine.state.phase = "picking"
-            self.game_engine.token_to_player_id = {human_token: 1, self.bot_player.bot_token: 2}
-            self.game_engine.token_to_color = {human_token: "#ff3333", self.bot_player.bot_token: "#3388ff"}
-            self.game_engine.game_active = True
-            self.game_active = True
-            
-            # Set speed level for the game
-            self.game_engine.state.speed_level = speed_level
-            
-            # Apply auto-expand setting for human player
-            self.game_engine.state.player_auto_expand[1] = auto_expand
-            
-            # Join the bot to the game
+
+            from .message_handlers import PLAYER_COLOR_SCHEMES  # avoid circular import at top level
+
+            player_slots = [
+                {
+                    "player_id": 1,
+                    "token": human_token,
+                    "color": PLAYER_COLOR_SCHEMES[0]["color"],
+                    "secondary_colors": PLAYER_COLOR_SCHEMES[0]["secondary"],
+                    "auto_expand": auto_expand,
+                },
+                {
+                    "player_id": 2,
+                    "token": self.bot_player.bot_token,
+                    "color": PLAYER_COLOR_SCHEMES[1]["color"],
+                    "secondary_colors": PLAYER_COLOR_SCHEMES[1]["secondary"],
+                    "auto_expand": True,
+                },
+            ]
+
+            self.game_engine.start_game(player_slots, speed_level)
             self.bot_player.join_game(self.game_engine)
-            
+            self.game_active = True
+
             return True, None
-            
+
         except Exception as e:
             return False, str(e)
     

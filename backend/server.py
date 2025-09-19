@@ -7,9 +7,7 @@ from typing import Dict, List, Optional, Set
 
 import websockets
 
-from .game_engine import GameEngine
 from .message_handlers import MessageRouter
-from .state import GraphState
 from .bot_player import bot_game_manager
 
 
@@ -24,17 +22,20 @@ class WebSocketServer:
         self.clients: Set[websockets.WebSocketServerProtocol] = set()
         self.broadcast_task: Optional[asyncio.Task] = None
         
-        # Game engine handles all game logic
-        self.game_engine = GameEngine()
-        self.message_router = MessageRouter(self.game_engine)
-        
-        # Server context for handlers (WebSocket-specific state)
+        self.message_router = MessageRouter()
+
+        # Server context shared with message handlers
         self.server_context = {
             "tick_interval": TICK_INTERVAL_SECONDS,
-            "screen": {"width": 100, "height": 100, "margin": 0},
-            "lobby_waiting": None,  # {"token": str, "websocket": ws}
-            "game_clients": {},     # token -> websocket
-            "ws_to_token": {},      # websocket -> token
+            "games": {},              # game_id -> {engine, clients, ...}
+            "token_to_game": {},      # token -> game_id
+            "ws_to_token": {},        # websocket -> token
+            "lobbies": {              # player_count -> waiting entries
+                2: [],
+                3: [],
+                4: [],
+            },
+            "bot_game_clients": {},   # token -> websocket
         }
 
     async def handler(self, websocket: websockets.WebSocketServerProtocol) -> None:
@@ -56,48 +57,58 @@ class WebSocketServer:
         # Remove from general clients
         self.clients.discard(websocket)
         
-        # Handle game-specific disconnections
         ws_to_token = self.server_context.get("ws_to_token", {})
-        game_clients = self.server_context.get("game_clients", {})
-        lobby_waiting = self.server_context.get("lobby_waiting")
-        
-        # Find token for this websocket
         token = ws_to_token.pop(websocket, None)
-        
-        # If in lobby, clear waiting
-        if lobby_waiting and lobby_waiting.get("websocket") is websocket:
-            self.server_context["lobby_waiting"] = None
-            # Also notify game engine of lobby disconnect
-            if lobby_waiting.get("token"):
-                self.game_engine.handle_lobby_disconnect(lobby_waiting["token"])
-        
-        # If in game, handle disconnect with grace period
-        if token and token in game_clients:
-            game_clients.pop(token, None)
-            asyncio.create_task(self._handle_disconnect_grace(token))
-    
-    async def _handle_disconnect_grace(self, token: str) -> None:
+
+        # Remove from all lobby queues
+        for queue in self.server_context.get("lobbies", {}).values():
+            queue[:] = [entry for entry in queue if entry.get("websocket") is not websocket]
+
+        # Remove from bot game client mapping if present
+        bot_clients = self.server_context.get("bot_game_clients", {})
+        if token and token in bot_clients:
+            bot_clients.pop(token, None)
+
+        if not token:
+            return
+
+        token_to_game = self.server_context.get("token_to_game", {})
+        game_id = token_to_game.get(token)
+        if not game_id:
+            return
+
+        game_info = self.server_context.get("games", {}).get(game_id)
+        if not game_info:
+            return
+
+        # Mark player as temporarily disconnected and allow a grace period
+        game_info["clients"][token] = None
+        disconnect_deadlines = game_info.setdefault("disconnect_deadlines", {})
+        deadline = time.time() + 2.0
+        disconnect_deadlines[token] = deadline
+        asyncio.create_task(self._handle_disconnect_grace(game_id, token, deadline))
+
+    async def _handle_disconnect_grace(self, game_id: str, token: str, deadline: float) -> None:
         """Give client a grace period to reconnect before declaring forfeit."""
         await asyncio.sleep(2.0)
-        
-        # Check if game ended or client reconnected
-        game_clients = self.server_context.get("game_clients", {})
-        if not self.game_engine.token_to_player_id or token in game_clients:
+
+        games = self.server_context.get("games", {})
+        game_info = games.get(game_id)
+        if not game_info:
             return
-        
-        # Handle as quit
-        winner_id = self.game_engine.handle_disconnect(token)
+
+        disconnect_deadlines = game_info.get("disconnect_deadlines", {})
+        current_deadline = disconnect_deadlines.get(token)
+        if current_deadline != deadline:
+            return  # Player reconnected or deadline updated
+
+        engine = game_info.get("engine")
+        if not engine:
+            return
+
+        winner_id = engine.handle_disconnect(token)
         if winner_id is not None:
-            victory_msg = json.dumps({"type": "gameOver", "winnerId": winner_id})
-            for client_ws in game_clients.values():
-                try:
-                    await client_ws.send(victory_msg)
-                except Exception:
-                    pass
-            
-            # Clear server state
-            self.server_context["game_clients"] = {}
-            self.server_context["ws_to_token"] = {}
+            await self.message_router._announce_winner(game_id, game_info, winner_id, self.server_context)
 
 
     async def start(self) -> None:
@@ -108,98 +119,105 @@ class WebSocketServer:
     async def _broadcast_loop(self) -> None:
         while True:
             await asyncio.sleep(TICK_INTERVAL_SECONDS)
-            
-            # Check for regular game
-            game_clients = self.server_context.get("game_clients", {})
-            regular_game_active = game_clients and self.game_engine.is_game_active()
-            
-            # Check for bot game
-            bot_game_active = bot_game_manager.game_active
-            
-            if not regular_game_active and not bot_game_active:
-                continue
-            
-            # Handle regular game
-            if regular_game_active and not bot_game_active:
-                # Simulate game tick
-                winner_id = self.game_engine.simulate_tick(TICK_INTERVAL_SECONDS)
-                
-                # Check for node capture events and broadcast them
-                if self.game_engine.state and hasattr(self.game_engine.state, 'pending_node_captures') and self.game_engine.state.pending_node_captures:
-                    capture_handler = self.message_router.handlers["nodeCaptured"]
-                    await capture_handler.handle(None, {}, self.server_context)
-                
-                # Always broadcast the current game state first (including the final state)
-                if self.game_engine.state:
-                    msg = json.dumps(self.game_engine.state.to_tick_message(time.time()))
-                    await self._broadcast(msg)
-                
-                # Check for game over after broadcasting the final state
-                if winner_id is not None:
-                    victory_msg = json.dumps({"type": "gameOver", "winnerId": winner_id})
-                    for client_ws in game_clients.values():
-                        try:
-                            await client_ws.send(victory_msg)
-                        except Exception:
-                            pass
-                    
-                    # Clear server state
-                    self.server_context["game_clients"] = {}
-                    self.server_context["ws_to_token"] = {}
-            
-            # Handle bot game
-            if bot_game_active:
-                bot_game_engine = bot_game_manager.get_game_engine()
-                
-                # Make bot move if needed
-                await bot_game_manager.make_bot_move()
-                
-                # Simulate game tick
-                winner_id = bot_game_engine.simulate_tick(TICK_INTERVAL_SECONDS)
-                
-                # Check for node capture events and broadcast them
-                if bot_game_engine.state and hasattr(bot_game_engine.state, 'pending_node_captures') and bot_game_engine.state.pending_node_captures:
-                    for capture_data in bot_game_engine.state.pending_node_captures:
+            await self._expire_lobbies()
+            now = time.time()
+
+            # Friend games
+            games = list(self.server_context.get("games", {}).items())
+            for game_id, game_info in games:
+                engine = game_info.get("engine")
+                if not engine or not engine.game_active or not engine.state:
+                    continue
+
+                winner_id = engine.simulate_tick(TICK_INTERVAL_SECONDS)
+
+                state = engine.state
+                if hasattr(state, "pending_node_captures") and state.pending_node_captures:
+                    for capture_data in state.pending_node_captures:
                         capture_msg = {
                             "type": "nodeCaptured",
-                            "nodeId": capture_data['nodeId'],
-                            "reward": capture_data['reward']
+                            "nodeId": capture_data["nodeId"],
+                            "reward": capture_data["reward"],
                         }
-                        await self._broadcast(json.dumps(capture_msg))
-                    
-                    # Clear the pending capture events
-                    bot_game_engine.state.pending_node_captures = []
-                
-                # Broadcast the current game state
-                if bot_game_engine.state:
-                    msg = json.dumps(bot_game_engine.state.to_tick_message(time.time()))
-                    await self._broadcast(msg)
-                
-                # Check for game over
+                        await self.message_router._broadcast_to_game(game_info, capture_msg)
+                    state.pending_node_captures = []
+
+                tick_msg = state.to_tick_message(now)
+                await self.message_router._broadcast_to_game(game_info, tick_msg)
+
                 if winner_id is not None:
-                    victory_msg = json.dumps({"type": "gameOver", "winnerId": winner_id})
-                    for client_ws in game_clients.values():
-                        try:
-                            await client_ws.send(victory_msg)
-                        except Exception:
-                            pass
-                    
-                    # End bot game
+                    await self.message_router._announce_winner(game_id, game_info, winner_id, self.server_context)
+
+            # Bot game
+            if bot_game_manager.game_active:
+                bot_game_engine = bot_game_manager.get_game_engine()
+                await bot_game_manager.make_bot_move()
+
+                winner_id = bot_game_engine.simulate_tick(TICK_INTERVAL_SECONDS)
+
+                bot_clients = list(self.server_context.get("bot_game_clients", {}).values())
+
+                state = bot_game_engine.state
+                if state and hasattr(state, "pending_node_captures") and state.pending_node_captures:
+                    for capture_data in state.pending_node_captures:
+                        capture_msg = json.dumps(
+                            {
+                                "type": "nodeCaptured",
+                                "nodeId": capture_data["nodeId"],
+                                "reward": capture_data["reward"],
+                            }
+                        )
+                        await self._broadcast_to_specific(bot_clients, capture_msg)
+                    state.pending_node_captures = []
+
+                if state:
+                    tick_payload = json.dumps(state.to_tick_message(now))
+                    await self._broadcast_to_specific(bot_clients, tick_payload)
+
+                if winner_id is not None:
+                    victory_payload = json.dumps({"type": "gameOver", "winnerId": winner_id})
+                    await self._broadcast_to_specific(bot_clients, victory_payload)
                     bot_game_manager.end_game()
-                    # Clear server state
-                    self.server_context["game_clients"] = {}
-                    self.server_context["ws_to_token"] = {}
+                    self.server_context["bot_game_clients"] = {}
 
 
-    async def _broadcast(self, message: str) -> None:
-        to_remove: List[websockets.WebSocketServerProtocol] = []
-        for ws in self.clients:
+    async def _broadcast_to_specific(
+        self,
+        clients: List[Optional[websockets.WebSocketServerProtocol]],
+        message: str,
+    ) -> None:
+        for ws in clients:
+            if not ws:
+                continue
             try:
                 await ws.send(message)
             except Exception:
-                to_remove.append(ws)
-        for ws in to_remove:
-            self.clients.discard(ws)
+                self.clients.discard(ws)
+
+    async def _expire_lobbies(self) -> None:
+        lobbies = self.server_context.get("lobbies", {})
+        ws_to_token = self.server_context.get("ws_to_token", {})
+        now = time.time()
+        timeout_seconds = 180.0
+
+        for queue in lobbies.values():
+            if not queue:
+                continue
+
+            remaining = []
+            for entry in queue:
+                joined_at = entry.get("joined_at", now)
+                websocket = entry.get("websocket")
+                token = entry.get("token")
+
+                if now - joined_at >= timeout_seconds:
+                    if websocket:
+                        await self.message_router._send_safe(websocket, json.dumps({"type": "lobbyTimeout"}))
+                        ws_to_token.pop(websocket, None)
+                else:
+                    remaining.append(entry)
+
+            queue[:] = remaining
 
 
 async def main() -> None:
@@ -214,5 +232,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Shutting down.")
-
-
