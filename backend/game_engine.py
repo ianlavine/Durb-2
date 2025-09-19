@@ -2,10 +2,9 @@
 Game Engine - Core game logic separated from server implementation.
 Handles game state management, validation, and game rules.
 """
-import uuid
 import time
 import math
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from .models import Player, Node, Edge
 from .state import GraphState, build_state_from_dict
 from .graph_generator import graph_generator
@@ -25,77 +24,51 @@ class GameEngine:
         
         # Player management
         self.token_to_player_id: Dict[str, int] = {}
-        self.token_to_color: Dict[str, str] = {}
-        
-        # Lobby state
-        self.lobby_waiting: Optional[str] = None  # waiting player token
+        self.player_id_to_token: Dict[int, str] = {}
+        self.player_meta: Dict[int, Dict[str, object]] = {}
         self.game_active: bool = False
-    
+
+    def start_game(self, player_slots: List[Dict[str, Any]], speed_level: int = 6) -> None:
+        """Initialize a new game with the provided player configuration."""
+        data = graph_generator.generate_game_data_sync()
+        self.state, self.screen = build_state_from_dict(data)
+
+        self.token_to_player_id.clear()
+        self.player_id_to_token.clear()
+        self.player_meta.clear()
+
+        if not self.state:
+            raise RuntimeError("Failed to create game state")
+
+        self.state.phase = "picking"
+        self.state.speed_level = speed_level
+        self.state.eliminated_players.clear()
+        self.state.pending_eliminations = []
+
+        for slot in player_slots:
+            player_id = slot["player_id"]
+            token = slot["token"]
+            color = slot.get("color", "#ffffff")
+            secondary_colors = list(slot.get("secondary_colors", []))
+            auto_expand = bool(slot.get("auto_expand", False))
+
+            player = Player(id=player_id, color=color, secondary_colors=secondary_colors)
+            self.state.add_player(player)
+
+            self.token_to_player_id[token] = player_id
+            self.player_id_to_token[player_id] = token
+            self.player_meta[player_id] = {
+                "color": color,
+                "secondary_colors": secondary_colors,
+            }
+            self.state.player_auto_expand[player_id] = auto_expand
+
+        self.game_active = True
+
     def is_game_active(self) -> bool:
         """Check if a game is currently active."""
         return self.game_active and self.state is not None and len(self.token_to_player_id) >= 2
     
-    def join_lobby(self, token: Optional[str] = None, auto_expand: bool = False, speed_level: int = 6) -> Tuple[str, str]:
-        """
-        Handle a player joining the lobby.
-        Returns: (player_token, status) where status is 'waiting' or 'ready'
-        """
-        player_token = token or uuid.uuid4().hex
-        
-        if self.lobby_waiting is None:
-            # First player waiting
-            self.lobby_waiting = player_token
-            self.token_to_color[player_token] = "#ffcc00"
-            # Store auto-expand setting for when game starts
-            self.token_to_auto_expand = getattr(self, 'token_to_auto_expand', {})
-            self.token_to_auto_expand[player_token] = auto_expand
-            # Store speed level setting for when game starts (first player determines speed)
-            self.token_to_speed_level = getattr(self, 'token_to_speed_level', {})
-            self.token_to_speed_level[player_token] = speed_level
-            return player_token, "waiting"
-        else:
-            # Second player joins - start game
-            other_token = self.lobby_waiting
-            self.lobby_waiting = None
-            self.token_to_color[player_token] = "#66ccff"
-            
-            # Store auto-expand setting for when game starts
-            self.token_to_auto_expand = getattr(self, 'token_to_auto_expand', {})
-            self.token_to_auto_expand[player_token] = auto_expand
-            
-            # Initialize game with both players
-            self._start_new_game(other_token, player_token)
-            return player_token, "ready"
-    
-    def _start_new_game(self, player1_token: str, player2_token: str) -> None:
-        """Initialize a new game with two players."""
-        # Generate new map
-        data = graph_generator.generate_game_data_sync()
-        self.state, self.screen = build_state_from_dict(data)
-        
-        # Create players with fixed colors
-        p1 = Player(id=1, color="#ff3333")
-        p2 = Player(id=2, color="#3388ff")
-        self.state.add_player(p1)
-        self.state.add_player(p2)
-        
-        # Set up game state - start in picking phase for starting node selection
-        self.state.phase = "picking"
-        self.token_to_player_id = {player1_token: 1, player2_token: 2}
-        self.game_active = True
-        
-        # Apply auto-expand settings from tokens
-        token_to_auto_expand = getattr(self, 'token_to_auto_expand', {})
-        if player1_token in token_to_auto_expand:
-            self.state.player_auto_expand[1] = token_to_auto_expand[player1_token]
-        if player2_token in token_to_auto_expand:
-            self.state.player_auto_expand[2] = token_to_auto_expand[player2_token]
-        
-        # Apply speed level setting from first player (who determines game speed)
-        token_to_speed_level = getattr(self, 'token_to_speed_level', {})
-        if player1_token in token_to_speed_level:
-            self.state.speed_level = token_to_speed_level[player1_token]
-
     def _try_start_play_phase(self) -> None:
         """Transition from picking to playing once everyone has chosen a starting node."""
         if not self.state or self.state.phase != "picking":
@@ -127,9 +100,15 @@ class GameEngine:
         # Ensure Player 1 exists
         if 1 not in new_state.players:
             new_state.add_player(Player(id=1, color="#ffcc00"))
-        
+
+        new_state.eliminated_players.clear()
+        new_state.pending_eliminations = []
+
         self.state = new_state
         self.screen = screen
+        self.token_to_player_id.clear()
+        self.player_id_to_token.clear()
+        self.player_meta.clear()
         return new_state, screen
     
     def get_player_id(self, token: str) -> Optional[int]:
@@ -168,6 +147,9 @@ class GameEngine:
         # Player can act if they have picked their starting node
         if not self.state.players_who_picked.get(player_id, False):
             raise GameValidationError("Must pick starting node first")
+
+        if player_id in self.state.eliminated_players:
+            raise GameValidationError("Player eliminated")
     
     def validate_node_exists(self, node_id: int) -> Node:
         """Validate that a node exists and return it."""
@@ -214,6 +196,9 @@ class GameEngine:
             self.validate_game_active()
             player_id = self.validate_player(token)
             node = self.validate_node_exists(node_id)
+
+            if self.state and player_id in self.state.eliminated_players:
+                raise GameValidationError("Player eliminated")
             
             # Check if this is for picking a starting node (node is unowned and player hasn't picked yet)
             if node.owner is None and not self.state.players_who_picked.get(player_id):
@@ -426,103 +411,81 @@ class GameEngine:
         except GameValidationError as e:
             return False, None, 0.0, str(e)
     
-    def handle_create_capital(self, token: str, node_id: int, cost: float) -> Tuple[bool, Optional[str]]:
-        """
-        Handle creating a capital on a node.
-        Returns: (success, error_message)
-        """
-        try:
-            self.validate_game_active()
-            player_id = self.validate_player(token)
-            self.validate_player_can_act(player_id)
-            
-            # Validate node
-            node = self.validate_node_exists(node_id)
-            self.validate_player_owns_node(node, player_id)
-            
-            # Validate gold
-            self.validate_sufficient_gold(player_id, cost)
-            
-            # Check if already a capital
-            if hasattr(self.state, 'capital_nodes') and node_id in self.state.capital_nodes:
-                raise GameValidationError("Node is already a capital")
-            
-            # Check if any adjacent nodes are capitals
-            if hasattr(self.state, 'capital_nodes'):
-                for edge_id in node.attached_edge_ids:
-                    edge = self.state.edges.get(edge_id)
-                    if edge:
-                        # Check both directions - if this node is source or target
-                        adjacent_node_id = None
-                        if edge.source_node_id == node_id:
-                            adjacent_node_id = edge.target_node_id
-                        elif edge.target_node_id == node_id:
-                            adjacent_node_id = edge.source_node_id
-                        
-                        if adjacent_node_id and adjacent_node_id in self.state.capital_nodes:
-                            raise GameValidationError("No Adjacent Capitals")
-            
-            # Create capital
-            if not hasattr(self.state, 'capital_nodes'):
-                self.state.capital_nodes = set()
-            self.state.capital_nodes.add(node_id)
-            
-            # Deduct gold
-            self.state.player_gold[player_id] = max(0.0, self.state.player_gold[player_id] - cost)
-            
-            return True, None
-            
-        except GameValidationError as e:
-            return False, str(e)
-    
     def handle_quit_game(self, token: str) -> Optional[int]:
         """
         Handle a player quitting the game.
         Returns the winner's player ID, or None if no game active.
         """
-        if token not in self.token_to_player_id:
+        if not self.state or token not in self.token_to_player_id:
             return None
         
-        loser_id = self.token_to_player_id[token]
-        winner_id = 1 if loser_id == 2 else 2
-        
-        # Clear game state
-        self._end_game()
-        
-        return winner_id
-    
-    def handle_lobby_disconnect(self, token: str) -> None:
-        """
-        Handle a player disconnecting from the lobby before game starts.
-        """
-        if self.lobby_waiting == token:
-            self.lobby_waiting = None
-            # Also clean up any associated color mapping
-            if token in self.token_to_color:
-                del self.token_to_color[token]
+        player_id = self.token_to_player_id[token]
+
+        self._eliminate_player(player_id)
+
+        active_players = [pid for pid in self.state.players.keys() if pid not in self.state.eliminated_players]
+        if len(active_players) == 1:
+            winner_id = active_players[0]
+            self._end_game()
+            return winner_id
+
+        return None
 
     def handle_disconnect(self, token: str) -> Optional[int]:
         """
         Handle a player disconnect after grace period.
         Returns the winner's player ID, or None if no game active.
         """
-        if not self.token_to_player_id or token not in self.token_to_player_id:
+        if not self.state or token not in self.token_to_player_id:
             return None
         
-        loser_id = self.token_to_player_id[token]
-        winner_id = 1 if loser_id == 2 else 2
-        
-        # Reset state for new game
-        self.state = GraphState([], [])
-        self._end_game()
-        
-        return winner_id
+        player_id = self.token_to_player_id[token]
+        if player_id in self.state.eliminated_players:
+            return None
+
+        self._eliminate_player(player_id)
+
+        active_players = [pid for pid in self.state.players.keys() if pid not in self.state.eliminated_players]
+        if len(active_players) == 1:
+            winner_id = active_players[0]
+            self._end_game()
+            return winner_id
+
+        return None
     
     def _end_game(self) -> None:
         """End the current game and reset state."""
         self.token_to_player_id.clear()
+        self.player_id_to_token.clear()
+        self.player_meta.clear()
         self.game_active = False
-    
+
+    def _deactivate_player_edges(self, player_id: int) -> None:
+        """Force all edges controlled by the player to remain off."""
+        if not self.state:
+            return
+
+        for edge in self.state.edges.values():
+            source_node = self.state.nodes.get(edge.source_node_id)
+            if source_node and source_node.owner == player_id:
+                edge.on = False
+                edge.flowing = False
+
+    def _eliminate_player(self, player_id: int) -> None:
+        """Mark a player as eliminated, disable auto actions, and shut off edges."""
+        if not self.state:
+            return
+
+        if player_id in self.state.eliminated_players:
+            return
+
+        self.state.eliminated_players.add(player_id)
+        self.state.pending_eliminations.append(player_id)
+        self.state.player_auto_expand[player_id] = False
+        if hasattr(self.state, 'pending_auto_expand_nodes'):
+            self.state.pending_auto_expand_nodes.pop(player_id, None)
+        self._deactivate_player_edges(player_id)
+
     def _edge_exists_between_nodes(self, node_id1: int, node_id2: int) -> bool:
         """Check if an edge already exists between two nodes."""
         if not self.state:
@@ -604,13 +567,10 @@ class GameEngine:
             return None
 
         self.state.simulate_tick(tick_interval_seconds)
-        
-        # Check for capital victory
-        winner_id = self.state.check_capital_victory()
-        if winner_id is not None:
-            self._end_game()
-            return winner_id
-        
+
+        for eliminated_id in list(self.state.eliminated_players):
+            self._deactivate_player_edges(eliminated_id)
+
         # Check for node count victory (2/3 rule)
         winner_id = self.state.check_node_count_victory()
         if winner_id is not None:
@@ -706,10 +666,6 @@ class GameEngine:
                 # Remove the edge from the edges dictionary
                 del self.state.edges[edge_id]
             
-            # Remove the node from capital nodes if it was a capital
-            if hasattr(self.state, 'capital_nodes') and node_id in self.state.capital_nodes:
-                self.state.capital_nodes.remove(node_id)
-            
             # Remove the node
             del self.state.nodes[node_id]
             
@@ -793,6 +749,9 @@ class GameEngine:
         try:
             self.validate_game_active()
             player_id = self.validate_player(token)
+
+            if self.state and player_id in self.state.eliminated_players:
+                raise GameValidationError("Player eliminated")
             
             # Allow toggling auto-expand even before picking starting node
             # (just validate that player exists and game is active)

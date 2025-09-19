@@ -40,8 +40,8 @@
       }
       
       .dropdown-option {
-        font-size: 48px;
-        padding: 16px 32px;
+        font-size: 32px;
+        padding: 12px 24px;
         color: #ffffff;
         cursor: pointer;
         border: none;
@@ -78,38 +78,41 @@
         display: none; 
       }
       #progressBarInner { 
-        height: 100%; 
         position: relative; 
-        transition: width 0.3s ease; 
-      }
-      #progressBarLeft { 
-        position: absolute; 
-        left: 0; 
-        top: 0; 
+        display: flex; 
+        align-items: stretch; 
         height: 100%; 
-        background: linear-gradient(to right, var(--player1-color), var(--player1-color-light)); 
-        transition: width 0.3s ease; 
+        width: 100%; 
+        overflow: hidden; 
       }
-      #progressBarRight { 
-        position: absolute; 
-        right: 0; 
-        top: 0; 
-        height: 100%; 
-        background: linear-gradient(to left, var(--player2-color), var(--player2-color-light)); 
-        transition: width 0.3s ease; 
+      .progressSegment { 
+        position: relative; 
+        display: flex; 
+        align-items: center; 
+        justify-content: center; 
+        font-family: monospace; 
+        font-size: 20px; 
+        font-weight: bold; 
+        color: #000000; 
+        transition: flex 0.3s ease, width 0.3s ease; 
+        min-width: 40px; 
+        padding: 0 6px; 
+      }
+      .segmentLabel { 
+        pointer-events: none; 
+        text-shadow: 0 1px 2px rgba(255,255,255,0.7); 
       }
       .progressMarker { 
         position: absolute; 
         top: -2px; 
         width: 4px; 
         height: 34px; 
-        background: #fff; 
+        background: #ffffff; 
         border: 1px solid #000; 
         border-radius: 2px; 
         z-index: 11; 
+        display: none; 
       }
-      .progressMarker.marker1 { left: 33.33%; }
-      .progressMarker.marker2 { left: 66.67%; }
       
       /* Timer display */
       #timerDisplay { 
@@ -302,6 +305,63 @@
       .home-toggle-container .toggle-switch.enabled .toggle-slider {
         transform: translateX(28px);
       }
+
+      .player-count-selector {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 12px;
+        width: 100%;
+        max-width: 640px;
+      }
+
+      .selector-label {
+        color: #ffffff;
+        font-family: monospace;
+        font-size: 18px;
+        letter-spacing: 1px;
+      }
+
+      .player-count-options {
+        display: flex;
+        gap: 12px;
+      }
+
+      .player-count-option {
+        font-size: 28px;
+        padding: 10px 18px;
+        border-radius: 8px;
+        border: 2px solid #777;
+        background: #222;
+        color: #eee;
+        cursor: pointer;
+        transition: transform 0.15s ease, border-color 0.15s ease;
+      }
+
+      .player-count-option.active {
+        border-color: #ffff00;
+        transform: translateY(-4px);
+        color: #ffff00;
+      }
+
+      .player-count-option:hover {
+        border-color: #aaaaaa;
+      }
+
+      .dropdown-container {
+        width: 100%;
+        max-width: 640px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+
+      #playBtn, #playBotBtn, .player-count-selector {
+        width: 100%;
+        max-width: 640px;
+      }
+
     </style>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.0/dist/phaser.js"></script>
   </head>
@@ -310,7 +370,15 @@
     <div id="menu">
       <div id="title">DURB 2</div>
       <div class="button-container">
-        <button id="playBtn">PLAY FRIEND</button>
+        <div class="player-count-selector">
+          <span class="selector-label">Players</span>
+          <div class="player-count-options">
+            <button class="player-count-option active" data-count="2">2</button>
+            <button class="player-count-option" data-count="3">3</button>
+            <button class="player-count-option" data-count="4">4</button>
+          </div>
+        </div>
+        <button id="playBtn">PLAY FRIENDS</button>
         <div class="dropdown-container">
           <button id="playBotBtn">PLAY BOT</button>
           <div id="difficultyDropdown">
@@ -339,12 +407,9 @@
     
     <!-- Progress bar for node count victory -->
     <div id="progressBar">
-      <div id="progressBarInner">
-        <div id="progressBarLeft"></div>
-        <div id="progressBarRight"></div>
-        <div class="progressMarker marker1"></div>
-        <div class="progressMarker marker2"></div>
-      </div>
+      <div id="progressBarInner"></div>
+      <div class="progressMarker" id="progressMarkerLeft"></div>
+      <div class="progressMarker" id="progressMarkerRight"></div>
     </div>
     
     <!-- Timer display -->
@@ -371,5 +436,3 @@
     <script src="main.js"></script>
   </body>
   </html>
-
-

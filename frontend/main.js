@@ -32,7 +32,11 @@
   let graphicsNodes;
   let statusText;
   let view = null; // {minX, minY, maxX, maxY, scale, offsetX, offsetY}
-  let players = new Map(); // id -> {color}
+  let players = new Map(); // id -> {color, secondaryColors}
+  let playerOrder = [];
+  let playerStats = new Map(); // id -> {nodes:0, gold:0}
+  let eliminatedPlayers = new Set();
+  let myEliminated = false;
   let gameEnded = false;
   let overlayMsg = null;
   let goldDisplay = null; // gold number display in bottom right
@@ -50,17 +54,16 @@
   let mouseWorldX = 0; // current mouse position in world coordinates
   let mouseWorldY = 0;
   let bridgeCostDisplay = null; // current bridge cost display text object
-  let capitalNodes = new Set(); // node IDs that are capitals
-  let player1Capitals = 0; // capital count from backend
-  let player2Capitals = 0; // capital count from backend
-  
+
   // Progress bar for node count victory
   let progressBar = null;
+  let progressBarInner = null;
+  let progressMarkerLeft = null;
+  let progressMarkerRight = null;
+  let progressSegments = new Map();
   let winThreshold = 40; // default, will be updated from backend
   let totalNodes = 60; // default, will be updated from backend
-  let player1Nodes = 0;
-  let player2Nodes = 0;
-  
+
   // Timer system
   let timerDisplay = null;
   let gameStartTime = null;
@@ -81,11 +84,13 @@
   let homeSpeedValue = null;
   let mySpeedLevel = 6; // my player's speed level setting
   let persistentSpeedLevel = 6; // persistent setting stored in localStorage
-  
+  let selectedPlayerCount = 2;
+
   // Money transparency system
   let moneyIndicators = []; // Array of {x, y, text, color, startTime, duration}
 
   let sceneRef = null;
+  let quitButton = null;
   
   
   // Animation system for juice flow
@@ -326,10 +331,21 @@ function hideBridgeCostDisplay() {
     const playBotBtn = document.getElementById('playBotBtn');
     const buttonContainer = document.querySelector('.button-container');
     const difficultyDropdown = document.getElementById('difficultyDropdown');
+    const playerCountButtons = document.querySelectorAll('.player-count-option');
+
+    if (playerCountButtons && playerCountButtons.length) {
+      playerCountButtons.forEach((btn) => {
+        btn.addEventListener('click', () => {
+          playerCountButtons.forEach((b) => b.classList.remove('active'));
+          btn.classList.add('active');
+          const desired = parseInt(btn.getAttribute('data-count'), 10);
+          selectedPlayerCount = Number.isFinite(desired) ? desired : 2;
+        });
+      });
+    }
     
     if (playBtn) {
       playBtn.addEventListener('click', () => {
-        console.log('poop');
         if (ws && ws.readyState === WebSocket.OPEN) {
           document.getElementById('lobby').style.display = 'block';
           // Hide both buttons when entering lobby
@@ -338,8 +354,10 @@ function hideBridgeCostDisplay() {
           }
           ws.send(JSON.stringify({ 
             type: 'joinLobby',
+            token: localStorage.getItem('token') || null,
             autoExpand: persistentAutoExpand,
-            speedLevel: persistentSpeedLevel
+            speedLevel: persistentSpeedLevel,
+            playerCount: selectedPlayerCount
           }));
         }
       });
@@ -396,60 +414,23 @@ function hideBridgeCostDisplay() {
     Object.assign(quitBtn.style, { position: 'absolute', left: '10px', top: '10px', zIndex: 10, padding: '8px 14px', borderRadius: '8px', border: 'none', background: '#ff5555', color: '#111', cursor: 'pointer', display: 'none' });
     document.body.appendChild(quitBtn);
     quitBtn.addEventListener('click', () => {
-      if (!gameEnded) {
-        const token = localStorage.getItem('token');
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'quitGame', token }));
+      const token = localStorage.getItem('token');
+      if (!gameEnded && !myEliminated && ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'quitGame', token }));
+        myEliminated = true;
+        updateQuitButtonLabel();
+        if (overlayMsg) {
+          overlayMsg.textContent = 'Eliminated';
+          overlayMsg.style.display = 'block';
         }
-      } else {
-        // After game over, quit returns to menu
-        const menu = document.getElementById('menu');
-        const lobby = document.getElementById('lobby');
-        if (menu && lobby) {
-          lobby.textContent = '';
-          lobby.style.display = 'none';
-          menu.classList.remove('hidden');
-        }
-        quitBtn.style.display = 'none';
-        if (overlayMsg) overlayMsg.style.display = 'none';
-        // Hide gold display when returning to menu
-        if (goldDisplay) goldDisplay.style.display = 'none';
-        // Hide progress bar when returning to menu
-        if (progressBar) progressBar.style.display = 'none';
-        // Hide timer when returning to menu
-        if (timerDisplay) timerDisplay.style.display = 'none';
-      // Hide auto-expand toggle when returning to menu
-      if (autoExpandToggle) autoExpandToggle.style.display = 'none';
-      // Hide speed display when returning to menu
-      if (speedDisplay) speedDisplay.style.display = 'none';
-        // Show button container and reset dropdown
-        const buttonContainer = document.querySelector('.button-container');
-        const difficultyDropdown = document.getElementById('difficultyDropdown');
-        if (buttonContainer) buttonContainer.style.display = 'flex';
-        if (difficultyDropdown) {
-          difficultyDropdown.style.display = 'none';
-        }
-        // Update home screen toggle to reflect current persistent setting
-        updateHomeAutoExpandToggle();
-        nodes.clear();
-        edges.clear();
-        capitalNodes.clear(); // Clear capital nodes when returning to menu
-        
-        // Reset ability state when returning to menu
-        activeAbility = null;
-        bridgeFirstNode = null;
-        // Remove cost display
-        if (bridgeCostDisplay) {
-          app.stage.removeChild(bridgeCostDisplay);
-          bridgeCostDisplay = null;
-        }
-        
-        // Clean up money indicators
-        clearMoneyIndicators();
-        
-        redrawStatic();
+        return;
+      }
+
+      if (gameEnded || myEliminated) {
+        returnToMenu();
       }
     });
+    quitButton = quitBtn;
     // Toggle quit button visibility based on menu
     const observer = new MutationObserver(() => {
       const menuVisible = !menu.classList.contains('hidden');
@@ -497,13 +478,18 @@ function hideBridgeCostDisplay() {
       zIndex: 8,
       display: 'none', // initially hidden
     });
-    goldNumber.textContent = '0';
+    goldNumber.textContent = '$0';
     
     document.body.appendChild(goldNumber);
     goldDisplay = goldNumber;
 
-    // Initialize progress bar
+    // Initialize progress UI
     progressBar = document.getElementById('progressBar');
+    progressBarInner = document.getElementById('progressBarInner');
+    progressMarkerLeft = document.getElementById('progressMarkerLeft');
+    progressMarkerRight = document.getElementById('progressMarkerRight');
+    if (progressMarkerLeft) progressMarkerLeft.style.display = 'none';
+    if (progressMarkerRight) progressMarkerRight.style.display = 'none';
     
     // Initialize timer display
     timerDisplay = document.getElementById('timerDisplay');
@@ -631,128 +617,184 @@ function hideBridgeCostDisplay() {
       else if (msg.type === 'edgeUpdated') handleEdgeUpdated(msg);
       else if (msg.type === 'bridgeError') handleBridgeError(msg);
       else if (msg.type === 'reverseEdgeError') handleReverseEdgeError(msg);
-      else if (msg.type === 'newCapital') handleNewCapital(msg);
-      else if (msg.type === 'capitalError') handleCapitalError(msg);
       else if (msg.type === 'nodeDestroyed') handleNodeDestroyed(msg);
       else if (msg.type === 'destroyError') handleDestroyError(msg);
       else if (msg.type === 'nodeCaptured') handleNodeCaptured(msg);
+      else if (msg.type === 'lobbyTimeout') handleLobbyTimeout();
     };
   }
 
   function handleInit(msg) {
     gameEnded = false;
-    // Ensure Forfeit label during active game
-    const buttons = document.getElementsByTagName('button');
-    for (const b of buttons) {
-      if (b.textContent === 'Quit') b.textContent = 'Forfeit';
-    }
+    myEliminated = false;
+    updateQuitButtonLabel();
+
     screen = msg.screen || null;
     nodes.clear();
     edges.clear();
     players.clear();
-    capitalNodes.clear(); // Clear capital nodes from previous game
-    
-    // Reset ability state from previous game
+    playerStats.clear();
+    eliminatedPlayers.clear();
+    playerOrder = [];
+
     activeAbility = null;
     bridgeFirstNode = null;
-    // Remove cost display
+    hideBridgeCostDisplay();
     if (bridgeCostDisplay && app && app.stage) {
       app.stage.removeChild(bridgeCostDisplay);
       bridgeCostDisplay = null;
     }
 
-    for (const arr of msg.nodes) {
-      const [id, x, y, size, owner] = arr;
-      nodes.set(id, { x, y, size, owner });
-    }
-    for (const arr of msg.edges) {
-      const [id, s, t, bidir, fwd] = arr;
-      edges.set(id, { source: s, target: t, on: false, flowing: false, flowStartTime: null });
-    }
-    if (Array.isArray(msg.players)) {
-      for (const arr of msg.players) {
-        const [id, color] = arr;
-        players.set(id, { color });
+    if (Array.isArray(msg.nodes)) {
+      for (const arr of msg.nodes) {
+        const [id, x, y, size, owner] = arr;
+        nodes.set(id, { x, y, size, owner });
       }
     }
+
+    if (Array.isArray(msg.edges)) {
+      for (const arr of msg.edges) {
+        const [id, s, t] = arr;
+        edges.set(id, { source: s, target: t, on: false, flowing: false, flowStartTime: null });
+      }
+    }
+
+    if (Array.isArray(msg.players)) {
+      msg.players.forEach((info, index) => {
+        let id;
+        let color;
+        let secondaryColors = [];
+
+        if (Array.isArray(info)) {
+          const [pid, col] = info;
+          id = Number(pid);
+          color = col;
+        } else if (info && typeof info === 'object') {
+          id = Number(info.id);
+          color = info.color;
+          if (Array.isArray(info.secondaryColors)) secondaryColors = info.secondaryColors;
+        }
+
+        if (!Number.isFinite(id)) return;
+        players.set(id, {
+          color: color || '#ffffff',
+          secondaryColors,
+        });
+        playerStats.set(id, { nodes: 0, gold: 0 });
+        playerOrder.push(id);
+      });
+    }
+
+    if (Array.isArray(msg.eliminatedPlayers)) {
+      msg.eliminatedPlayers.forEach((pid) => {
+        const id = Number(pid);
+        if (Number.isFinite(id)) eliminatedPlayers.add(id);
+      });
+    }
+
     if (msg.token) localStorage.setItem('token', msg.token);
     if (msg.myPlayerId != null) localStorage.setItem('myPlayerId', String(msg.myPlayerId));
-    myPlayerId = (msg.myPlayerId != null) ? Number(msg.myPlayerId) : Number(localStorage.getItem('myPlayerId') || '0');
-    if (msg.settings && typeof msg.settings.nodeMaxJuice === 'number') nodeMaxJuice = msg.settings.nodeMaxJuice;
-    // Phase and pick status
+    myPlayerId = (msg.myPlayerId != null)
+      ? Number(msg.myPlayerId)
+      : Number(localStorage.getItem('myPlayerId') || '0');
+
+    if (msg.settings && typeof msg.settings.nodeMaxJuice === 'number') {
+      nodeMaxJuice = msg.settings.nodeMaxJuice;
+    }
+
     phase = typeof msg.phase === 'string' ? msg.phase : 'picking';
     myPicked = false;
     if (Array.isArray(msg.picked)) {
-      for (const [pid, picked] of msg.picked) {
+      msg.picked.forEach(([pid, picked]) => {
         if (Number(pid) === myPlayerId) myPicked = !!picked;
-      }
+      });
     }
-    // Gold value for my player
-    goldValue = 0;
+
     if (Array.isArray(msg.gold)) {
-      for (const [pid, val] of msg.gold) {
-        if (Number(pid) === myPlayerId) goldValue = Math.max(0, Number(val) || 0);
-      }
+      msg.gold.forEach(([pid, value]) => {
+        const id = Number(pid);
+        if (!Number.isFinite(id)) return;
+        const stats = playerStats.get(id) || { nodes: 0, gold: 0 };
+        stats.gold = Math.max(0, Number(value) || 0);
+        playerStats.set(id, stats);
+        if (id === myPlayerId) {
+          goldValue = stats.gold;
+        }
+      });
+    } else {
+      goldValue = 0;
     }
-    // Capital counts from backend
-    if (Array.isArray(msg.capitals)) {
-      for (const [pid, count] of msg.capitals) {
-        if (Number(pid) === 1) player1Capitals = Number(count) || 0;
-        if (Number(pid) === 2) player2Capitals = Number(count) || 0;
-      }
-    }
-    
-    // Win threshold and total nodes for progress bar
+
     if (typeof msg.winThreshold === 'number') winThreshold = msg.winThreshold;
     if (typeof msg.totalNodes === 'number') totalNodes = msg.totalNodes;
-    
-    // Initialize node counts from counts data
+
     if (msg.counts) {
-      player1Nodes = Number(msg.counts[1]) || 0;
-      player2Nodes = Number(msg.counts[2]) || 0;
+      Object.entries(msg.counts).forEach(([pid, count]) => {
+        const id = Number(pid);
+        if (!Number.isFinite(id)) return;
+        const stats = playerStats.get(id) || { nodes: 0, gold: 0 };
+        stats.nodes = Math.max(0, Number(count) || 0);
+        playerStats.set(id, stats);
+      });
     }
-    
-    // Initialize auto-expand settings
-    myAutoExpand = persistentAutoExpand; // Start with persistent setting
+
+    myAutoExpand = persistentAutoExpand;
     if (Array.isArray(msg.autoExpand)) {
-      for (const [pid, enabled] of msg.autoExpand) {
-        if (Number(pid) === myPlayerId) myAutoExpand = !!enabled;
-      }
+      msg.autoExpand.forEach(([pid, enabled]) => {
+        if (Number(pid) === myPlayerId) {
+          myAutoExpand = !!enabled;
+        }
+      });
     }
     updateAutoExpandToggle();
-    
+
+    myEliminated = eliminatedPlayers.has(myPlayerId);
+    updateQuitButtonLabel();
+
     computeTransform(game.scale.gameSize.width, game.scale.gameSize.height);
     const menu = document.getElementById('menu');
-    menu && menu.classList.add('hidden');
+    if (menu) menu.classList.add('hidden');
     if (overlayMsg) overlayMsg.style.display = 'none';
+
     redrawStatic();
     if (statusText) {
-      statusText.setText(''); // Remove the "Choose Starting Node" text
-      statusText.setVisible(false); // Hide the status text completely
+      statusText.setText('');
+      statusText.setVisible(false);
     }
+
     updateGoldBar();
-    setProgressBarColors(); // Set colors based on actual player colors
     updateProgressBar();
-    updateSpeedDisplay(); // Update speed display
-    
-    // Show progress bar when game starts
+    updateSpeedDisplay();
+
     if (progressBar) {
-      progressBar.style.display = 'block';
+      progressBar.style.display = players.size > 0 ? 'block' : 'none';
     }
-    
-    // Start the game timer
+
     startGameTimer();
   }
 
   function handleLobby(msg) {
     const lobby = document.getElementById('lobby');
     if (lobby) {
-      lobby.textContent = msg.status === 'waiting' ? 'Waiting for another player...' : 'Starting...';
+      lobby.textContent = msg.status === 'waiting' ? 'Waiting for players to join...' : 'Starting...';
     }
     if (msg.token) localStorage.setItem('token', msg.token);
     // Hide the PLAY button while waiting
     const playBtn = document.getElementById('playBtn');
     if (playBtn) playBtn.style.display = 'none';
+  }
+
+  function handleLobbyTimeout() {
+    returnToMenu();
+    const lobby = document.getElementById('lobby');
+    if (lobby) {
+      lobby.textContent = 'Lobby timed out. Try again.';
+      lobby.style.display = 'block';
+      setTimeout(() => {
+        lobby.textContent = '';
+        lobby.style.display = 'none';
+      }, 3000);
+    }
   }
 
   function handleGameOver(msg) {
@@ -763,10 +805,8 @@ function hideBridgeCostDisplay() {
       overlayMsg.style.display = 'block';
     }
     gameEnded = true;
-    const buttons = document.getElementsByTagName('button');
-    for (const b of buttons) {
-      if (b.textContent === 'Forfeit') b.textContent = 'Quit';
-    }
+    myEliminated = msg.winnerId !== myId;
+    updateQuitButtonLabel();
     // Clean up money indicators when game ends
     clearMoneyIndicators();
     // Do not clear board; leave last state visible (stale, no updates)
@@ -791,86 +831,107 @@ function hideBridgeCostDisplay() {
   }
 
   function handleTick(msg) {
-    // Update states (not visualized yet, but we store them for future use)
     if (Array.isArray(msg.nodes)) {
-      for (const arr of msg.nodes) {
-        const [id, size, owner] = arr;
-        const n = nodes.get(id);
-        if (n) {
-          n.size = size;
-          n.owner = owner;
+      msg.nodes.forEach(([id, size, owner]) => {
+        const node = nodes.get(id);
+        if (node) {
+          node.size = size;
+          node.owner = owner;
         }
-      }
+      });
     }
+
     if (Array.isArray(msg.edges)) {
-      for (const arr of msg.edges) {
-        const [id, on, flowing, fwd] = arr;
-        const e = edges.get(id);
-        if (e) {
-          const wasFlowing = e.flowing;
-          e.on = !!on;
-          e.flowing = !!flowing;
-          
-          // Track when flow starts for initialization animation
-          if (!wasFlowing && e.flowing) {
-            e.flowStartTime = animationTime;
-          } else if (!e.flowing) {
-            e.flowStartTime = null;
-          }
+      msg.edges.forEach(([id, on, flowing]) => {
+        const edge = edges.get(id);
+        if (!edge) return;
+        const wasFlowing = edge.flowing;
+        edge.on = !!on;
+        edge.flowing = !!flowing;
+        if (!wasFlowing && edge.flowing) {
+          edge.flowStartTime = animationTime;
+        } else if (!edge.flowing) {
+          edge.flowStartTime = null;
         }
-      }
+      });
     }
-    // Phase and pick status, and gold update
+
     if (typeof msg.phase === 'string') phase = msg.phase;
     if (Array.isArray(msg.picked)) {
-      for (const [pid, picked] of msg.picked) {
+      msg.picked.forEach(([pid, picked]) => {
         if (Number(pid) === myPlayerId) myPicked = !!picked;
-      }
+      });
     }
+
     if (Array.isArray(msg.gold)) {
-      for (const [pid, val] of msg.gold) {
-        if (Number(pid) === myPlayerId) goldValue = Math.max(0, Number(val) || 0);
-      }
+      msg.gold.forEach(([pid, value]) => {
+        const id = Number(pid);
+        if (!Number.isFinite(id)) return;
+        const stats = ensurePlayerStats(id);
+        stats.gold = Math.max(0, Number(value) || 0);
+        if (id === myPlayerId) {
+          goldValue = stats.gold;
+        }
+      });
     }
-    // Capital counts from backend
-    if (Array.isArray(msg.capitals)) {
-      for (const [pid, count] of msg.capitals) {
-        if (Number(pid) === 1) player1Capitals = Number(count) || 0;
-        if (Number(pid) === 2) player2Capitals = Number(count) || 0;
-      }
+
+    if (msg.counts) {
+      Object.entries(msg.counts).forEach(([pid, count]) => {
+        const id = Number(pid);
+        if (!Number.isFinite(id)) return;
+        const stats = ensurePlayerStats(id);
+        stats.nodes = Math.max(0, Number(count) || 0);
+      });
     }
-    
-    // Update win threshold and total nodes for progress bar
+
     if (typeof msg.winThreshold === 'number') winThreshold = msg.winThreshold;
     if (typeof msg.totalNodes === 'number') totalNodes = msg.totalNodes;
-    
-    // Update node counts from counts data
-    if (msg.counts) {
-      player1Nodes = Number(msg.counts[1]) || 0;
-      player2Nodes = Number(msg.counts[2]) || 0;
-    }
-    
-    // Update auto-expand settings
+
     if (Array.isArray(msg.autoExpand)) {
-      for (const [pid, enabled] of msg.autoExpand) {
+      msg.autoExpand.forEach(([pid, enabled]) => {
         if (Number(pid) === myPlayerId) {
           myAutoExpand = !!enabled;
-          // Sync the persistent setting when auto-expand is toggled in-game
           savePersistentAutoExpand(myAutoExpand);
           updateHomeAutoExpandToggle();
         }
-      }
+      });
     }
     updateAutoExpandToggle();
-    
-    if (statusText) {
-      statusText.setText(''); // Remove the "Choose Starting Node" text
-      statusText.setVisible(false); // Hide the status text completely
+
+    if (Array.isArray(msg.eliminatedPlayers)) {
+      eliminatedPlayers.clear();
+      msg.eliminatedPlayers.forEach((pid) => {
+        const id = Number(pid);
+        if (Number.isFinite(id)) eliminatedPlayers.add(id);
+      });
     }
+
+    if (Array.isArray(msg.recentEliminations) && msg.recentEliminations.length > 0) {
+      if (!gameEnded && overlayMsg && msg.recentEliminations.some((pid) => Number(pid) === myPlayerId)) {
+        overlayMsg.textContent = 'Eliminated';
+        overlayMsg.style.display = 'block';
+      }
+    }
+
+    myEliminated = eliminatedPlayers.has(myPlayerId);
+    updateQuitButtonLabel();
+    if (!myEliminated && overlayMsg && overlayMsg.textContent === 'Eliminated') {
+      overlayMsg.style.display = 'none';
+    }
+    if (myEliminated && activeAbility) {
+      activeAbility = null;
+      bridgeFirstNode = null;
+      hideBridgeCostDisplay();
+    }
+
+    if (statusText) {
+      statusText.setText('');
+      statusText.setVisible(false);
+    }
+
     updateGoldBar();
-    setProgressBarColors(); // Ensure colors are up to date
     updateProgressBar();
-    updateSpeedDisplay(); // Update speed display
+    updateSpeedDisplay();
     redrawStatic();
   }
 
@@ -992,37 +1053,15 @@ function hideBridgeCostDisplay() {
     showErrorMessage(msg.message || "Invalid Pipe!");
   }
 
-  function handleNewCapital(msg) {
-    // Add new capital to the frontend for visual rendering
-    if (msg.nodeId) {
-      capitalNodes.add(msg.nodeId);
-      redrawStatic();
-      // Capital counter will be updated by next tick message from backend
-    }
-    
-    // Reset capital creation state on successful capital creation
-    if (activeAbility === 'capital') {
-      activeAbility = null;
-      bridgeFirstNode = null;
-    }
-  }
-
   function handleReverseEdgeError(msg) {
     // Show error message to the player
     showErrorMessage(msg.message || "Can't reverse this pipe!");
-  }
-
-  function handleCapitalError(msg) {
-    // Show error message to the player
-    showErrorMessage(msg.message || "Invalid Capital!");
   }
 
   function handleNodeDestroyed(msg) {
     // Remove the destroyed node from the frontend
     if (msg.nodeId) {
       nodes.delete(msg.nodeId);
-      // Also remove from capital nodes if it was a capital
-      capitalNodes.delete(msg.nodeId);
       redrawStatic();
     }
     
@@ -1205,24 +1244,10 @@ function hideBridgeCostDisplay() {
 
       }
       
-      // Capital creation hover: show player secondary color highlight for valid capital locations
-      // (don't mislead with highlighting if it won't work)
-      if (hoveredNodeId === id && activeAbility === 'capital' && canCreateCapitalAt(id)) {
-        const playerSecondaryColor = ownerToSecondaryColor(myPlayerId);
-        graphicsNodes.lineStyle(3, playerSecondaryColor, 0.8);
-        graphicsNodes.strokeCircle(nx, ny, r + 3);
-      }
-      
       // Destroy mode hover: show black highlight for owned nodes
       if (hoveredNodeId === id && activeAbility === 'destroy' && n.owner === myPlayerId) {
         graphicsNodes.lineStyle(3, 0x000000, 0.8); // black highlight
         graphicsNodes.strokeCircle(nx, ny, r + 3);
-      }
-      
-      // Draw star for capital nodes
-      if (capitalNodes.has(id)) {
-        const starColor = n.owner === 1 ? 0xffa500 : 0x9932cc; // orange for player 1, purple for player 2
-        drawStar(nx, ny, r * 0.6, starColor);
       }
     }
 
@@ -1301,24 +1326,27 @@ function hideBridgeCostDisplay() {
     return [x * view.scaleX + view.offsetX, y * view.scaleY + view.offsetY];
   }
 
+  function hexToInt(color) {
+    if (!color) return 0xff00ff;
+    const hex = color.startsWith('#') ? color.slice(1) : color;
+    return parseInt(`0x${hex}`, 16);
+  }
+
   function ownerToColor(ownerId) {
     if (ownerId == null) return 0x000000; // unowned nodes black
-    const p = players.get(ownerId);
-    if (!p || !p.color) return 0xff00ff;
-    // Convert hex like #ffcc00 to 0xffcc00
-    try {
-      return parseInt(p.color.replace('#', '0x'));
-    } catch (e) {
-      return 0xff00ff;
-    }
+    const entry = players.get(ownerId);
+    return hexToInt(entry?.color);
   }
 
   function ownerToSecondaryColor(ownerId) {
     if (ownerId == null) return 0x000000;
-    // Secondary colors: orange for player 1 (red), purple for player 2 (blue)
-    if (ownerId === 1) return 0xffa500; // orange
-    if (ownerId === 2) return 0x9932cc; // purple  
-    return 0xff00ff; // fallback magenta
+    const entry = players.get(ownerId);
+    if (!entry) return 0xff00ff;
+    const fallback = entry.color || '#ff00ff';
+    const secondary = Array.isArray(entry.secondaryColors) && entry.secondaryColors.length
+      ? entry.secondaryColors[0]
+      : lightenColor(fallback, 0.3);
+    return hexToInt(secondary);
   }
 
   function canReverseEdge(edge) {
@@ -1365,37 +1393,6 @@ function hideBridgeCostDisplay() {
       }
     }
     return false;
-  }
-
-  function canCreateCapitalAt(nodeId) {
-    const node = nodes.get(nodeId);
-    if (!node || node.owner !== myPlayerId) {
-      return false; // Must own the node
-    }
-    
-    // Check if already a capital
-    if (capitalNodes.has(nodeId)) {
-      return false; // Already a capital
-    }
-    
-    // Check for adjacent capitals
-    for (const [edgeId, edge] of edges.entries()) {
-      let adjacentNodeId = null;
-      
-      // Find adjacent node (could be source or target)
-      if (edge.source === nodeId) {
-        adjacentNodeId = edge.target;
-      } else if (edge.target === nodeId) {
-        adjacentNodeId = edge.source;
-      }
-      
-      // If adjacent node is a capital, can't create here
-      if (adjacentNodeId && capitalNodes.has(adjacentNodeId)) {
-        return false;
-      }
-    }
-    
-    return true; // All checks passed
   }
 
   // Input: during picking, click to claim a node once; during playing, edge interactions allowed
@@ -1471,6 +1468,7 @@ function hideBridgeCostDisplay() {
   }
 
   function handleSingleClick(ev, wx, wy, baseScale) {
+    if (myEliminated || gameEnded) return;
     // Handle bridge building mode
     if (handleBridgeBuilding(wx, wy, baseScale, false)) {
       return; // Bridge building was handled
@@ -1499,31 +1497,6 @@ function hideBridgeCostDisplay() {
         }
       }
       return; // Don't handle normal clicks in reverse mode
-    }
-    
-    // Handle capital creation mode
-    if (activeAbility === 'capital') {
-      const candidateNodeId = pickNearestNode(wx, wy, 18 / baseScale);
-      if (candidateNodeId != null) {
-        const node = nodes.get(candidateNodeId);
-        if (node) {
-          // Attempt to create capital (backend will validate ownership and adjacency)
-          const ability = { cost: 4 };
-          if (goldValue >= ability.cost && ws && ws.readyState === WebSocket.OPEN) {
-            const token = localStorage.getItem('token');
-            ws.send(JSON.stringify({
-              type: 'createCapital',
-              nodeId: candidateNodeId,
-              cost: ability.cost,
-              token: token
-            }));
-          }
-          
-          // Don't reset capital creation state here - wait for server response
-          // Reset will happen in handleNewCapital() on success or stay active on error
-        }
-      }
-      return; // Don't handle normal clicks in capital mode
     }
     
     // Handle destroy mode
@@ -1592,7 +1565,7 @@ function hideBridgeCostDisplay() {
           }));
           return;
         } else {
-          // Regular node click (for other purposes like building capitals, etc.)
+          // Regular node click
           ws.send(JSON.stringify({ type: 'clickNode', nodeId: nodeId, token }));
           return;
         }
@@ -1681,8 +1654,8 @@ function hideBridgeCostDisplay() {
     
     let needsRedraw = false;
     
-    // In bridge building, capital, or destroy mode, only check for node hover, not edge hover
-    if (activeAbility === 'bridge1way' || activeAbility === 'capital' || activeAbility === 'destroy') {
+    // In bridge building or destroy mode, only check for node hover, not edge hover
+    if (activeAbility === 'bridge1way' || activeAbility === 'destroy') {
       const nodeId = pickNearestNode(wx, wy, 18 / baseScale);
       
       // Update hovered node
@@ -1697,7 +1670,7 @@ function hideBridgeCostDisplay() {
         needsRedraw = true;
       }
       
-      // Always redraw during bridge mode to update the preview line (but not for capital or destroy mode)
+      // Always redraw during bridge mode to update the preview line (but not for destroy mode)
       if (activeAbility === 'bridge1way') {
         needsRedraw = true;
       }
@@ -1730,6 +1703,7 @@ function hideBridgeCostDisplay() {
   }
 
   function handleAbilityClick(abilityName) {
+    if (myEliminated || gameEnded) return;
     // Allow abilities during playing phase
     
     const abilities = {
@@ -1761,7 +1735,7 @@ function hideBridgeCostDisplay() {
       activeAbility = abilityName;
       bridgeFirstNode = null;
     } else if (abilityName === 'reverse') {
-      // Activate reverse mode (similar to capital - click an edge to reverse)
+      // Activate reverse mode (click an edge to reverse)
       activeAbility = abilityName;
       bridgeFirstNode = null;
     } else if (abilityName === 'destroy') {
@@ -1777,29 +1751,147 @@ function hideBridgeCostDisplay() {
   function updateGoldBar() {
     const val = Math.max(0, goldValue || 0);
     if (goldDisplay) {
-      goldDisplay.textContent = Math.floor(val).toString();
+      goldDisplay.textContent = `$${Math.floor(val)}`;
     }
   }
 
-  function setProgressBarColors() {
-    // Get player colors from the players map
-    const player1 = players.get(1);
-    const player2 = players.get(2);
-    
-    if (player1 && player2) {
-      const player1Color = player1.color;
-      const player2Color = player2.color;
-      
-      // Create lighter versions of the colors for gradients
-      const player1ColorLight = lightenColor(player1Color, 0.3);
-      const player2ColorLight = lightenColor(player2Color, 0.3);
-      
-      // Set CSS custom properties
-      document.documentElement.style.setProperty('--player1-color', player1Color);
-      document.documentElement.style.setProperty('--player1-color-light', player1ColorLight);
-      document.documentElement.style.setProperty('--player2-color', player2Color);
-      document.documentElement.style.setProperty('--player2-color-light', player2ColorLight);
+  function updateQuitButtonLabel() {
+    if (!quitButton) return;
+    quitButton.textContent = (gameEnded || myEliminated) ? 'Quit' : 'Forfeit';
+  }
+
+  function ensurePlayerStats(id) {
+    if (!playerStats.has(id)) {
+      playerStats.set(id, { nodes: 0, gold: 0 });
     }
+    return playerStats.get(id);
+  }
+
+  function updateProgressBar() {
+    if (!progressBarInner) return;
+
+    const orderedIds = playerOrder.length ? playerOrder : Array.from(players.keys()).sort((a, b) => a - b);
+    const activeIds = orderedIds.filter((id) => players.has(id) && !eliminatedPlayers.has(id));
+
+    if (!activeIds.length || totalNodes <= 0) {
+      progressBarInner.innerHTML = '';
+      progressSegments.clear();
+      if (progressBar) progressBar.style.display = 'none';
+      if (progressMarkerLeft) progressMarkerLeft.style.display = 'none';
+      if (progressMarkerRight) progressMarkerRight.style.display = 'none';
+      return;
+    }
+
+    if (progressBar) progressBar.style.display = 'block';
+
+    const denominator = Math.max(totalNodes, 1);
+    const seen = new Set();
+
+    progressBarInner.style.justifyContent = activeIds.length === 2 ? 'space-between' : 'flex-start';
+
+    activeIds.forEach((id, index) => {
+      const info = players.get(id);
+      if (!info) return;
+      seen.add(id);
+      let segment = progressSegments.get(id);
+      if (!segment) {
+        segment = document.createElement('div');
+        segment.className = 'progressSegment';
+        const labelEl = document.createElement('span');
+        labelEl.className = 'segmentLabel';
+        segment.appendChild(labelEl);
+        progressSegments.set(id, segment);
+        progressBarInner.appendChild(segment);
+      }
+
+      const stats = ensurePlayerStats(id);
+      const percent = Math.max(0, Math.min(100, (stats.nodes / denominator) * 100));
+      const primary = info.color || '#ffffff';
+      const secondary = (info.secondaryColors && info.secondaryColors[0]) || lightenColor(primary, 0.35);
+
+      segment.style.order = index;
+      segment.style.flex = `0 0 ${percent}%`;
+      segment.style.background = `linear-gradient(to right, ${primary}, ${secondary})`;
+      segment.style.opacity = '0.92';
+      segment.dataset.playerId = String(id);
+
+      const labelEl = segment.querySelector('.segmentLabel');
+      if (labelEl) {
+        labelEl.textContent = `$${Math.floor(stats.gold || 0)}`;
+      }
+    });
+
+    progressSegments.forEach((segment, id) => {
+      if (!seen.has(id)) {
+        if (segment.parentElement === progressBarInner) {
+          progressBarInner.removeChild(segment);
+        }
+        progressSegments.delete(id);
+      }
+    });
+
+    const activeCount = activeIds.length;
+    if (activeCount === 2 && progressMarkerLeft && progressMarkerRight) {
+      const thresholdPct = Math.max(0, Math.min(100, (winThreshold / Math.max(totalNodes, 1)) * 100));
+      progressMarkerLeft.style.display = 'block';
+      progressMarkerLeft.style.left = `calc(${thresholdPct}% - 2px)`;
+      progressMarkerRight.style.display = 'block';
+      progressMarkerRight.style.left = `calc(${100 - thresholdPct}% - 2px)`;
+    } else {
+      if (progressMarkerLeft) progressMarkerLeft.style.display = 'none';
+      if (progressMarkerRight) progressMarkerRight.style.display = 'none';
+    }
+
+  }
+
+  function returnToMenu() {
+    const menu = document.getElementById('menu');
+    const lobby = document.getElementById('lobby');
+    const difficultyDropdown = document.getElementById('difficultyDropdown');
+    const homeButtons = document.querySelector('.button-container');
+    const playBtnEl = document.getElementById('playBtn');
+
+    if (lobby) {
+      lobby.textContent = '';
+      lobby.style.display = 'none';
+    }
+    if (menu) menu.classList.remove('hidden');
+    if (difficultyDropdown) difficultyDropdown.style.display = 'none';
+    if (homeButtons) homeButtons.style.display = 'flex';
+    if (playBtnEl) playBtnEl.style.display = 'block';
+
+    if (quitButton) quitButton.style.display = 'none';
+    if (overlayMsg) overlayMsg.style.display = 'none';
+    if (goldDisplay) goldDisplay.style.display = 'none';
+    if (progressBar) progressBar.style.display = 'none';
+    if (progressMarkerLeft) progressMarkerLeft.style.display = 'none';
+    if (progressMarkerRight) progressMarkerRight.style.display = 'none';
+    if (timerDisplay) timerDisplay.style.display = 'none';
+    if (autoExpandToggle) autoExpandToggle.style.display = 'none';
+    if (speedDisplay) speedDisplay.style.display = 'none';
+
+    updateHomeAutoExpandToggle();
+
+    nodes.clear();
+    edges.clear();
+    players.clear();
+    playerOrder = [];
+    playerStats.clear();
+    eliminatedPlayers.clear();
+    progressSegments.clear();
+    if (progressBarInner) progressBarInner.innerHTML = '';
+    if (progressBarInner) progressBarInner.style.justifyContent = 'flex-start';
+
+    activeAbility = null;
+    bridgeFirstNode = null;
+    hideBridgeCostDisplay();
+    clearMoneyIndicators();
+
+    gameEnded = false;
+    myEliminated = false;
+    gameStartTime = null;
+    updateQuitButtonLabel();
+    redrawStatic();
   }
 
   function lightenColor(color, factor) {
@@ -1814,40 +1906,6 @@ function hideBridgeCostDisplay() {
     const newB = Math.min(255, Math.floor(b + (255 - b) * factor));
     
     return `#${newR.toString(16).padStart(2, '0')}${newG.toString(16).padStart(2, '0')}${newB.toString(16).padStart(2, '0')}`;
-  }
-
-  function updateProgressBar() {
-    if (!progressBar) return;
-    
-    // Calculate percentages
-    const player1Percent = (player1Nodes / totalNodes) * 100;
-    const player2Percent = (player2Nodes / totalNodes) * 100;
-    
-    // Update the progress bar widths
-    const progressBarLeft = document.getElementById('progressBarLeft');
-    const progressBarRight = document.getElementById('progressBarRight');
-    
-    if (progressBarLeft) {
-      progressBarLeft.style.width = `${player1Percent}%`;
-    }
-    if (progressBarRight) {
-      progressBarRight.style.width = `${player2Percent}%`;
-    }
-    
-    // Update marker positions based on win threshold
-    const marker1 = document.querySelector('.progressMarker.marker1');
-    const marker2 = document.querySelector('.progressMarker.marker2');
-    
-    if (marker1 && marker2) {
-      // Calculate marker positions based on win threshold
-      // Marker 1: win threshold from left (player 1 perspective)
-      const marker1Percent = (winThreshold / totalNodes) * 100;
-      // Marker 2: win threshold from right (player 2 perspective) 
-      const marker2Percent = ((totalNodes - winThreshold) / totalNodes) * 100;
-      
-      marker1.style.left = `${marker1Percent}%`;
-      marker2.style.left = `${marker2Percent}%`;
-    }
   }
 
   function startGameTimer() {
@@ -2002,32 +2060,6 @@ function hideBridgeCostDisplay() {
       const cy = sy + (i + 0.5) * actualSpacing * uy;
       drawPreviewTriangle(cx, cy, triW, triH, angle, previewColor);
     }
-  }
-
-  function drawStar(cx, cy, radius, color) {
-    // Draw a 5-pointed star
-    const spikes = 5;
-    const outerRadius = radius;
-    const innerRadius = radius * 0.4;
-    
-    graphicsNodes.fillStyle(color, 1);
-    graphicsNodes.beginPath();
-    
-    for (let i = 0; i < spikes * 2; i++) {
-      const angle = (i * Math.PI) / spikes;
-      const r = i % 2 === 0 ? outerRadius : innerRadius;
-      const x = cx + Math.cos(angle - Math.PI / 2) * r;
-      const y = cy + Math.sin(angle - Math.PI / 2) * r;
-      
-      if (i === 0) {
-        graphicsNodes.moveTo(x, y);
-      } else {
-        graphicsNodes.lineTo(x, y);
-      }
-    }
-    
-    graphicsNodes.closePath();
-    graphicsNodes.fillPath();
   }
 
   function drawPreviewTriangle(cx, cy, baseW, height, angle, color) {

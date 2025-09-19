@@ -1,103 +1,233 @@
-"""
-WebSocket Message Handlers - Handle different types of client messages.
-Separates message parsing and response logic from core game logic.
-"""
 import json
-import asyncio
 import time
-from typing import Dict, Any, Optional, Set
+import uuid
+from typing import Any, Dict, List, Optional, Tuple
+
 import websockets
 
-from .game_engine import GameEngine, GameValidationError
-from .graph_generator import graph_generator
+from .constants import MAX_FRIEND_PLAYERS, MIN_FRIEND_PLAYERS, PLAYER_COLOR_SCHEMES
+from .game_engine import GameEngine
 from .bot_player import bot_game_manager
 
 
-class BaseMessageHandler:
-    """Base class for message handlers."""
-    
-    def __init__(self, game_engine: GameEngine):
-        self.game_engine = game_engine
-    
-    async def handle(self, websocket: websockets.WebSocketServerProtocol, 
-                    msg: Dict[str, Any], server_context: Dict[str, Any]) -> None:
-        """Handle a message. Override in subclasses."""
-        raise NotImplementedError
+class MessageRouter:
+    """Routes websocket messages to the appropriate handlers."""
 
+    def __init__(self) -> None:
+        self.handlers = {
+            "joinLobby": self.handle_join_lobby,
+            "requestInit": self.handle_request_init,
+            "clickNode": self.handle_click_node,
+            "clickEdge": self.handle_click_edge,
+            "reverseEdge": self.handle_reverse_edge,
+            "buildBridge": self.handle_build_bridge,
+            "redirectEnergy": self.handle_redirect_energy,
+            "destroyNode": self.handle_destroy_node,
+            "quitGame": self.handle_quit_game,
+            "toggleAutoExpand": self.handle_toggle_auto_expand,
+            "newGame": self.handle_new_game,
+            "nodeCaptured": self.handle_node_captured_flush,
+        }
 
-class NodeClickHandler(BaseMessageHandler):
-    """Handle node click messages during picking phase."""
-    
-    async def handle(self, websocket: websockets.WebSocketServerProtocol, 
-                    msg: Dict[str, Any], server_context: Dict[str, Any]) -> None:
+    async def route_message(
+        self,
+        websocket: websockets.WebSocketServerProtocol,
+        msg: Dict[str, Any],
+        server_context: Dict[str, Any],
+    ) -> None:
+        msg_type = msg.get("type")
+
+        # Bot game messages are handled separately (except startBotGame)
+        if msg_type != "startBotGame" and bot_game_manager.game_active:
+            human_token = bot_game_manager.human_token
+            if human_token and human_token in server_context.get("bot_game_clients", {}):
+                await self._route_to_bot_game(websocket, msg, server_context)
+                return
+
+        if msg_type == "startBotGame":
+            await self.handle_start_bot_game(websocket, msg, server_context)
+            return
+
+        handler = self.handlers.get(msg_type)
+        if handler:
+            await handler(websocket, msg, server_context)
+
+    # ------------------------------------------------------------------
+    # Lobby / game setup helpers
+    # ------------------------------------------------------------------
+
+    async def handle_join_lobby(
+        self,
+        websocket: websockets.WebSocketServerProtocol,
+        msg: Dict[str, Any],
+        server_context: Dict[str, Any],
+    ) -> None:
+        player_count = int(msg.get("playerCount", MIN_FRIEND_PLAYERS))
+        player_count = max(MIN_FRIEND_PLAYERS, min(MAX_FRIEND_PLAYERS, player_count))
+        auto_expand = bool(msg.get("autoExpand", False))
+        speed_level = int(msg.get("speedLevel", 6))
+        token = msg.get("token") or uuid.uuid4().hex
+
+        lobbies: Dict[int, List[Dict[str, Any]]] = server_context.setdefault("lobbies", {})
+        lobby_queue = lobbies.setdefault(player_count, [])
+
+        # Remove any stale entries for this websocket
+        lobby_queue[:] = [entry for entry in lobby_queue if entry.get("websocket") is not websocket]
+
+        lobby_queue.append(
+            {
+                "token": token,
+                "websocket": websocket,
+                "auto_expand": auto_expand,
+                "speed_level": speed_level,
+                "joined_at": time.time(),
+            }
+        )
+
+        server_context.setdefault("ws_to_token", {})[websocket] = token
+
+        await websocket.send(
+            json.dumps(
+                {
+                    "type": "lobbyJoined",
+                    "status": "waiting",
+                    "token": token,
+                    "playerCount": player_count,
+                }
+            )
+        )
+
+        if len(lobby_queue) >= player_count:
+            players = [lobby_queue.pop(0) for _ in range(player_count)]
+            await self._start_friend_game(players, player_count, server_context)
+
+    async def _start_friend_game(
+        self,
+        players: List[Dict[str, Any]],
+        player_count: int,
+        server_context: Dict[str, Any],
+    ) -> None:
+        speed_level = int(players[0].get("speed_level", 6))
+        engine = GameEngine()
+        color_pool = PLAYER_COLOR_SCHEMES[:player_count]
+
+        player_slots = []
+        for idx, player in enumerate(players, start=1):
+            color_info = color_pool[idx - 1]
+            player_slots.append(
+                {
+                    "player_id": idx,
+                    "token": player["token"],
+                    "color": color_info["color"],
+                    "secondary_colors": color_info["secondary"],
+                    "auto_expand": bool(player.get("auto_expand", False)),
+                }
+            )
+
+        engine.start_game(player_slots, speed_level)
+        game_id = uuid.uuid4().hex
+        game_info = {
+            "engine": engine,
+            "clients": {},
+            "screen": engine.screen,
+            "player_count": player_count,
+            "speed_level": speed_level,
+            "created_at": time.time(),
+            "disconnect_deadlines": {},
+        }
+
+        games = server_context.setdefault("games", {})
+        games[game_id] = game_info
+
+        token_to_game = server_context.setdefault("token_to_game", {})
+        ws_to_token = server_context.setdefault("ws_to_token", {})
+
+        for player in players:
+            token = player["token"]
+            websocket = player["websocket"]
+            token_to_game[token] = game_id
+            ws_to_token[websocket] = token
+            game_info["clients"][token] = websocket
+            await self._send_init_message(engine, game_info, websocket, token, server_context)
+
+    # ------------------------------------------------------------------
+    # Core gameplay handlers
+    # ------------------------------------------------------------------
+
+    async def handle_click_node(
+        self,
+        websocket: websockets.WebSocketServerProtocol,
+        msg: Dict[str, Any],
+        server_context: Dict[str, Any],
+    ) -> None:
         token = msg.get("token")
         node_id = msg.get("nodeId")
-        
         if token is None or node_id is None:
             return
-        
-        success = self.game_engine.handle_node_click(token, node_id)
-        
-        # If this was a successful node capture (starting node pick), send the capture message immediately
-        if success and self.game_engine.state and hasattr(self.game_engine.state, 'pending_node_captures') and self.game_engine.state.pending_node_captures:
-            # Send all pending node capture messages
-            for capture_data in self.game_engine.state.pending_node_captures:
+
+        game_info = self._get_game_info(token, server_context)
+        if not game_info:
+            return
+
+        engine = game_info["engine"]
+        success = engine.handle_node_click(token, int(node_id))
+        if success and engine.state and getattr(engine.state, "pending_node_captures", None):
+            for capture_data in engine.state.pending_node_captures:
                 capture_msg = {
                     "type": "nodeCaptured",
-                    "nodeId": capture_data['nodeId'],
-                    "reward": capture_data['reward']
+                    "nodeId": capture_data["nodeId"],
+                    "reward": capture_data["reward"],
                 }
-                await websocket.send(json.dumps(capture_msg))
-            
-            # Clear the pending capture events
-            self.game_engine.state.pending_node_captures = []
-        
-        # Success/failure is handled implicitly through game state changes
-        # Server will broadcast updated state in next tick
+                await self._send_safe(websocket, json.dumps(capture_msg))
+            engine.state.pending_node_captures = []
 
-
-class EdgeClickHandler(BaseMessageHandler):
-    """Handle edge click messages to toggle flow."""
-    
-    async def handle(self, websocket: websockets.WebSocketServerProtocol, 
-                    msg: Dict[str, Any], server_context: Dict[str, Any]) -> None:
+    async def handle_click_edge(
+        self,
+        websocket: websockets.WebSocketServerProtocol,
+        msg: Dict[str, Any],
+        server_context: Dict[str, Any],
+    ) -> None:
         token = msg.get("token")
         edge_id = msg.get("edgeId")
-        
         if token is None or edge_id is None:
             return
-        
-        success = self.game_engine.handle_edge_click(token, edge_id)
-        # Success/failure is handled implicitly through game state changes
 
+        game_info = self._get_game_info(token, server_context)
+        if not game_info:
+            return
 
-class ReverseEdgeHandler(BaseMessageHandler):
-    """Handle edge reversal messages."""
-    
-    async def handle(self, websocket: websockets.WebSocketServerProtocol, 
-                    msg: Dict[str, Any], server_context: Dict[str, Any]) -> None:
+        engine = game_info["engine"]
+        engine.handle_edge_click(token, int(edge_id))
+
+    async def handle_reverse_edge(
+        self,
+        websocket: websockets.WebSocketServerProtocol,
+        msg: Dict[str, Any],
+        server_context: Dict[str, Any],
+    ) -> None:
         token = msg.get("token")
         edge_id = msg.get("edgeId")
-        cost = msg.get("cost", 1.0)
-        
-        if edge_id is None:
+        cost = float(msg.get("cost", 1.0))
+        if token is None or edge_id is None:
             return
-        
-        success = self.game_engine.handle_reverse_edge(token, edge_id, cost)
-        
+
+        game_info = self._get_game_info(token, server_context)
+        if not game_info:
+            return
+
+        engine = game_info["engine"]
+        success = engine.handle_reverse_edge(token, int(edge_id), cost)
         if not success:
-            # Send error message to the player who attempted the reversal
-            await websocket.send(json.dumps({
-                "type": "reverseEdgeError", 
-                "message": "Pipe controlled by opponent"
-            }))
+            await self._send_safe(
+                websocket,
+                json.dumps({"type": "reverseEdgeError", "message": "Pipe controlled by opponent"}),
+            )
             return
-        
-        if success and self.game_engine.state:
-            # Broadcast the updated edge immediately so frontend sees the direction change
-            edge = self.game_engine.state.edges.get(edge_id)
+
+        if engine.state:
+            edge = engine.state.edges.get(int(edge_id))
             if edge:
-                edge_data = {
+                message = {
                     "type": "edgeReversed",
                     "edge": {
                         "id": edge.id,
@@ -106,220 +236,43 @@ class ReverseEdgeHandler(BaseMessageHandler):
                         "bidirectional": False,
                         "forward": True,
                         "on": edge.on,
-                        "flowing": edge.flowing
+                        "flowing": edge.flowing,
                     },
-                    "cost": cost  # Include the cost for the frontend
+                    "cost": cost,
                 }
-                
-                game_clients = server_context.get("game_clients", {})
-                await self._broadcast_to_game_clients(json.dumps(edge_data), game_clients)
+                await self._broadcast_to_game(game_info, message)
 
-
-class NewGameHandler(BaseMessageHandler):
-    """Handle new game creation requests."""
-    
-    async def handle(self, websocket: websockets.WebSocketServerProtocol, 
-                    msg: Dict[str, Any], server_context: Dict[str, Any]) -> None:
-        new_state, screen = self.game_engine.create_new_game()
-        
-        # Update server context
-        server_context["screen"] = screen
-        
-        # Send init message
-        init_msg = new_state.to_init_message(screen, server_context.get("tick_interval", 0.1), time.time())
-        await websocket.send(json.dumps(init_msg))
-
-
-class RequestInitHandler(BaseMessageHandler):
-    """Handle initialization requests (for reconnections)."""
-    
-    async def handle(self, websocket: websockets.WebSocketServerProtocol, 
-                    msg: Dict[str, Any], server_context: Dict[str, Any]) -> None:
-        token = msg.get("token")
-        
-        if not self.game_engine.state or not self.game_engine.state.nodes:
-            return
-        
-        if token and token in self.game_engine.token_to_player_id:
-            # Reattach this websocket
-            game_clients = server_context.get("game_clients", {})
-            ws_to_token = server_context.get("ws_to_token", {})
-            
-            game_clients[token] = websocket
-            ws_to_token[websocket] = token
-            
-            # Send init with player info
-            init = self.game_engine.state.to_init_message(
-                server_context.get("screen", {}), 
-                server_context.get("tick_interval", 0.1),
-                time.time()
-            )
-            init["myPlayerId"] = self.game_engine.token_to_player_id[token]
-            init["token"] = token
-            await websocket.send(json.dumps(init))
-
-
-class JoinLobbyHandler(BaseMessageHandler):
-    """Handle lobby join requests."""
-    
-    async def handle(self, websocket: websockets.WebSocketServerProtocol, 
-                    msg: Dict[str, Any], server_context: Dict[str, Any]) -> None:
-        token = msg.get("token")
-        auto_expand = msg.get("autoExpand", False)
-        speed_level = msg.get("speedLevel", 6)
-        
-        player_token, status = self.game_engine.join_lobby(token, auto_expand, speed_level)
-        
-        if status == "waiting":
-            # First player waiting
-            lobby_waiting = server_context.get("lobby_waiting")
-            if lobby_waiting:
-                lobby_waiting["token"] = player_token
-                lobby_waiting["websocket"] = websocket
-            else:
-                server_context["lobby_waiting"] = {"token": player_token, "websocket": websocket}
-            
-            await websocket.send(json.dumps({
-                "type": "lobbyJoined", 
-                "status": "waiting", 
-                "token": player_token
-            }))
-        
-        elif status == "ready":
-            # Game starting with two players
-            lobby_waiting = server_context.get("lobby_waiting")
-            if not lobby_waiting:
-                return
-            
-            other_ws = lobby_waiting["websocket"]
-            other_token = lobby_waiting["token"]
-            
-            # Clear lobby
-            server_context["lobby_waiting"] = None
-            
-            # Set up game client tracking
-            game_clients = server_context.setdefault("game_clients", {})
-            ws_to_token = server_context.setdefault("ws_to_token", {})
-            
-            game_clients[other_token] = other_ws
-            game_clients[player_token] = websocket
-            ws_to_token[other_ws] = other_token
-            ws_to_token[websocket] = player_token
-            
-            # Update server screen
-            server_context["screen"] = self.game_engine.screen
-            
-            # Send init messages to both players
-            await self._send_game_start_messages(other_ws, other_token, websocket, player_token, server_context)
-    
-    async def _send_game_start_messages(self, player1_ws, player1_token, player2_ws, player2_token, server_context):
-        """Send game start messages to both players."""
-        if not self.game_engine.state:
-            return
-        
-        init_common = self.game_engine.state.to_init_message(
-            server_context.get("screen", {}), 
-            server_context.get("tick_interval", 0.1),
-            time.time()
-        )
-        
-        # Player 1 message
-        init1 = dict(init_common)
-        init1["type"] = "init"
-        init1["myPlayerId"] = 1
-        init1["token"] = player1_token
-        await player1_ws.send(json.dumps(init1))
-        
-        # Player 2 message
-        init2 = dict(init_common)
-        init2["type"] = "init"
-        init2["myPlayerId"] = 2
-        init2["token"] = player2_token
-        await player2_ws.send(json.dumps(init2))
-
-
-class StartBotGameHandler(BaseMessageHandler):
-    """Handle bot game start requests."""
-    
-    async def handle(self, websocket: websockets.WebSocketServerProtocol, 
-                    msg: Dict[str, Any], server_context: Dict[str, Any]) -> None:
-        token = msg.get("token")
-        difficulty = msg.get("difficulty", "easy")  # Default to easy if not specified
-        auto_expand = msg.get("autoExpand", False)
-        speed_level = msg.get("speedLevel", 6)
-        
-        # Generate a token for the human player if not provided
-        if not token:
-            import uuid
-            token = uuid.uuid4().hex
-        
-        # Start the bot game with specified difficulty
-        success, error_msg = bot_game_manager.start_bot_game(token, difficulty, auto_expand, speed_level)
-        
-        if not success:
-            await websocket.send(json.dumps({
-                "type": "botGameError",
-                "message": error_msg or "Failed to start bot game"
-            }))
-            return
-        
-        # Set up game client tracking
-        game_clients = server_context.setdefault("game_clients", {})
-        ws_to_token = server_context.setdefault("ws_to_token", {})
-        
-        game_clients[token] = websocket
-        ws_to_token[websocket] = token
-        
-        # Update server screen
-        server_context["screen"] = bot_game_manager.get_game_engine().screen
-        
-        # Send init message to human player
-        bot_game_engine = bot_game_manager.get_game_engine()
-        if bot_game_engine.state:
-            init_common = bot_game_engine.state.to_init_message(
-                server_context.get("screen", {}), 
-                server_context.get("tick_interval", 0.1),
-                time.time()
-            )
-            
-            init_msg = dict(init_common)
-            init_msg["type"] = "init"
-            init_msg["myPlayerId"] = 1  # Human is player 1
-            init_msg["token"] = token
-            await websocket.send(json.dumps(init_msg))
-            
-            # Set the websocket on the bot player for frontend responses
-            if bot_game_manager.bot_player:
-                bot_game_manager.bot_player.set_websocket(websocket)
-            
-            # Make bot's initial move (pick starting node)
-            await bot_game_manager.make_bot_move()
-
-
-class BuildBridgeHandler(BaseMessageHandler):
-    """Handle bridge building requests."""
-    
-    async def handle(self, websocket: websockets.WebSocketServerProtocol, 
-                    msg: Dict[str, Any], server_context: Dict[str, Any]) -> None:
+    async def handle_build_bridge(
+        self,
+        websocket: websockets.WebSocketServerProtocol,
+        msg: Dict[str, Any],
+        server_context: Dict[str, Any],
+    ) -> None:
         token = msg.get("token")
         from_node_id = msg.get("fromNodeId")
         to_node_id = msg.get("toNodeId")
-        cost = msg.get("cost", 0)
-        
-        success, new_edge, actual_cost, error_msg = self.game_engine.handle_build_bridge(
-            token, from_node_id, to_node_id, cost
-        )
-        
-        if not success:
-            await websocket.send(json.dumps({
-                "type": "bridgeError", 
-                "message": error_msg or "Failed to build bridge"
-            }))
+        cost = float(msg.get("cost", 0))
+        if token is None or from_node_id is None or to_node_id is None:
             return
-        
+
+        game_info = self._get_game_info(token, server_context)
+        if not game_info:
+            return
+
+        engine = game_info["engine"]
+        success, new_edge, actual_cost, error_msg = engine.handle_build_bridge(
+            token, int(from_node_id), int(to_node_id), cost
+        )
+
+        if not success:
+            await self._send_safe(
+                websocket,
+                json.dumps({"type": "bridgeError", "message": error_msg or "Failed to build bridge"}),
+            )
+            return
+
         if new_edge:
-            # Broadcast successful edge creation
-            edge_data = {
+            message = {
                 "type": "newEdge",
                 "edge": {
                     "id": new_edge.id,
@@ -328,276 +281,259 @@ class BuildBridgeHandler(BaseMessageHandler):
                     "bidirectional": False,
                     "forward": True,
                     "on": new_edge.on,
-                    "flowing": new_edge.flowing
+                    "flowing": new_edge.flowing,
                 },
-                "cost": actual_cost  # Include the verified cost for frontend animation
+                "cost": actual_cost,
             }
-            
-            game_clients = server_context.get("game_clients", {})
-            await self._broadcast_to_game_clients(json.dumps(edge_data), game_clients)
+            await self._broadcast_to_game(game_info, message)
 
-
-class CreateCapitalHandler(BaseMessageHandler):
-    """Handle capital creation requests."""
-    
-    async def handle(self, websocket: websockets.WebSocketServerProtocol, 
-                    msg: Dict[str, Any], server_context: Dict[str, Any]) -> None:
-        token = msg.get("token")
-        node_id = msg.get("nodeId")
-        cost = msg.get("cost", 0)
-        
-        success, error_msg = self.game_engine.handle_create_capital(token, node_id, cost)
-        
-        if not success:
-            await websocket.send(json.dumps({
-                "type": "capitalError", 
-                "message": error_msg or "Failed to create capital"
-            }))
-            return
-        
-        # Broadcast successful capital creation
-        capital_data = {
-            "type": "newCapital",
-            "nodeId": node_id
-        }
-        
-        game_clients = server_context.get("game_clients", {})
-        await self._broadcast_to_game_clients(json.dumps(capital_data), game_clients)
-        
-        # Check for victory condition
-        winner_id = self.game_engine.state.check_capital_victory() if self.game_engine.state else None
-        if winner_id is not None:
-            victory_msg = json.dumps({"type": "gameOver", "winnerId": winner_id})
-            await self._broadcast_to_game_clients(victory_msg, game_clients)
-            
-            # Clear game state
-            server_context["game_clients"] = {}
-            server_context["ws_to_token"] = {}
-
-
-class RedirectEnergyHandler(BaseMessageHandler):
-    """Handle energy redirection messages."""
-    
-    async def handle(self, websocket: websockets.WebSocketServerProtocol, 
-                    msg: Dict[str, Any], server_context: Dict[str, Any]) -> None:
+    async def handle_redirect_energy(
+        self,
+        websocket: websockets.WebSocketServerProtocol,
+        msg: Dict[str, Any],
+        server_context: Dict[str, Any],
+    ) -> None:
         token = msg.get("token")
         target_node_id = msg.get("targetNodeId")
-        
-        if target_node_id is None:
+        if token is None or target_node_id is None:
             return
-        
-        success = self.game_engine.handle_redirect_energy(token, target_node_id)
-        
-        if success and self.game_engine.state:
-            # Broadcast the updated edge states to all clients
-            game_clients = server_context.get("game_clients", {})
-            
-            # Send all affected edge updates
-            for edge in self.game_engine.state.edges.values():
-                edge_data = {
-                    "type": "edgeUpdated",
-                    "edge": {
-                        "id": edge.id,
-                        "source": edge.source_node_id,
-                        "target": edge.target_node_id,
-                        "bidirectional": False,
-                        "forward": True,
-                        "on": edge.on,
-                        "flowing": edge.flowing
+
+        game_info = self._get_game_info(token, server_context)
+        if not game_info:
+            return
+
+        engine = game_info["engine"]
+        success = engine.handle_redirect_energy(token, int(target_node_id))
+        if success and engine.state:
+            updates = []
+            for edge in engine.state.edges.values():
+                updates.append(
+                    {
+                        "type": "edgeUpdated",
+                        "edge": {
+                            "id": edge.id,
+                            "source": edge.source_node_id,
+                            "target": edge.target_node_id,
+                            "bidirectional": False,
+                            "forward": True,
+                            "on": edge.on,
+                            "flowing": edge.flowing,
+                        },
                     }
-                }
-                await self._broadcast_to_game_clients(json.dumps(edge_data), game_clients)
+                )
+            for update in updates:
+                await self._broadcast_to_game(game_info, update)
 
-
-class DestroyNodeHandler(BaseMessageHandler):
-    """Handle node destruction requests."""
-    
-    async def handle(self, websocket: websockets.WebSocketServerProtocol, 
-                    msg: Dict[str, Any], server_context: Dict[str, Any]) -> None:
+    async def handle_destroy_node(
+        self,
+        websocket: websockets.WebSocketServerProtocol,
+        msg: Dict[str, Any],
+        server_context: Dict[str, Any],
+    ) -> None:
         token = msg.get("token")
         node_id = msg.get("nodeId")
-        cost = msg.get("cost", 2.0)
-        
-        success, error_msg = self.game_engine.handle_destroy_node(token, node_id, cost)
-        
+        cost = float(msg.get("cost", 3.0))
+        if token is None or node_id is None:
+            return
+
+        game_info = self._get_game_info(token, server_context)
+        if not game_info:
+            return
+
+        engine = game_info["engine"]
+        success, error_msg = engine.handle_destroy_node(token, int(node_id), cost)
         if not success:
-            await websocket.send(json.dumps({
-                "type": "destroyError", 
-                "message": error_msg or "Failed to destroy node"
-            }))
+            await self._send_safe(
+                websocket,
+                json.dumps({"type": "destroyError", "message": error_msg or "Failed to destroy node"}),
+            )
             return
-        
-        # Broadcast successful node destruction
-        destroy_data = {
-            "type": "nodeDestroyed",
-            "nodeId": node_id
-        }
-        
-        game_clients = server_context.get("game_clients", {})
-        await self._broadcast_to_game_clients(json.dumps(destroy_data), game_clients)
 
+        message = {"type": "nodeDestroyed", "nodeId": int(node_id)}
+        await self._send_safe(websocket, json.dumps(message))
 
-class QuitGameHandler(BaseMessageHandler):
-    """Handle quit game requests."""
-    
-    async def handle(self, websocket: websockets.WebSocketServerProtocol, 
-                    msg: Dict[str, Any], server_context: Dict[str, Any]) -> None:
+    async def handle_quit_game(
+        self,
+        websocket: websockets.WebSocketServerProtocol,
+        msg: Dict[str, Any],
+        server_context: Dict[str, Any],
+    ) -> None:
         token = msg.get("token")
-        
-        winner_id = self.game_engine.handle_quit_game(token)
-        if winner_id is None:
+        if token is None:
             return
-        
-        # Broadcast game over
-        game_clients = server_context.get("game_clients", {})
-        victory_msg = json.dumps({"type": "gameOver", "winnerId": winner_id})
-        await self._broadcast_to_game_clients(victory_msg, game_clients)
-        
-        # Clear server state
-        server_context["game_clients"] = {}
-        server_context["ws_to_token"] = {}
 
-    async def _broadcast_to_game_clients(self, message: str, game_clients: Dict[str, websockets.WebSocketServerProtocol]) -> None:
-        """Broadcast a message to all game clients."""
-        for client_ws in game_clients.values():
-            try:
-                await client_ws.send(message)
-            except Exception:
-                pass
+        game_id, game_info = self._get_game_info_with_id(token, server_context)
+        if not game_info:
+            return
 
+        engine = game_info["engine"]
+        winner_id = engine.handle_quit_game(token)
+        if winner_id is not None:
+            await self._announce_winner(game_id, game_info, winner_id, server_context)
+            return
 
-class ToggleAutoExpandHandler(BaseMessageHandler):
-    """Handle auto-expand toggle requests."""
-    
-    async def handle(self, websocket: websockets.WebSocketServerProtocol, 
-                    msg: Dict[str, Any], server_context: Dict[str, Any]) -> None:
+        if engine.state:
+            player_id = engine.token_to_player_id.get(token)
+            if player_id is not None and player_id in engine.state.eliminated_players:
+                game_info.setdefault("disconnect_deadlines", {}).pop(token, None)
+                server_context.get("token_to_game", {}).pop(token, None)
+                server_context.get("ws_to_token", {}).pop(websocket, None)
+
+    async def handle_toggle_auto_expand(
+        self,
+        websocket: websockets.WebSocketServerProtocol,
+        msg: Dict[str, Any],
+        server_context: Dict[str, Any],
+    ) -> None:
         token = msg.get("token")
-        
-        success = self.game_engine.handle_toggle_auto_expand(token)
-        
+        if token is None:
+            return
+
+        game_info = self._get_game_info(token, server_context)
+        if not game_info:
+            return
+
+        engine = game_info["engine"]
+        engine.handle_toggle_auto_expand(token)
+
+    # ------------------------------------------------------------------
+    # Utility handlers
+    # ------------------------------------------------------------------
+
+    async def handle_request_init(
+        self,
+        websocket: websockets.WebSocketServerProtocol,
+        msg: Dict[str, Any],
+        server_context: Dict[str, Any],
+    ) -> None:
+        token = msg.get("token")
+        if not token:
+            return
+
+        game_id, game_info = self._get_game_info_with_id(token, server_context)
+        if not game_info:
+            return
+
+        ws_to_token = server_context.setdefault("ws_to_token", {})
+        ws_to_token[websocket] = token
+        game_info["clients"][token] = websocket
+        game_info.setdefault("disconnect_deadlines", {}).pop(token, None)
+        await self._send_init_message(game_info["engine"], game_info, websocket, token, server_context)
+
+    async def handle_new_game(
+        self,
+        websocket: websockets.WebSocketServerProtocol,
+        msg: Dict[str, Any],
+        server_context: Dict[str, Any],
+    ) -> None:
+        # Development helper: create a single-player sandbox state
+        engine = GameEngine()
+        state, screen = engine.create_new_game()
+        message = state.to_init_message(
+            screen,
+            server_context.get("tick_interval", 0.1),
+            time.time(),
+        )
+        await self._send_safe(websocket, json.dumps(message))
+
+    async def handle_node_captured_flush(
+        self,
+        websocket: websockets.WebSocketServerProtocol,
+        msg: Dict[str, Any],
+        server_context: Dict[str, Any],
+    ) -> None:
+        # No-op in the new architecture; retained for backwards compatibility
+        return
+
+    # ------------------------------------------------------------------
+    # Bot game handlers
+    # ------------------------------------------------------------------
+
+    async def handle_start_bot_game(
+        self,
+        websocket: websockets.WebSocketServerProtocol,
+        msg: Dict[str, Any],
+        server_context: Dict[str, Any],
+    ) -> None:
+        token = msg.get("token") or uuid.uuid4().hex
+        difficulty = msg.get("difficulty", "easy")
+        auto_expand = bool(msg.get("autoExpand", False))
+        speed_level = int(msg.get("speedLevel", 6))
+
+        success, error_msg = bot_game_manager.start_bot_game(token, difficulty, auto_expand, speed_level)
         if not success:
-            await websocket.send(json.dumps({
-                "type": "autoExpandError", 
-                "message": "Failed to toggle auto-expand"
-            }))
+            await self._send_safe(
+                websocket,
+                json.dumps({"type": "botGameError", "message": error_msg or "Failed to start bot game"}),
+            )
             return
-        
-        # The auto-expand setting will be included in the next tick message
-        # No immediate response needed as the setting is broadcast with game state
 
-
-class NodeCaptureHandler(BaseMessageHandler):
-    """Handle node capture notifications."""
-    
-    async def handle(self, websocket: websockets.WebSocketServerProtocol, 
-                    msg: Dict[str, Any], server_context: Dict[str, Any]) -> None:
-        # This handler is called by the server to broadcast node capture events
-        if not self.game_engine.state or not hasattr(self.game_engine.state, 'pending_node_captures'):
-            return
-        
-        if self.game_engine.state.pending_node_captures:
-            game_clients = server_context.get("game_clients", {})
-            
-            # Broadcast all pending node capture events
-            for capture_data in self.game_engine.state.pending_node_captures:
-                capture_msg = {
-                    "type": "nodeCaptured",
-                    "nodeId": capture_data['nodeId'],
-                    "reward": capture_data['reward']
-                }
-                await self._broadcast_to_game_clients(json.dumps(capture_msg), game_clients)
-            
-            # Clear the pending capture events
-            self.game_engine.state.pending_node_captures = []
-
-
-class MessageRouter:
-    """Routes messages to appropriate handlers."""
-    
-    def __init__(self, game_engine: GameEngine):
-        self.game_engine = game_engine
-        self.handlers = {
-            "clickNode": NodeClickHandler(game_engine),
-            "clickEdge": EdgeClickHandler(game_engine),
-            "reverseEdge": ReverseEdgeHandler(game_engine),
-            "newGame": NewGameHandler(game_engine),
-            "requestInit": RequestInitHandler(game_engine),
-            "joinLobby": JoinLobbyHandler(game_engine),
-            "startBotGame": StartBotGameHandler(game_engine),
-            "buildBridge": BuildBridgeHandler(game_engine),
-            "createCapital": CreateCapitalHandler(game_engine),
-            "redirectEnergy": RedirectEnergyHandler(game_engine),
-            "destroyNode": DestroyNodeHandler(game_engine),
-            "quitGame": QuitGameHandler(game_engine),
-            "toggleAutoExpand": ToggleAutoExpandHandler(game_engine),
-            "nodeCaptured": NodeCaptureHandler(game_engine),
-        }
-    
-    async def route_message(self, websocket: websockets.WebSocketServerProtocol, 
-                           msg: Dict[str, Any], server_context: Dict[str, Any]) -> None:
-        """Route a message to the appropriate handler."""
-        msg_type = msg.get("type")
-        
-        # Check if this is a bot game message (not startBotGame which is handled specially)
-        # Only route to bot game if bot game is active AND this player is in the bot game
-        if (msg_type != "startBotGame" and bot_game_manager.game_active and 
-            bot_game_manager.human_token and bot_game_manager.human_token in server_context.get("game_clients", {})):
-            # Route to bot game manager
-            await self._route_to_bot_game(websocket, msg, server_context)
-            return
-        
-        handler = self.handlers.get(msg_type)
-        
-        if handler:
-            await handler.handle(websocket, msg, server_context)
-    
-    async def _route_to_bot_game(self, websocket: websockets.WebSocketServerProtocol, 
-                                msg: Dict[str, Any], server_context: Dict[str, Any]) -> None:
-        """Route a message to the bot game manager."""
-        msg_type = msg.get("type")
-        token = msg.get("token")
-        
-        # Get the bot game engine
         bot_game_engine = bot_game_manager.get_game_engine()
-        
-        # Handle different message types for bot games
+
+        server_context.setdefault("bot_game_clients", {})[token] = websocket
+        server_context.setdefault("ws_to_token", {})[websocket] = token
+
+        if bot_game_engine.state:
+            message = bot_game_engine.state.to_init_message(
+                bot_game_engine.screen,
+                server_context.get("tick_interval", 0.1),
+                time.time(),
+            )
+            message["type"] = "init"
+            message["myPlayerId"] = 1
+            message["token"] = token
+            await self._send_safe(websocket, json.dumps(message))
+
+        if bot_game_manager.bot_player:
+            bot_game_manager.bot_player.set_websocket(websocket)
+            await bot_game_manager.make_bot_move()
+
+    async def _route_to_bot_game(
+        self,
+        websocket: websockets.WebSocketServerProtocol,
+        msg: Dict[str, Any],
+        server_context: Dict[str, Any],
+    ) -> None:
+        token = msg.get("token")
+        if not token:
+            return
+
+        bot_game_engine = bot_game_manager.get_game_engine()
+        msg_type = msg.get("type")
+
         if msg_type == "clickNode":
             node_id = msg.get("nodeId")
             if node_id is not None:
-                success = bot_game_engine.handle_node_click(token, node_id)
-                # If this was a successful node capture (starting node pick), send the capture message immediately
-                if success and bot_game_engine.state and hasattr(bot_game_engine.state, 'pending_node_captures') and bot_game_engine.state.pending_node_captures:
+                success = bot_game_engine.handle_node_click(token, int(node_id))
+                if success and bot_game_engine.state and getattr(bot_game_engine.state, "pending_node_captures", None):
                     for capture_data in bot_game_engine.state.pending_node_captures:
                         capture_msg = {
                             "type": "nodeCaptured",
-                            "nodeId": capture_data['nodeId'],
-                            "reward": capture_data['reward']
+                            "nodeId": capture_data["nodeId"],
+                            "reward": capture_data["reward"],
                         }
-                        await websocket.send(json.dumps(capture_msg))
-                    
-                    # Clear the pending capture events
+                        await self._send_safe(websocket, json.dumps(capture_msg))
                     bot_game_engine.state.pending_node_captures = []
-        
+
         elif msg_type == "clickEdge":
             edge_id = msg.get("edgeId")
             if edge_id is not None:
-                bot_game_engine.handle_edge_click(token, edge_id)
-        
+                bot_game_engine.handle_edge_click(token, int(edge_id))
+
         elif msg_type == "reverseEdge":
             edge_id = msg.get("edgeId")
-            cost = msg.get("cost", 1.0)
+            cost = float(msg.get("cost", 1.0))
             if edge_id is not None:
-                success = bot_game_engine.handle_reverse_edge(token, edge_id, cost)
+                success = bot_game_engine.handle_reverse_edge(token, int(edge_id), cost)
                 if not success:
-                    await websocket.send(json.dumps({
-                        "type": "reverseEdgeError", 
-                        "message": "Pipe controlled by opponent"
-                    }))
+                    await self._send_safe(
+                        websocket,
+                        json.dumps({"type": "reverseEdgeError", "message": "Pipe controlled by opponent"}),
+                    )
                 else:
-                    # Send edge reversed message to frontend
-                    edge = bot_game_engine.state.edges.get(edge_id)
+                    edge = bot_game_engine.state.edges.get(int(edge_id)) if bot_game_engine.state else None
                     if edge:
-                        edge_data = {
+                        message = {
                             "type": "edgeReversed",
                             "edge": {
                                 "id": edge.id,
@@ -606,28 +542,27 @@ class MessageRouter:
                                 "bidirectional": False,
                                 "forward": True,
                                 "on": edge.on,
-                                "flowing": edge.flowing
+                                "flowing": edge.flowing,
                             },
-                            "cost": cost  # Include the cost for the frontend
+                            "cost": cost,
                         }
-                        await websocket.send(json.dumps(edge_data))
-        
+                        await self._send_safe(websocket, json.dumps(message))
+
         elif msg_type == "buildBridge":
             from_node_id = msg.get("fromNodeId")
             to_node_id = msg.get("toNodeId")
-            cost = msg.get("cost", 1.0)
+            cost = float(msg.get("cost", 1.0))
             if from_node_id is not None and to_node_id is not None:
                 success, new_edge, actual_cost, error_msg = bot_game_engine.handle_build_bridge(
-                    token, from_node_id, to_node_id, cost
+                    token, int(from_node_id), int(to_node_id), cost
                 )
                 if not success:
-                    await websocket.send(json.dumps({
-                        "type": "bridgeError",
-                        "message": error_msg or "Failed to build bridge"
-                    }))
+                    await self._send_safe(
+                        websocket,
+                        json.dumps({"type": "bridgeError", "message": error_msg or "Failed to build bridge"}),
+                    )
                 elif new_edge:
-                    # Send new edge message to frontend
-                    edge_data = {
+                    message = {
                         "type": "newEdge",
                         "edge": {
                             "id": new_edge.id,
@@ -636,78 +571,127 @@ class MessageRouter:
                             "bidirectional": False,
                             "forward": True,
                             "on": new_edge.on,
-                            "flowing": new_edge.flowing
+                            "flowing": new_edge.flowing,
                         },
-                        "cost": actual_cost  # Include the verified cost for frontend animation
+                        "cost": actual_cost,
                     }
-                    await websocket.send(json.dumps(edge_data))
-        
-        elif msg_type == "createCapital":
-            node_id = msg.get("nodeId")
-            cost = msg.get("cost", 3.0)
-            if node_id is not None:
-                success, error_msg = bot_game_engine.handle_create_capital(token, node_id, cost)
-                if not success:
-                    await websocket.send(json.dumps({
-                        "type": "capitalError",
-                        "message": error_msg or "Failed to create capital"
-                    }))
-                else:
-                    # Send new capital message to frontend
-                    capital_data = {
-                        "type": "newCapital",
-                        "nodeId": node_id
-                    }
-                    await websocket.send(json.dumps(capital_data))
-        
+                    await self._send_safe(websocket, json.dumps(message))
+
         elif msg_type == "redirectEnergy":
             target_node_id = msg.get("targetNodeId")
             if target_node_id is not None:
-                bot_game_engine.handle_redirect_energy(token, target_node_id)
-        
+                bot_game_engine.handle_redirect_energy(token, int(target_node_id))
+
         elif msg_type == "destroyNode":
             node_id = msg.get("nodeId")
-            cost = msg.get("cost", 3.0)
+            cost = float(msg.get("cost", 3.0))
             if node_id is not None:
-                success, error_msg = bot_game_engine.handle_destroy_node(token, node_id, cost)
+                success, error_msg = bot_game_engine.handle_destroy_node(token, int(node_id), cost)
                 if not success:
-                    await websocket.send(json.dumps({
-                        "type": "destroyError",
-                        "message": error_msg or "Failed to destroy node"
-                    }))
+                    await self._send_safe(
+                        websocket,
+                        json.dumps({"type": "destroyError", "message": error_msg or "Failed to destroy node"}),
+                    )
                 else:
-                    # Send node destroyed message to frontend
-                    destroy_data = {
-                        "type": "nodeDestroyed",
-                        "nodeId": node_id
-                    }
-                    await websocket.send(json.dumps(destroy_data))
-        
+                    await self._send_safe(websocket, json.dumps({"type": "nodeDestroyed", "nodeId": int(node_id)}))
+
         elif msg_type == "quitGame":
             winner_id = bot_game_engine.handle_quit_game(token)
             if winner_id is not None:
-                victory_msg = json.dumps({"type": "gameOver", "winnerId": winner_id})
-                await websocket.send(victory_msg)
+                await self._send_safe(websocket, json.dumps({"type": "gameOver", "winnerId": winner_id}))
                 bot_game_manager.end_game()
-        
+                server_context.get("bot_game_clients", {}).pop(token, None)
+
         elif msg_type == "toggleAutoExpand":
             bot_game_engine.handle_toggle_auto_expand(token)
-        
+
         elif msg_type == "requestInit":
-            # Send current bot game state
             if bot_game_engine.state:
-                init_common = bot_game_engine.state.to_init_message(
-                    server_context.get("screen", {}), 
+                message = bot_game_engine.state.to_init_message(
+                    bot_game_engine.screen,
                     server_context.get("tick_interval", 0.1),
-                    time.time()
+                    time.time(),
                 )
-                
-                init_msg = dict(init_common)
-                init_msg["type"] = "init"
-                init_msg["myPlayerId"] = 1  # Human is player 1
-                init_msg["token"] = token
-                await websocket.send(json.dumps(init_msg))
+                message["type"] = "init"
+                message["myPlayerId"] = 1
+                message["token"] = token
+                await self._send_safe(websocket, json.dumps(message))
 
+    # ------------------------------------------------------------------
+    # Helper utilities
+    # ------------------------------------------------------------------
 
-# Add broadcast utility to base handler
-BaseMessageHandler._broadcast_to_game_clients = QuitGameHandler._broadcast_to_game_clients
+    def _get_game_info(self, token: str, server_context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        _, game_info = self._get_game_info_with_id(token, server_context)
+        return game_info
+
+    def _get_game_info_with_id(
+        self, token: str, server_context: Dict[str, Any]
+    ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+        if not token:
+            return None, None
+        token_to_game = server_context.get("token_to_game", {})
+        game_id = token_to_game.get(token)
+        if not game_id:
+            return None, None
+        games = server_context.get("games", {})
+        game_info = games.get(game_id)
+        return game_id, game_info
+
+    async def _send_init_message(
+        self,
+        engine: GameEngine,
+        game_info: Dict[str, Any],
+        websocket: websockets.WebSocketServerProtocol,
+        token: str,
+        server_context: Dict[str, Any],
+    ) -> None:
+        if not engine.state:
+            return
+        message = engine.state.to_init_message(
+            game_info.get("screen", {}),
+            server_context.get("tick_interval", 0.1),
+            time.time(),
+        )
+        message["type"] = "init"
+        player_id = engine.token_to_player_id.get(token)
+        if player_id is not None:
+            message["myPlayerId"] = player_id
+        message["token"] = token
+        await self._send_safe(websocket, json.dumps(message))
+
+    async def _broadcast_to_game(self, game_info: Dict[str, Any], message: Dict[str, Any]) -> None:
+        payload = json.dumps(message)
+        for token, websocket in list(game_info.get("clients", {}).items()):
+            if not websocket:
+                continue
+            await self._send_safe(websocket, payload)
+
+    async def _announce_winner(
+        self,
+        game_id: str,
+        game_info: Dict[str, Any],
+        winner_id: int,
+        server_context: Dict[str, Any],
+    ) -> None:
+        payload = json.dumps({"type": "gameOver", "winnerId": winner_id})
+        for websocket in list(game_info.get("clients", {}).values()):
+            if websocket:
+                await self._send_safe(websocket, payload)
+
+        # Clean up mappings
+        token_to_game = server_context.get("token_to_game", {})
+        ws_to_token = server_context.get("ws_to_token", {})
+        for token, websocket in list(game_info.get("clients", {}).items()):
+            token_to_game.pop(token, None)
+            if websocket:
+                ws_to_token.pop(websocket, None)
+        server_context.get("games", {}).pop(game_id, None)
+
+    async def _send_safe(self, websocket: Optional[websockets.WebSocketServerProtocol], payload: str) -> None:
+        if not websocket:
+            return
+        try:
+            await websocket.send(payload)
+        except Exception:
+            pass

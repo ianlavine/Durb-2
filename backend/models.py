@@ -6,6 +6,7 @@ from typing import List, Optional
 class Player:
     id: int
     color: str  # hex color string like "#ffcc00"
+    secondary_colors: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -28,5 +29,4 @@ class Edge:
     # All edges are now one-way only, from source to target
     on: bool = False
     flowing: bool = False
-
 
