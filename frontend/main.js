@@ -175,7 +175,7 @@
     if (distance === 0) return 0;
 
     const BASE_COST = 1;
-    const COST_PER_UNIT = 0.2; // scale immediately with a slightly lighter slope
+    const COST_PER_UNIT = 0.25; // align with backend scaling (slightly steeper)
 
     const cost = BASE_COST + distance * COST_PER_UNIT;
     return Math.round(cost);
@@ -1002,7 +1002,7 @@ function hideBridgeCostDisplay() {
           existingEdge.flowStartTime = null;
         }
         
-        // Show -$1 cost indicator near the mouse position (but offset to the side)
+        // Show cost indicator near the mouse position (but offset to the side)
         if (msg.cost) {
           // Position the indicator much closer to the mouse
           const offsetX = 5; // much smaller offset to the right of mouse
@@ -1078,7 +1078,7 @@ function hideBridgeCostDisplay() {
   }
 
   function handleNodeCaptured(msg) {
-    // Show $2 reward indicator when a neutral node is captured
+    // Show reward indicator when a node is captured
     if (msg.nodeId && msg.reward) {
       const node = nodes.get(msg.nodeId);
       if (node) {
@@ -1480,16 +1480,19 @@ function hideBridgeCostDisplay() {
       if (candidateEdgeId != null) {
         const edge = edges.get(candidateEdgeId);
         if (edge) {
-          // Reverse the edge
-          const ability = { cost: 1 };
-          if (goldValue >= ability.cost && ws && ws.readyState === WebSocket.OPEN) {
-            const token = localStorage.getItem('token');
-            ws.send(JSON.stringify({
-              type: 'reverseEdge',
-              edgeId: candidateEdgeId,
-              cost: ability.cost,
-              token: token
-            }));
+          const sourceNode = nodes.get(edge.source);
+          const targetNode = nodes.get(edge.target);
+          if (sourceNode && targetNode) {
+            const cost = calculateBridgeCost(sourceNode, targetNode);
+            if (goldValue >= cost && ws && ws.readyState === WebSocket.OPEN) {
+              const token = localStorage.getItem('token');
+              ws.send(JSON.stringify({
+                type: 'reverseEdge',
+                edgeId: candidateEdgeId,
+                cost: cost,
+                token: token
+              }));
+            }
           }
           
           // Don't reset reverse mode here - wait for server response
@@ -1605,8 +1608,18 @@ function hideBridgeCostDisplay() {
     const edgeId = pickEdgeNear(wx, wy, 14 / baseScale);
     if (edgeId != null && ws && ws.readyState === WebSocket.OPEN) {
       ev.preventDefault();
-      const token = localStorage.getItem('token');
-      ws.send(JSON.stringify({ type: 'reverseEdge', edgeId, cost: 1, token }));
+      const edge = edges.get(edgeId);
+      if (edge) {
+        const sourceNode = nodes.get(edge.source);
+        const targetNode = nodes.get(edge.target);
+        if (sourceNode && targetNode) {
+          const cost = calculateBridgeCost(sourceNode, targetNode);
+          if (goldValue >= cost) {
+            const token = localStorage.getItem('token');
+            ws.send(JSON.stringify({ type: 'reverseEdge', edgeId, cost, token }));
+          }
+        }
+      }
     }
   });
 

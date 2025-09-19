@@ -224,6 +224,10 @@ class MessageRouter:
             )
             return
 
+        actual_cost = cost
+        if engine.state and getattr(engine.state, "pending_edge_reversal", None):
+            actual_cost = engine.state.pending_edge_reversal.get("cost", cost)
+
         if engine.state:
             edge = engine.state.edges.get(int(edge_id))
             if edge:
@@ -238,9 +242,12 @@ class MessageRouter:
                         "on": edge.on,
                         "flowing": edge.flowing,
                     },
-                    "cost": cost,
+                    "cost": actual_cost,
                 }
                 await self._broadcast_to_game(game_info, message)
+
+            if hasattr(engine.state, "pending_edge_reversal"):
+                engine.state.pending_edge_reversal = None
 
     async def handle_build_bridge(
         self,

@@ -16,7 +16,8 @@ TRANSFER_PERCENT_PER_TICK: float = 0.01  # fraction of source juice transferred 
 INTAKE_BONUS_DIVISOR: float = 100.0  # divisor for intake bonus calculation in transfer rate
 
 # Gold economy - no limit, no natural generation
-GOLD_REWARD_FOR_CAPTURE: float = 2.0  # gold awarded when capturing unowned nodes
+GOLD_REWARD_FOR_NEUTRAL_CAPTURE: float = 3.0  # gold awarded when capturing unowned nodes
+GOLD_REWARD_FOR_ENEMY_CAPTURE: float = 1.0   # gold awarded when taking an opponent's node
 STARTING_GOLD: float = 0.0  # players now start empty and earn gold from captures
 
 # Unowned node sizing
@@ -413,17 +414,25 @@ class GraphState:
             if node is None:
                 continue
             if node.juice <= NODE_MIN_JUICE:
-                # Check if this was an unowned node being captured
-                if node.owner is None:
-                    # Award gold for capturing unowned node
-                    self.player_gold[new_owner] = self.player_gold.get(new_owner, 0.0) + GOLD_REWARD_FOR_CAPTURE
+                # Determine reward based on the previous owner state
+                previous_owner = node.owner
+                reward = 0.0
+                if previous_owner is None:
+                    reward = GOLD_REWARD_FOR_NEUTRAL_CAPTURE
+                elif previous_owner != new_owner:
+                    reward = GOLD_REWARD_FOR_ENEMY_CAPTURE
+
+                if reward > 0.0:
+                    # Award gold for capturing the node
+                    self.player_gold[new_owner] = self.player_gold.get(new_owner, 0.0) + reward
                     # Store the capture event for frontend notification
                     if not hasattr(self, 'pending_node_captures'):
                         self.pending_node_captures = []
                     self.pending_node_captures.append({
                         'nodeId': nid,
-                        'reward': GOLD_REWARD_FOR_CAPTURE
+                        'reward': reward
                     })
+
                 node.owner = new_owner
 
         # All edges are now one-way only - no auto-adjustment needed

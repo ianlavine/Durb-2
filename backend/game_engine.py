@@ -203,8 +203,8 @@ class GameEngine:
             # Check if this is for picking a starting node (node is unowned and player hasn't picked yet)
             if node.owner is None and not self.state.players_who_picked.get(player_id):
                 # This is a starting node pick - give gold reward for capturing unowned node
-                from .state import GOLD_REWARD_FOR_CAPTURE
-                self.state.player_gold[player_id] = self.state.player_gold.get(player_id, 0.0) + GOLD_REWARD_FOR_CAPTURE
+                from .state import GOLD_REWARD_FOR_NEUTRAL_CAPTURE
+                self.state.player_gold[player_id] = self.state.player_gold.get(player_id, 0.0) + GOLD_REWARD_FOR_NEUTRAL_CAPTURE
                 node.owner = player_id
                 self.state.players_who_picked[player_id] = True
                 
@@ -217,7 +217,7 @@ class GameEngine:
                     self.state.pending_node_captures = []
                 self.state.pending_node_captures.append({
                     'nodeId': node_id,
-                    'reward': GOLD_REWARD_FOR_CAPTURE
+                    'reward': GOLD_REWARD_FOR_NEUTRAL_CAPTURE
                 })
 
                 # Transition to playing state if everyone has picked
@@ -296,8 +296,11 @@ class GameEngine:
                 raise GameValidationError("Pipe controlled by opponent")
             
             
-            # Validate gold
-            self.validate_sufficient_gold(player_id, cost)
+            # Calculate the actual reversal cost based on edge length
+            actual_cost = self.calculate_bridge_cost(source_node, target_node)
+
+            # Validate gold using the server-side calculation
+            self.validate_sufficient_gold(player_id, actual_cost)
             
             # Reverse the edge by swapping source and target
             edge.source_node_id, edge.target_node_id = edge.target_node_id, edge.source_node_id
@@ -310,17 +313,23 @@ class GameEngine:
                 # Edge is swapped but not turned on since player doesn't own new source
                 edge.on = False
             
-            # Deduct gold
-            self.state.player_gold[player_id] = max(0.0, self.state.player_gold[player_id] - cost)
-            
+            # Deduct gold using verified cost
+            self.state.player_gold[player_id] = max(0.0, self.state.player_gold[player_id] - actual_cost)
+
             # Store the edge reversal event for frontend notification
             self.state.pending_edge_reversal = {
                 'edgeId': edge_id,
-                'cost': cost
+                'cost': actual_cost
             }
-            
+
+            # Basic mismatch logging (could be extended to real logging system)
+            if cost and abs(cost - actual_cost) > 1:
+                print(
+                    f"[reverse] cost mismatch: client reported {cost}, server calculated {actual_cost}"
+                )
+
             return True
-            
+
         except GameValidationError:
             return False
     
@@ -340,7 +349,7 @@ class GameEngine:
             return 0
 
         base_cost = 1.0
-        cost_per_unit = 0.2  # scale immediately with a slightly lighter slope
+        cost_per_unit = 0.25  # scale slightly steeper with distance
 
         total_cost = base_cost + distance * cost_per_unit
         return int(round(total_cost))

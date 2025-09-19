@@ -232,7 +232,7 @@ class BotPlayer:
                 source_node.owner is None):  # Source is unowned
                 
                 # Check if we have enough gold
-                cost = 1.0
+                cost = self._calculate_bridge_cost(source_node, target_node)
                 if self.game_engine.state.player_gold.get(self.player_id, 0) >= cost:
                     # Try to reverse the edge
                     success = self.game_engine.handle_reverse_edge(self.bot_token, edge.id, cost)
@@ -248,7 +248,8 @@ class BotPlayer:
                                 "forward": True,
                                 "on": edge.on,
                                 "flowing": edge.flowing
-                            }
+                            },
+                            "cost": cost,
                         })
                         return True
         
