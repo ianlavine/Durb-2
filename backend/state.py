@@ -13,7 +13,8 @@ NODE_MAX_JUICE: float = 120.0
 # Flow model
 PRODUCTION_RATE_PER_NODE: float = 0.15  # owned nodes generate this per tick (constant growth)
 TRANSFER_PERCENT_PER_TICK: float = 0.01  # fraction of source juice transferred per tick (split across outgoing edges)
-INTAKE_BONUS_DIVISOR: float = 100.0  # divisor for intake bonus calculation in transfer rate
+INTAKE_TO_OUTPUT_SCALE: float = 1.0 # extra outgoing allowance per unit of intake
+MAX_TRANSFER_RATIO: float = 0.95  # cap on fraction of a node's juice that can be sent each tick
 
 # Gold economy - no limit, no natural generation
 GOLD_REWARD_FOR_NEUTRAL_CAPTURE: float = 3.0  # gold awarded when capturing unowned nodes
@@ -50,14 +51,14 @@ class GraphState:
         
         # Timer system
         self.game_start_time: Optional[float] = None
-        self.game_duration: float = 5 * 60  # 5 minutes in seconds
+        self.game_duration: float = 7 * 60  # 7 minutes in seconds
         
         # Auto-expand settings per player
         self.player_auto_expand: Dict[int, bool] = {}
         self.pending_auto_expand_nodes: Dict[int, Set[int]] = {}
         
-        # Game speed level (1-10, default 6 for 1x speed)
-        self.speed_level: int = 6
+        # Game speed level (1-5, default 3 for new 1x speed)
+        self.speed_level: int = 3
         
 
     def add_player(self, player: Player) -> None:
@@ -70,10 +71,10 @@ class GraphState:
         self.eliminated_players.discard(player.id)
 
     def get_speed_multiplier(self) -> float:
-        """Get speed multiplier based on speed level (1-10)."""
-        speed_multipliers = [0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.25, 1.5, 1.75, 2.0]
-        # Speed levels are 1-10, but array is 0-9 indexed
-        level_index = max(0, min(9, self.speed_level - 1))
+        """Get speed multiplier based on speed level (1-5)."""
+        speed_multipliers = [0.3, 0.45, 0.6, 0.75, 0.9]
+        # Speed levels are 1-5, but array is 0-4 indexed
+        level_index = max(0, min(len(speed_multipliers) - 1, self.speed_level - 1))
         return speed_multipliers[level_index]
 
     def get_scaled_production_rate(self) -> float:
@@ -86,10 +87,10 @@ class GraphState:
         speed_multiplier = self.get_speed_multiplier()
         return TRANSFER_PERCENT_PER_TICK * speed_multiplier
 
-    def get_scaled_intake_divisor(self) -> float:
-        """Get intake bonus divisor scaled by speed level."""
+    def get_intake_to_output_scale(self) -> float:
+        """Scale intake -> output conversion with game speed."""
         speed_multiplier = self.get_speed_multiplier()
-        return INTAKE_BONUS_DIVISOR / speed_multiplier
+        return INTAKE_TO_OUTPUT_SCALE * speed_multiplier
 
     def get_player_node_counts(self) -> Dict[int, int]:
         """Return a mapping of player id to number of nodes they currently own."""
@@ -237,6 +238,10 @@ class GraphState:
         
         # Calculate win threshold for progress bar
         win_threshold = self.calculate_win_threshold()
+        timer_remaining = None
+        if self.game_start_time is not None:
+            elapsed = max(0.0, current_time - self.game_start_time)
+            timer_remaining = max(0.0, self.game_duration - elapsed)
         
         return {
             "type": "init",
@@ -253,6 +258,8 @@ class GraphState:
             "totalNodes": len(self.nodes),
             "autoExpand": auto_expand_arr,
             "eliminatedPlayers": sorted(self.eliminated_players),
+            "gameDuration": self.game_duration,
+            "timerRemaining": timer_remaining,
         }
 
     def to_tick_message(self, current_time: float = 0.0) -> Dict:
@@ -271,6 +278,10 @@ class GraphState:
         eliminated_players = sorted(self.eliminated_players)
         recent_eliminations = list(self.pending_eliminations)
         self.pending_eliminations = []
+        timer_remaining = None
+        if self.game_start_time is not None:
+            elapsed = max(0.0, current_time - self.game_start_time)
+            timer_remaining = max(0.0, self.game_duration - elapsed)
         
         return {
             "type": "tick",
@@ -285,6 +296,8 @@ class GraphState:
             "autoExpand": auto_expand_arr,
             "eliminatedPlayers": eliminated_players,
             "recentEliminations": recent_eliminations,
+            "gameDuration": self.game_duration,
+            "timerRemaining": timer_remaining,
         }
 
     def _update_edge_flowing_status(self) -> None:
@@ -344,7 +357,7 @@ class GraphState:
                 base_rate = scaled_production_rate
                 size_delta[node.id] += base_rate
 
-        # Flows using variable percentage based on cur_intake
+        # Flows using intake-influenced transfer amounts
         pending_ownership: Dict[int, int] = {}  # node_id -> new_owner_id
         outgoing_by_node: Dict[int, List[int]] = {}
         for e in self.edges.values():
@@ -353,26 +366,28 @@ class GraphState:
             src_id = e.source_node_id  # All edges flow from source to target
             outgoing_by_node.setdefault(src_id, []).append(e.id)
 
-        # Compute per-edge transfer amounts using variable percentage
+        # Compute per-edge transfer amounts using base production plus intake-driven bonus
         per_edge_amount: Dict[int, float] = {}
+        remaining_transfer: Dict[int, float] = {}
         for src_id, edge_ids in outgoing_by_node.items():
             src_node = self.nodes.get(src_id)
             if src_node is None:
                 continue
             
-            # Calculate variable transfer percentage based on cur_intake
-            # Base percentage is 1%, plus bonus based on intake
-            # X = cur_intake / INTAKE_BONUS_DIVISOR, so output = (1 + cur_intake/INTAKE_BONUS_DIVISOR)%
-            base_percentage = self.get_scaled_transfer_percent()  # Scaled transfer percentage
-            intake_bonus = src_node.cur_intake / self.get_scaled_intake_divisor()  # Scaled intake bonus
-            variable_percentage = base_percentage + intake_bonus
-            
-            total_transfer = src_node.juice * variable_percentage
+            base_transfer = src_node.juice * self.get_scaled_transfer_percent()
+            intake_transfer = src_node.cur_intake * self.get_intake_to_output_scale()
+
+            total_transfer = base_transfer + intake_transfer
+            max_transfer_allowed = max(0.0, src_node.juice * MAX_TRANSFER_RATIO)
+            total_transfer = min(total_transfer, max_transfer_allowed)
+            total_transfer = min(total_transfer, src_node.juice)
+
             if total_transfer <= 0 or len(edge_ids) == 0:
                 continue
             amount_each = total_transfer / len(edge_ids)
             for eid in edge_ids:
                 per_edge_amount[eid] = amount_each
+            remaining_transfer[src_id] = total_transfer
 
         # Apply transfers and track friendly intake
         for eid, amount in per_edge_amount.items():
@@ -385,19 +400,39 @@ class GraphState:
             to_node = self.nodes.get(to_id)
             if from_node is None or to_node is None:
                 continue
-            size_delta[from_id] -= amount
-            
-            # Track intake for target node (only from friendly nodes)
-            if from_node.owner is not None and to_node.owner == from_node.owner:
-                intake_tracking[to_id] += amount
-            
-            if to_node.owner is None or (from_node.owner is not None and to_node.owner != from_node.owner):
-                size_delta[to_id] -= amount
+
+            remaining = remaining_transfer.get(from_id, amount)
+            if remaining <= 0:
+                continue
+
+            actual_transfer = min(amount, remaining)
+
+            is_friendly_flow = (from_node.owner is not None and to_node.owner == from_node.owner)
+            if is_friendly_flow:
+                current_target = to_node.juice + size_delta[to_id]
+                current_target = max(NODE_MIN_JUICE, min(NODE_MAX_JUICE, current_target))
+                available_capacity = max(0.0, NODE_MAX_JUICE - current_target)
+                if available_capacity <= 0:
+                    actual_transfer = 0.0
+                else:
+                    actual_transfer = min(actual_transfer, available_capacity)
+
+            if actual_transfer <= 0:
+                continue
+
+            size_delta[from_id] -= actual_transfer
+            remaining_transfer[from_id] = max(0.0, remaining - actual_transfer)
+
+            if is_friendly_flow:
+                intake_tracking[to_id] += actual_transfer
+                size_delta[to_id] += actual_transfer
+            elif to_node.owner is None or (from_node.owner is not None and to_node.owner != from_node.owner):
+                size_delta[to_id] -= actual_transfer
                 projected = max(NODE_MIN_JUICE, to_node.juice + size_delta[to_id])
                 if projected <= NODE_MIN_JUICE and from_node.owner is not None:
                     pending_ownership[to_id] = from_node.owner
             else:
-                size_delta[to_id] += amount
+                size_delta[to_id] += actual_transfer
 
         # Update cur_intake for all nodes
         for nid, intake in intake_tracking.items():

@@ -65,7 +65,8 @@ class MessageRouter:
         player_count = int(msg.get("playerCount", MIN_FRIEND_PLAYERS))
         player_count = max(MIN_FRIEND_PLAYERS, min(MAX_FRIEND_PLAYERS, player_count))
         auto_expand = bool(msg.get("autoExpand", False))
-        speed_level = int(msg.get("speedLevel", 6))
+        speed_level = int(msg.get("speedLevel", 3))
+        speed_level = max(1, min(5, speed_level))
         token = msg.get("token") or uuid.uuid4().hex
 
         lobbies: Dict[int, List[Dict[str, Any]]] = server_context.setdefault("lobbies", {})
@@ -107,7 +108,8 @@ class MessageRouter:
         player_count: int,
         server_context: Dict[str, Any],
     ) -> None:
-        speed_level = int(players[0].get("speed_level", 6))
+        speed_level = int(players[0].get("speed_level", 3))
+        speed_level = max(1, min(5, speed_level))
         engine = GameEngine()
         color_pool = PLAYER_COLOR_SCHEMES[:player_count]
 
@@ -465,7 +467,8 @@ class MessageRouter:
         token = msg.get("token") or uuid.uuid4().hex
         difficulty = msg.get("difficulty", "easy")
         auto_expand = bool(msg.get("autoExpand", False))
-        speed_level = int(msg.get("speedLevel", 6))
+        speed_level = int(msg.get("speedLevel", 3))
+        speed_level = max(1, min(5, speed_level))
 
         success, error_msg = bot_game_manager.start_bot_game(token, difficulty, auto_expand, speed_level)
         if not success:

@@ -28,10 +28,12 @@ class GameEngine:
         self.player_meta: Dict[int, Dict[str, object]] = {}
         self.game_active: bool = False
 
-    def start_game(self, player_slots: List[Dict[str, Any]], speed_level: int = 6) -> None:
+    def start_game(self, player_slots: List[Dict[str, Any]], speed_level: int = 3) -> None:
         """Initialize a new game with the provided player configuration."""
         data = graph_generator.generate_game_data_sync()
         self.state, self.screen = build_state_from_dict(data)
+
+        speed_level = max(1, min(5, speed_level))
 
         self.token_to_player_id.clear()
         self.player_id_to_token.clear()
@@ -281,18 +283,10 @@ class GameEngine:
             # Get both nodes
             source_node = self.validate_node_exists(edge.source_node_id)
             target_node = self.validate_node_exists(edge.target_node_id)
-            
-            # New eligibility rules: must own at least one node AND source can't be opponent's
+
+            # Updated eligibility rules: source node must be neutral or owned by the player
             source_owner = source_node.owner
-            target_owner = target_node.owner
-            
-            # Must own at least one node
-            if source_owner != player_id and target_owner != player_id:
-                raise GameValidationError("You must own at least one node")
-            
-            # Source node cannot belong to opponent
-            opponent_ids = [pid for pid in self.state.players.keys() if pid != player_id]
-            if source_owner in opponent_ids:
+            if source_owner is not None and source_owner != player_id:
                 raise GameValidationError("Pipe controlled by opponent")
             
             
@@ -374,10 +368,6 @@ class GameEngine:
             if from_node_id == to_node_id:
                 raise GameValidationError("Cannot connect node to itself")
             
-            # Validate ownership
-            self.validate_player_owns_node(from_node, player_id)
-            
-            
             # Calculate and validate gold using server-side formula
             actual_cost = self.calculate_bridge_cost(from_node, to_node)
             self.validate_sufficient_gold(player_id, actual_cost)
@@ -393,11 +383,13 @@ class GameEngine:
             # Create the edge (always one-way from source to target)
             new_edge_id = max(self.state.edges.keys(), default=0) + 1
             
+            new_edge_should_be_on = from_node.owner == player_id
+
             new_edge = Edge(
                 id=new_edge_id,
                 source_node_id=from_node_id,
                 target_node_id=to_node_id,
-                on=True,
+                on=new_edge_should_be_on,
                 flowing=False  # Will be set to True by _update_edge_flowing_status if conditions are met
             )
             

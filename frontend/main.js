@@ -54,6 +54,7 @@
   let mouseWorldX = 0; // current mouse position in world coordinates
   let mouseWorldY = 0;
   let bridgeCostDisplay = null; // current bridge cost display text object
+  let reverseCostDisplay = null; // current reverse edge cost display text object
 
   // Progress bar for node count victory
   let progressBar = null;
@@ -67,7 +68,7 @@
   // Timer system
   let timerDisplay = null;
   let gameStartTime = null;
-  let gameDuration = 5 * 60; // 5 minutes in seconds
+  let gameDuration = 7 * 60; // 7 minutes in seconds
   
   // Auto-expand system
   let autoExpandToggle = null;
@@ -82,8 +83,8 @@
   let homeSpeedSlider = null;
   let homeSpeedRange = null;
   let homeSpeedValue = null;
-  let mySpeedLevel = 6; // my player's speed level setting
-  let persistentSpeedLevel = 6; // persistent setting stored in localStorage
+  let mySpeedLevel = 3; // my player's speed level setting
+  let persistentSpeedLevel = 3; // persistent setting stored in localStorage
   let selectedPlayerCount = 2;
 
   // Money transparency system
@@ -130,26 +131,34 @@
   }
 
   // Speed persistence functions
+  const SPEED_MULTIPLIERS = [0.3, 0.45, 0.6, 0.75, 0.9];
+  const SPEED_DISPLAY_LABELS = ['0.5x', '0.75x', '1x', '1.25x', '1.5x'];
+
   function loadPersistentSpeedLevel() {
     const saved = localStorage.getItem('speedLevel');
-    persistentSpeedLevel = saved ? parseInt(saved) : 6;
+    const parsed = saved ? parseInt(saved, 10) : 3;
+    if (!Number.isFinite(parsed) || parsed < 1 || parsed > SPEED_MULTIPLIERS.length) {
+      persistentSpeedLevel = 3;
+    } else {
+      persistentSpeedLevel = parsed;
+    }
     return persistentSpeedLevel;
   }
 
   function savePersistentSpeedLevel(value) {
-    persistentSpeedLevel = value;
-    localStorage.setItem('speedLevel', value.toString());
+    const clamped = Math.max(1, Math.min(SPEED_MULTIPLIERS.length, value));
+    persistentSpeedLevel = clamped;
+    localStorage.setItem('speedLevel', clamped.toString());
   }
 
   function getSpeedMultiplier(level) {
-    const speedMultipliers = [0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.25, 1.5, 1.75, 2.0];
-    const levelIndex = Math.max(0, Math.min(9, level - 1));
-    return speedMultipliers[levelIndex];
+    const levelIndex = Math.max(0, Math.min(SPEED_MULTIPLIERS.length - 1, level - 1));
+    return SPEED_MULTIPLIERS[levelIndex];
   }
 
   function formatSpeedDisplay(level) {
-    const multiplier = getSpeedMultiplier(level);
-    return multiplier === 1.0 ? '1x' : `${multiplier}x`;
+    const levelIndex = Math.max(0, Math.min(SPEED_DISPLAY_LABELS.length - 1, level - 1));
+    return SPEED_DISPLAY_LABELS[levelIndex];
   }
 
   // Helper: convert 0xRRGGBB -> "#rrggbb"
@@ -218,6 +227,51 @@ function hideBridgeCostDisplay() {
   if (bridgeCostDisplay) {
     bridgeCostDisplay.destroy();
     bridgeCostDisplay = null;
+  }
+}
+
+function updateReverseCostDisplay(edge) {
+  if (!sceneRef || !edge) return;
+
+  const sourceNode = nodes.get(edge.source);
+  const targetNode = nodes.get(edge.target);
+  if (!sourceNode || !targetNode) return;
+
+  const midX = (sourceNode.x + targetNode.x) / 2;
+  const midY = (sourceNode.y + targetNode.y) / 2;
+  const [sx, sy] = worldToScreen(midX, midY);
+
+  const cost = calculateBridgeCost(sourceNode, targetNode);
+  const canAfford = goldValue >= cost;
+  const text = `$${cost}`;
+
+  if (!reverseCostDisplay) {
+    reverseCostDisplay = sceneRef.add.text(sx, sy - 20, text, {
+      fontFamily: 'monospace',
+      fontSize: '20px',
+      fontStyle: 'bold',
+      color: canAfford ? '#cd853f' : '#000000',
+      stroke: canAfford ? '#000000' : '#ffffff',
+      strokeThickness: 3,
+    })
+    .setOrigin(0.5, 0.5)
+    .setDepth(1000);
+  } else {
+    reverseCostDisplay.setText(text);
+    reverseCostDisplay.setPosition(sx, sy - 20);
+    reverseCostDisplay.setVisible(true);
+  }
+
+  if (reverseCostDisplay) {
+    reverseCostDisplay.setColor(canAfford ? '#cd853f' : '#000000');
+    reverseCostDisplay.setStroke(canAfford ? '#000000' : '#ffffff', 3);
+  }
+}
+
+function hideReverseCostDisplay() {
+  if (reverseCostDisplay) {
+    reverseCostDisplay.destroy();
+    reverseCostDisplay = null;
   }
 }
 
@@ -311,7 +365,7 @@ function hideBridgeCostDisplay() {
     if (!homeSpeedRange || !homeSpeedValue) return;
     
     homeSpeedRange.value = persistentSpeedLevel;
-    homeSpeedValue.textContent = persistentSpeedLevel;
+    homeSpeedValue.textContent = formatSpeedDisplay(persistentSpeedLevel);
     mySpeedLevel = persistentSpeedLevel;
   }
 
@@ -629,6 +683,11 @@ function hideBridgeCostDisplay() {
     myEliminated = false;
     updateQuitButtonLabel();
 
+    if (typeof msg.gameDuration === 'number' && Number.isFinite(msg.gameDuration) && msg.gameDuration > 0) {
+      gameDuration = msg.gameDuration;
+    }
+    hideTimerDisplay();
+
     screen = msg.screen || null;
     nodes.clear();
     edges.clear();
@@ -640,10 +699,7 @@ function hideBridgeCostDisplay() {
     activeAbility = null;
     bridgeFirstNode = null;
     hideBridgeCostDisplay();
-    if (bridgeCostDisplay && app && app.stage) {
-      app.stage.removeChild(bridgeCostDisplay);
-      bridgeCostDisplay = null;
-    }
+    hideReverseCostDisplay();
 
     if (Array.isArray(msg.nodes)) {
       for (const arr of msg.nodes) {
@@ -710,6 +766,14 @@ function hideBridgeCostDisplay() {
       });
     }
 
+    if (phase === 'playing') {
+      if (typeof msg.timerRemaining === 'number') {
+        syncTimerFromServer(msg.timerRemaining, msg.gameDuration);
+      } else {
+        syncTimerFromServer(gameDuration, msg.gameDuration);
+      }
+    }
+
     if (Array.isArray(msg.gold)) {
       msg.gold.forEach(([pid, value]) => {
         const id = Number(pid);
@@ -769,8 +833,6 @@ function hideBridgeCostDisplay() {
     if (progressBar) {
       progressBar.style.display = players.size > 0 ? 'block' : 'none';
     }
-
-    startGameTimer();
   }
 
   function handleLobby(msg) {
@@ -857,6 +919,16 @@ function hideBridgeCostDisplay() {
     }
 
     if (typeof msg.phase === 'string') phase = msg.phase;
+    if (typeof msg.gameDuration === 'number' && Number.isFinite(msg.gameDuration) && msg.gameDuration > 0) {
+      gameDuration = msg.gameDuration;
+    }
+    if (phase === 'playing') {
+      if (typeof msg.timerRemaining === 'number') {
+        syncTimerFromServer(msg.timerRemaining, msg.gameDuration);
+      }
+    } else if (gameStartTime) {
+      hideTimerDisplay();
+    }
     if (Array.isArray(msg.picked)) {
       msg.picked.forEach(([pid, picked]) => {
         if (Number(pid) === myPlayerId) myPicked = !!picked;
@@ -974,11 +1046,7 @@ function hideBridgeCostDisplay() {
     if (activeAbility === 'bridge1way') {
       activeAbility = null;
       bridgeFirstNode = null;
-      // Remove cost display
-      if (bridgeCostDisplay && app && app.stage) {
-        app.stage.removeChild(bridgeCostDisplay);
-        bridgeCostDisplay = null;
-      }
+      hideBridgeCostDisplay();
     }
   }
 
@@ -1025,6 +1093,7 @@ function hideBridgeCostDisplay() {
       activeAbility = null;
       bridgeFirstNode = null;
     }
+    hideReverseCostDisplay();
   }
 
   function handleEdgeUpdated(msg) {
@@ -1210,6 +1279,10 @@ function hideBridgeCostDisplay() {
           const myColor = ownerToColor(myPlayerId);
           graphicsNodes.lineStyle(3, myColor, 0.8);
           graphicsNodes.strokeCircle(nx, ny, r + 3);
+        } else if (n.owner !== myPlayerId) {
+          const playerSecondaryColor = ownerToSecondaryColor(myPlayerId);
+          graphicsNodes.lineStyle(3, playerSecondaryColor, 0.8);
+          graphicsNodes.strokeCircle(nx, ny, r + 3);
         }
       }
       
@@ -1223,14 +1296,10 @@ function hideBridgeCostDisplay() {
       // Bridge building hover: show secondary color highlight for valid nodes
       if (hoveredNodeId === id && activeAbility === 'bridge1way') {
         if (bridgeFirstNode === null) {
-          // Before selecting first node: highlight owned nodes
-          if (n.owner === myPlayerId) {
-            const playerSecondaryColor = ownerToSecondaryColor(myPlayerId);
-            graphicsNodes.lineStyle(3, playerSecondaryColor, 0.8); // secondary color highlight
-            graphicsNodes.strokeCircle(nx, ny, r + 3);
-          }
-          // AFTER
-          } else if (bridgeFirstNode !== id) {
+          const playerSecondaryColor = ownerToSecondaryColor(myPlayerId);
+          graphicsNodes.lineStyle(3, playerSecondaryColor, 0.8);
+          graphicsNodes.strokeCircle(nx, ny, r + 3);
+        } else if (bridgeFirstNode !== id) {
             const firstNode = nodes.get(bridgeFirstNode);
 
             // secondary color highlight on the target
@@ -1353,33 +1422,16 @@ function hideBridgeCostDisplay() {
     if (!edge) return false;
     
     const sourceNode = nodes.get(edge.source);
-    const targetNode = nodes.get(edge.target);
-    if (!sourceNode || !targetNode) return false;
+    if (!sourceNode) return false;
     
     const sourceOwner = sourceNode.owner;
-    const targetOwner = targetNode.owner;
     
-    // New rules: must own at least one node AND source can't be opponent's
-    
-    // Must own at least one node
-    if (sourceOwner !== myPlayerId && targetOwner !== myPlayerId) {
-      return false; // Don't own any nodes
+    // Updated rule: the giving node must be neutral or owned by the player
+    if (sourceOwner != null && sourceOwner !== myPlayerId) {
+      return false;
     }
-    
-    // Source node cannot belong to opponent
-    // Get opponent IDs (assuming 2-player game for now, but could be expanded)
-    const opponentIds = [];
-    for (const [playerId] of players.entries()) {
-      if (playerId !== myPlayerId) {
-        opponentIds.push(playerId);
-      }
-    }
-    
-    if (opponentIds.includes(sourceOwner)) {
-      return false; // Source node belongs to opponent
-    }
-    
-    return true; // Can reverse
+
+    return true;
   }
 
   function canTargetNodeForFlow(targetNodeId) {
@@ -1415,14 +1467,17 @@ function hideBridgeCostDisplay() {
       const node = nodes.get(nodeId);
       if (node) {
         if (bridgeFirstNode === null) {
-          // Start bridge building - first node must be owned by player
-          if (node.owner === myPlayerId) {
-            bridgeFirstNode = nodeId;
-            return true; // Handled
-          }
+          // Start bridge building from any node
+          bridgeFirstNode = nodeId;
+          return true; // Handled
         } else if (bridgeFirstNode !== nodeId) {
           // Complete bridge building - second node can be any node
           const firstNode = nodes.get(bridgeFirstNode);
+          if (!firstNode) {
+            bridgeFirstNode = null;
+            hideBridgeCostDisplay();
+            return true;
+          }
           const cost = calculateBridgeCost(firstNode, node);
           
           if (goldValue >= cost && ws && ws.readyState === WebSocket.OPEN) {
@@ -1445,11 +1500,7 @@ function hideBridgeCostDisplay() {
         } else {
           // Clicked same node, cancel selection
           bridgeFirstNode = null;
-          // Remove cost display
-          if (bridgeCostDisplay) {
-            app.stage.removeChild(bridgeCostDisplay);
-            bridgeCostDisplay = null;
-          }
+          hideBridgeCostDisplay();
           return true; // Handled
         }
       }
@@ -1459,11 +1510,8 @@ function hideBridgeCostDisplay() {
     // Cancel bridge building
     activeAbility = null;
     bridgeFirstNode = null;
-    // Remove cost display
-    if (bridgeCostDisplay && app && app.stage) {
-      app.stage.removeChild(bridgeCostDisplay);
-      bridgeCostDisplay = null;
-    }
+    hideBridgeCostDisplay();
+    hideReverseCostDisplay();
     return true; // Handled
   }
 
@@ -1480,6 +1528,9 @@ function hideBridgeCostDisplay() {
       if (candidateEdgeId != null) {
         const edge = edges.get(candidateEdgeId);
         if (edge) {
+          if (!canReverseEdge(edge)) {
+            return;
+          }
           const sourceNode = nodes.get(edge.source);
           const targetNode = nodes.get(edge.target);
           if (sourceNode && targetNode) {
@@ -1596,10 +1647,13 @@ function hideBridgeCostDisplay() {
     const nodeId = pickNearestNode(wx, wy, 18 / baseScale);
     if (nodeId != null) {
       const node = nodes.get(nodeId);
-      if (node && node.owner === myPlayerId) {
-        ev.preventDefault(); // Always prevent default when clicking on owned node
+      if (node && activeAbility !== 'reverse') {
+        ev.preventDefault();
         activeAbility = 'bridge1way';
         bridgeFirstNode = nodeId;
+        hideReverseCostDisplay();
+        hideBridgeCostDisplay();
+        redrawStatic();
         return;
       }
     }
@@ -1609,7 +1663,7 @@ function hideBridgeCostDisplay() {
     if (edgeId != null && ws && ws.readyState === WebSocket.OPEN) {
       ev.preventDefault();
       const edge = edges.get(edgeId);
-      if (edge) {
+      if (edge && canReverseEdge(edge)) {
         const sourceNode = nodes.get(edge.source);
         const targetNode = nodes.get(edge.target);
         if (sourceNode && targetNode) {
@@ -1640,15 +1694,12 @@ function hideBridgeCostDisplay() {
         break;
       case 'escape':
         // Cancel active ability
-    if (activeAbility) {
-      activeAbility = null;
-      bridgeFirstNode = null;
-      // Remove cost display
-      if (bridgeCostDisplay && app && app.stage) {
-        app.stage.removeChild(bridgeCostDisplay);
-        bridgeCostDisplay = null;
-      }
-    }
+        if (activeAbility) {
+          activeAbility = null;
+          bridgeFirstNode = null;
+          hideBridgeCostDisplay();
+          hideReverseCostDisplay();
+        }
         break;
     }
   });
@@ -1704,7 +1755,25 @@ function hideBridgeCostDisplay() {
         needsRedraw = true;
       }
     }
-    
+
+    const hoveredEdge = (hoveredEdgeId != null) ? edges.get(hoveredEdgeId) : null;
+    let shouldShowReverseCost = false;
+    if (hoveredEdge && canReverseEdge(hoveredEdge)) {
+      const sourceNode = nodes.get(hoveredEdge.source);
+      const sourceOwnedByMe = sourceNode && sourceNode.owner === myPlayerId;
+      if (activeAbility === 'reverse') {
+        shouldShowReverseCost = true;
+      } else if (!sourceOwnedByMe) {
+        shouldShowReverseCost = true;
+      }
+    }
+
+    if (shouldShowReverseCost) {
+      updateReverseCostDisplay(hoveredEdge);
+    } else {
+      hideReverseCostDisplay();
+    }
+
     if (needsRedraw) {
       redrawStatic();
     }
@@ -1738,23 +1807,24 @@ function hideBridgeCostDisplay() {
       // Deactivate
       activeAbility = null;
       bridgeFirstNode = null;
-      // Remove cost display
-      if (bridgeCostDisplay && app && app.stage) {
-        app.stage.removeChild(bridgeCostDisplay);
-        bridgeCostDisplay = null;
-      }
+      hideBridgeCostDisplay();
+      hideReverseCostDisplay();
     } else if (abilityName === 'bridge1way') {
       // Activate bridge building
       activeAbility = abilityName;
       bridgeFirstNode = null;
+      hideReverseCostDisplay();
     } else if (abilityName === 'reverse') {
       // Activate reverse mode (click an edge to reverse)
       activeAbility = abilityName;
       bridgeFirstNode = null;
+      hideBridgeCostDisplay();
     } else if (abilityName === 'destroy') {
       // Activate destroy mode
       activeAbility = abilityName;
       bridgeFirstNode = null; // reuse for destroy node selection
+      hideBridgeCostDisplay();
+      hideReverseCostDisplay();
     }
     // Placeholder abilities do nothing for now
   }
@@ -1879,7 +1949,7 @@ function hideBridgeCostDisplay() {
     if (progressBar) progressBar.style.display = 'none';
     if (progressMarkerLeft) progressMarkerLeft.style.display = 'none';
     if (progressMarkerRight) progressMarkerRight.style.display = 'none';
-    if (timerDisplay) timerDisplay.style.display = 'none';
+    hideTimerDisplay();
     if (autoExpandToggle) autoExpandToggle.style.display = 'none';
     if (speedDisplay) speedDisplay.style.display = 'none';
 
@@ -1898,6 +1968,7 @@ function hideBridgeCostDisplay() {
     activeAbility = null;
     bridgeFirstNode = null;
     hideBridgeCostDisplay();
+    hideReverseCostDisplay();
     clearMoneyIndicators();
 
     gameEnded = false;
@@ -1921,10 +1992,29 @@ function hideBridgeCostDisplay() {
     return `#${newR.toString(16).padStart(2, '0')}${newG.toString(16).padStart(2, '0')}${newB.toString(16).padStart(2, '0')}`;
   }
 
-  function startGameTimer() {
-    gameStartTime = Date.now();
+  function hideTimerDisplay() {
+    gameStartTime = null;
+    if (!timerDisplay) return;
+    timerDisplay.style.display = 'none';
+    timerDisplay.style.color = '#ffffff';
+    const minutes = Math.floor(gameDuration / 60);
+    const seconds = Math.floor(gameDuration % 60);
+    timerDisplay.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  }
+
+  function syncTimerFromServer(remainingSeconds, durationSeconds) {
+    if (!Number.isFinite(remainingSeconds)) return;
+    if (Number.isFinite(durationSeconds) && durationSeconds > 0) {
+      gameDuration = durationSeconds;
+    }
+
+    const clampedRemaining = Math.max(0, Math.min(gameDuration, remainingSeconds));
+    const elapsed = gameDuration - clampedRemaining;
+    gameStartTime = Date.now() - elapsed * 1000;
+
     if (timerDisplay) {
       timerDisplay.style.display = 'block';
+      timerDisplay.style.color = '#ffffff';
     }
   }
 
@@ -2057,7 +2147,7 @@ function hideBridgeCostDisplay() {
     const canAfford = goldValue >= cost;
     
     // Use black when unaffordable, secondary color when affordable
-    const previewColor = canAfford ? ownerToSecondaryColor(from.owner) : 0x000000;
+    const previewColor = canAfford ? ownerToSecondaryColor(myPlayerId) : 0x000000;
 
     // All edges are now one-way: chain of triangles pointing to target
     const triH = 16;
@@ -2125,19 +2215,28 @@ function hideBridgeCostDisplay() {
     const actualSpacing = len / packedCount;
     
     const canLeftClick = (from && from.owner === myPlayerId);
-    // Only highlight edges that can actually be reversed (use the validation function)
-    const canRightClick = isHovered && canReverseEdge(e);
-    const leftClickHover = isHovered && canLeftClick;
-    const rightClickHover = isHovered && canRightClick && !canLeftClick;
-    
+    const canReverse = canReverseEdge(e);
+    const isReverseMode = (activeAbility === 'reverse');
+
     let hoverColor = null;
-    if (leftClickHover) {
-      hoverColor = ownerToColor(myPlayerId); // Primary color for left-clickable
-    } else if (rightClickHover) {
-      hoverColor = ownerToSecondaryColor(myPlayerId); // Secondary color for right-clickable only
+    let hoverAllowed = false;
+
+    if (isHovered) {
+      if (isReverseMode) {
+        if (canReverse) {
+          hoverColor = ownerToSecondaryColor(myPlayerId);
+          hoverAllowed = true;
+        }
+      } else {
+        if (canLeftClick) {
+          hoverColor = ownerToColor(myPlayerId);
+          hoverAllowed = true;
+        } else if (canReverse) {
+          hoverColor = ownerToSecondaryColor(myPlayerId);
+          hoverAllowed = true;
+        }
+      }
     }
-    
-    const hoverAllowed = leftClickHover || rightClickHover;
     for (let i = 0; i < packedCount; i++) {
       const cx = sx + (i + 0.5) * actualSpacing * ux;
       const cy = sy + (i + 0.5) * actualSpacing * uy;

@@ -486,12 +486,14 @@ class BotGameManager:
         self.human_token: Optional[str] = None
         self.game_active = False
     
-    def start_bot_game(self, human_token: str, difficulty: str = "easy", auto_expand: bool = False, speed_level: int = 6) -> Tuple[bool, Optional[str]]:
+    def start_bot_game(self, human_token: str, difficulty: str = "easy", auto_expand: bool = False, speed_level: int = 3) -> Tuple[bool, Optional[str]]:
         """
         Start a new bot vs human game with specified difficulty.
         Returns: (success, error_message)
         """
         try:
+            speed_level = max(1, min(5, speed_level))
+
             # Create bot player with specified difficulty
             self.bot_player = BotPlayer(player_id=2, color="#3388ff", difficulty=difficulty)
             self.human_token = human_token
