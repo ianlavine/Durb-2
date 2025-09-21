@@ -3,27 +3,20 @@ import random
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
+from .constants import (
+    GOLD_REWARD_FOR_ENEMY_CAPTURE,
+    GOLD_REWARD_FOR_NEUTRAL_CAPTURE,
+    INTAKE_TRANSFER_RATIO,
+    MAX_TRANSFER_RATIO,
+    NODE_MAX_JUICE,
+    NODE_MIN_JUICE,
+    PASSIVE_GOLD_PER_SECOND,
+    PRODUCTION_RATE_PER_NODE,
+    RESERVE_TRANSFER_RATIO,
+    STARTING_GOLD,
+    UNOWNED_NODE_BASE_JUICE,
+)
 from .models import Edge, Node, Player
-
-
-EDGE_TOGGLE_PROBABILITY: float = 0.0
-NODE_MIN_JUICE: float = 0.0
-NODE_MAX_JUICE: float = 120.0
-
-# Flow model
-PRODUCTION_RATE_PER_NODE: float = 0.15  # owned nodes generate this per tick (constant growth)
-TRANSFER_PERCENT_PER_TICK: float = 0.01  # fraction of source juice transferred per tick (split across outgoing edges)
-INTAKE_TO_OUTPUT_SCALE: float = 1.0 # extra outgoing allowance per unit of intake
-MAX_TRANSFER_RATIO: float = 0.95  # cap on fraction of a node's juice that can be sent each tick
-
-# Gold economy - no limit, no natural generation
-GOLD_REWARD_FOR_NEUTRAL_CAPTURE: float = 3.0  # gold awarded when capturing unowned nodes
-GOLD_REWARD_FOR_ENEMY_CAPTURE: float = 1.0   # gold awarded when taking an opponent's node
-STARTING_GOLD: float = 0.0  # players now start empty and earn gold from captures
-
-# Unowned node sizing
-UNOWNED_NODE_BASE_SIZE: float = 2.0  # base juice amount for unowned nodes (back to original)
-UNOWNED_NODE_BASE_JUICE: float = 2.0  # base juice amount for unowned nodes
 
 
 class GraphState:
@@ -81,16 +74,6 @@ class GraphState:
         """Get production rate scaled by speed level."""
         speed_multiplier = self.get_speed_multiplier()
         return PRODUCTION_RATE_PER_NODE * speed_multiplier
-
-    def get_scaled_transfer_percent(self) -> float:
-        """Get transfer percentage scaled by speed level."""
-        speed_multiplier = self.get_speed_multiplier()
-        return TRANSFER_PERCENT_PER_TICK * speed_multiplier
-
-    def get_intake_to_output_scale(self) -> float:
-        """Scale intake -> output conversion with game speed."""
-        speed_multiplier = self.get_speed_multiplier()
-        return INTAKE_TO_OUTPUT_SCALE * speed_multiplier
 
     def get_player_node_counts(self) -> Dict[int, int]:
         """Return a mapping of player id to number of nodes they currently own."""
@@ -342,7 +325,16 @@ class GraphState:
     def simulate_tick(self, tick_interval_seconds: float) -> None:
         # Update flowing status for all edges based on target node capacity
         self._update_edge_flowing_status()
-        
+
+        # Passive gold income for active players ($1 every 3 seconds)
+        if not self.game_ended and PASSIVE_GOLD_PER_SECOND > 0.0 and tick_interval_seconds > 0.0:
+            passive_income = PASSIVE_GOLD_PER_SECOND * tick_interval_seconds
+            if passive_income > 0.0:
+                for player_id in self.players.keys():
+                    if player_id in self.eliminated_players:
+                        continue
+                    self.player_gold[player_id] = self.player_gold.get(player_id, 0.0) + passive_income
+
         # Direction/flow toggles are input-driven; no random changes here
         # Compute size deltas from production and flows
         size_delta: Dict[int, float] = {nid: 0.0 for nid in self.nodes.keys()}
@@ -366,7 +358,7 @@ class GraphState:
             src_id = e.source_node_id  # All edges flow from source to target
             outgoing_by_node.setdefault(src_id, []).append(e.id)
 
-        # Compute per-edge transfer amounts using base production plus intake-driven bonus
+        # Compute per-edge transfer amounts: 95% of last tick's intake plus 1% of remaining reserves
         per_edge_amount: Dict[int, float] = {}
         remaining_transfer: Dict[int, float] = {}
         for src_id, edge_ids in outgoing_by_node.items():
@@ -374,10 +366,13 @@ class GraphState:
             if src_node is None:
                 continue
             
-            base_transfer = src_node.juice * self.get_scaled_transfer_percent()
-            intake_transfer = src_node.cur_intake * self.get_intake_to_output_scale()
+            prev_intake = max(0.0, src_node.cur_intake)
+            reserves = max(0.0, src_node.juice - prev_intake)
 
-            total_transfer = base_transfer + intake_transfer
+            transfer_from_intake = prev_intake * INTAKE_TRANSFER_RATIO
+            transfer_from_reserve = reserves * RESERVE_TRANSFER_RATIO
+
+            total_transfer = transfer_from_intake + transfer_from_reserve
             max_transfer_allowed = max(0.0, src_node.juice * MAX_TRANSFER_RATIO)
             total_transfer = min(total_transfer, max_transfer_allowed)
             total_transfer = min(total_transfer, src_node.juice)
@@ -557,7 +552,10 @@ def load_graph(graph_path: Path) -> Tuple[GraphState, Dict[str, int]]:
     screen = data.get("screen", {})
     nodes_raw = data["nodes"]
     edges_raw = data["edges"]
-    nodes: List[Node] = [Node(id=n["id"], x=n["x"], y=n["y"], juice=2.0, cur_intake=0.0) for n in nodes_raw]
+    nodes: List[Node] = [
+        Node(id=n["id"], x=n["x"], y=n["y"], juice=UNOWNED_NODE_BASE_JUICE, cur_intake=0.0)
+        for n in nodes_raw
+    ]
     edges: List[Edge] = [
         Edge(id=e["id"], source_node_id=e["source"], target_node_id=e["target"])
         for e in edges_raw
@@ -570,7 +568,10 @@ def build_state_from_dict(data: Dict) -> Tuple[GraphState, Dict[str, int]]:
     nodes_raw = data["nodes"]
     edges_raw = data["edges"]
     # Start nodes very small (juice units)
-    nodes: List[Node] = [Node(id=n["id"], x=n["x"], y=n["y"], juice=2.0, cur_intake=0.0) for n in nodes_raw]
+    nodes: List[Node] = [
+        Node(id=n["id"], x=n["x"], y=n["y"], juice=UNOWNED_NODE_BASE_JUICE, cur_intake=0.0)
+        for n in nodes_raw
+    ]
     edges: List[Edge] = [
         Edge(id=e["id"], source_node_id=e["source"], target_node_id=e["target"])
         for e in edges_raw

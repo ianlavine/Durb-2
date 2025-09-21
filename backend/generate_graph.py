@@ -49,7 +49,7 @@ def generate_node_positions(num_nodes: int, width: int, height: int, margin: int
             cy = margin + (r + 0.5) * cell_h
             x = cx + random.uniform(-random_jitter_w, random_jitter_w)
             y = cy + random.uniform(-random_jitter_h, random_jitter_h)
-            nodes.append(Node(id=index, x=x, y=y, juice=2.0, cur_intake=0.0))
+            nodes.append(Node(id=index, x=x, y=y, juice=8.0, cur_intake=0.0))
             index += 1
         if index >= num_nodes:
             break
@@ -172,8 +172,8 @@ def remove_isolated_nodes(nodes: List[Node], edges: List[Edge]) -> Tuple[List[No
 def main() -> None:
     if SEED is not None:
         random.seed(SEED)
-    # Default to 100x100 coordinate space; frontend scales to window
-    width, height = 100, 100
+    # Default to a wide 220x90 coordinate space so the map stretches horizontally
+    width, height = 220, 90
     nodes = generate_node_positions(NODE_COUNT, width, height, 0)
     edges = generate_planar_edges(nodes, DESIRED_EDGE_COUNT, ONE_WAY_PERCENT)
     
@@ -219,6 +219,3 @@ def generate_graph_to_path(width: int, height: int, output_path: Path) -> None:
     }
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
-
-
-

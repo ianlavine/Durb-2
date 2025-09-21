@@ -56,6 +56,9 @@
   let bridgeCostDisplay = null; // current bridge cost display text object
   let reverseCostDisplay = null; // current reverse edge cost display text object
 
+  const BRIDGE_BASE_COST = 0; // keep in sync with backend/constants.py
+  const BRIDGE_COST_PER_UNIT = 2; // keep in sync with backend/constants.py
+
   // Progress bar for node count victory
   let progressBar = null;
   let progressBarInner = null;
@@ -100,20 +103,10 @@
   const JUICE_ANIMATION_PHASES = 3; // Number of distinct color phases for juice animation
   
   function calculateNodeRadius(node, baseScale) {
-    if (node.owner === null) {
-      // Unowned nodes: use original logic but with better shrinking and double the radius
-      const juiceVal = (node.juice != null ? node.juice : (node.size || 0));
-      
-      // Use the original square root logic but with a much smaller minimum
-      // This allows nodes to shrink to almost nothing before dying
-      // Double the radius to make unowned nodes twice as big
-      const radius = Math.max(0.2, 1.0 * Math.sqrt(Math.max(0, juiceVal))) * baseScale;
-      
-      return radius;
-    } else {
-      // Owned nodes: use original logic
-      return Math.max(0.3, 0.5 * Math.sqrt(Math.max(0, node.size ?? node.juice ?? 0.3))) * baseScale;
-    }
+    const juiceVal = Math.max(0, node.size ?? node.juice ?? 0);
+    const minRadius = node.owner === null ? 0.2 : 0.3;
+    const radius = Math.max(minRadius, 0.5 * Math.sqrt(juiceVal));
+    return radius * baseScale;
   }
 
   function preload() {}
@@ -171,23 +164,26 @@
   function calculateBridgeCost(fromNode, toNode) {
     if (!fromNode || !toNode) return 0;
 
-    const baseWidth = screen && Number.isFinite(screen.width) ? screen.width : 100;
-    const baseHeight = screen && Number.isFinite(screen.height) ? screen.height : 100;
-    const normX = 100 / Math.max(1, baseWidth);
-    const normY = 100 / Math.max(1, baseHeight);
+    const baseWidth = screen && Number.isFinite(screen.width) ? screen.width : 220;
+    const baseHeight = screen && Number.isFinite(screen.height) ? screen.height : 90;
+    const largestSpan = Math.max(1, baseWidth, baseHeight);
+    const scale = 100 / largestSpan;
 
     // Normalize distance so it matches backend math regardless of viewport stretch
-    const dx = (toNode.x - fromNode.x) * normX;
-    const dy = (toNode.y - fromNode.y) * normY;
+    const dx = (toNode.x - fromNode.x) * scale;
+    const dy = (toNode.y - fromNode.y) * scale;
     const distance = Math.sqrt(dx * dx + dy * dy);
 
     if (distance === 0) return 0;
 
-    const BASE_COST = 1;
-    const COST_PER_UNIT = 0.25; // align with backend scaling (slightly steeper)
-
-    const cost = BASE_COST + distance * COST_PER_UNIT;
+    const cost = BRIDGE_BASE_COST + distance * BRIDGE_COST_PER_UNIT;
     return Math.round(cost);
+  }
+
+  function formatCost(value) {
+    if (!Number.isFinite(value)) return '0';
+    const rounded = Math.round(value);
+    return rounded.toString();
   }
 
 // Replace the whole function with this Phaser version:
@@ -201,7 +197,7 @@ function updateBridgeCostDisplay(fromNode, toNode) {
 
   const cost = calculateBridgeCost(fromNode, toNode);
   const canAfford = goldValue >= cost;
-  const text = `$${cost}`;
+  const text = `$${formatCost(cost)}`;
 
   if (!bridgeCostDisplay) {
     bridgeCostDisplay = sceneRef.add.text(sx, sy - 20, text, {
@@ -243,7 +239,7 @@ function updateReverseCostDisplay(edge) {
 
   const cost = calculateBridgeCost(sourceNode, targetNode);
   const canAfford = goldValue >= cost;
-  const text = `$${cost}`;
+  const text = `$${formatCost(cost)}`;
 
   if (!reverseCostDisplay) {
     reverseCostDisplay = sceneRef.add.text(sx, sy - 20, text, {
@@ -1157,7 +1153,7 @@ function hideReverseCostDisplay() {
         createMoneyIndicator(
           node.x + offsetX, 
           node.y + offsetY, 
-          `+$${msg.reward}`, 
+          `+$${formatCost(msg.reward)}`,
           0xffd700, // golden color
           2000 // 2 seconds
         );
@@ -1334,8 +1330,8 @@ function hideReverseCostDisplay() {
         const mouseNode = {
           x: mouseWorldX,
           y: mouseWorldY,
-          juice: 2.0, // small default size for consistent radius calculation
-          size: 2.0,
+          juice: 8.0, // mirror the neutral-node baseline for preview sizing
+          size: 8.0,
           owner: null
         };
         
@@ -1374,20 +1370,52 @@ function hideReverseCostDisplay() {
 
   function computeTransform(viewW, viewH) {
     if (nodes.size === 0) return;
-    let minX = 0, minY = 0, maxX = 100, maxY = 100;
-    // Nodes are already in 0..100 logical space; fit that rect to screen
-    const topPadding = 100; // increased top padding to avoid progress bar
-    const bottomPadding = 60; // bottom padding
+
+    const screenWidth = screen && Number.isFinite(screen.width) ? screen.width : null;
+    const screenHeight = screen && Number.isFinite(screen.height) ? screen.height : null;
+
+    let minX;
+    let minY;
+    let maxX;
+    let maxY;
+
+    if (screenWidth && screenHeight) {
+      minX = 0;
+      minY = 0;
+      maxX = screenWidth;
+      maxY = screenHeight;
+    } else {
+      minX = Infinity;
+      minY = Infinity;
+      maxX = -Infinity;
+      maxY = -Infinity;
+      nodes.forEach((node) => {
+        minX = Math.min(minX, node.x);
+        minY = Math.min(minY, node.y);
+        maxX = Math.max(maxX, node.x);
+        maxY = Math.max(maxY, node.y);
+      });
+      if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+        minX = 0;
+        minY = 0;
+        maxX = 100;
+        maxY = 100;
+      }
+    }
+
+    const topPadding = 100; // extra room for HUD
+    const bottomPadding = 60;
     const rightReservedPx = 40; // space for gold number and margins
+    const horizontalPlayable = Math.max(1, viewW - 60 * 2 - rightReservedPx);
+    const verticalPlayable = Math.max(1, viewH - topPadding - bottomPadding);
+
     const width = Math.max(1, maxX - minX);
     const height = Math.max(1, maxY - minY);
-    const scaleX = (viewW - 60 * 2 - rightReservedPx) / width; // keep side padding same
-    const scaleY = (viewH - topPadding - bottomPadding) / height;
-    // Use independent scaling for x and y to fully utilize window aspect
-    // Left edge can go to the edge; anchor left and center vertically with top offset
-    const offsetX = 60 - scaleX * minX; // keep side padding same
-    const offsetY = topPadding + (viewH - topPadding - bottomPadding - scaleY * height) / 2 - scaleY * minY;
-    view = { minX, minY, maxX, maxY, scaleX, scaleY, offsetX, offsetY };
+    const scale = Math.min(horizontalPlayable / width, verticalPlayable / height);
+
+    const offsetX = 60 + (horizontalPlayable - scale * width) / 2 - scale * minX;
+    const offsetY = topPadding + (verticalPlayable - scale * height) / 2 - scale * minY;
+    view = { minX, minY, maxX, maxY, scaleX: scale, scaleY: scale, offsetX, offsetY };
   }
 
   function worldToScreen(x, y) {
@@ -1757,16 +1785,7 @@ function hideReverseCostDisplay() {
     }
 
     const hoveredEdge = (hoveredEdgeId != null) ? edges.get(hoveredEdgeId) : null;
-    let shouldShowReverseCost = false;
-    if (hoveredEdge && canReverseEdge(hoveredEdge)) {
-      const sourceNode = nodes.get(hoveredEdge.source);
-      const sourceOwnedByMe = sourceNode && sourceNode.owner === myPlayerId;
-      if (activeAbility === 'reverse') {
-        shouldShowReverseCost = true;
-      } else if (!sourceOwnedByMe) {
-        shouldShowReverseCost = true;
-      }
-    }
+    const shouldShowReverseCost = Boolean(hoveredEdge && canReverseEdge(hoveredEdge));
 
     if (shouldShowReverseCost) {
       updateReverseCostDisplay(hoveredEdge);
@@ -1789,8 +1808,8 @@ function hideReverseCostDisplay() {
     // Allow abilities during playing phase
     
     const abilities = {
-      'bridge1way': { cost: 3 },
-      'reverse': { cost: 1 },
+      'bridge1way': { cost: 4 },
+      'reverse': { cost: 4 },
       'destroy': { cost: 2 }
     };
     
@@ -1834,7 +1853,7 @@ function hideReverseCostDisplay() {
   function updateGoldBar() {
     const val = Math.max(0, goldValue || 0);
     if (goldDisplay) {
-      goldDisplay.textContent = `$${Math.floor(val)}`;
+      goldDisplay.textContent = `$${formatCost(val)}`;
     }
   }
 
@@ -1900,7 +1919,7 @@ function hideReverseCostDisplay() {
 
       const labelEl = segment.querySelector('.segmentLabel');
       if (labelEl) {
-        labelEl.textContent = `$${Math.floor(stats.gold || 0)}`;
+        labelEl.textContent = `$${formatCost(stats.gold || 0)}`;
       }
     });
 

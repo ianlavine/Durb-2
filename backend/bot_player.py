@@ -26,7 +26,7 @@ class BotPlayer:
         self.action_cooldown = 2.0  # Minimum seconds between actions
         self.last_bridge_time = 0.0
         self.bridge_cooldown = 8.0  # Extra delay between bridge builds
-        self.bridge_gold_reserve = 1.0  # Keep a small gold buffer when bridging
+        self.bridge_gold_reserve = 10.0  # Keep a proportional gold buffer when bridging
         self.websocket = None  # Will be set by the bot game manager
     
     def join_game(self, game_engine: GameEngine) -> None:

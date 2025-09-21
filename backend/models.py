@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+from .constants import UNOWNED_NODE_BASE_JUICE
+
 
 @dataclass
 class Player:
@@ -14,7 +16,7 @@ class Node:
     id: int
     x: float
     y: float
-    juice: float = 2.0
+    juice: float = UNOWNED_NODE_BASE_JUICE
     owner: Optional[int] = None  # player id
     attached_edge_ids: List[int] = field(default_factory=list)
     cur_intake: float = 0.0  # amount of juice received from friendly nodes in last tick
@@ -29,4 +31,3 @@ class Edge:
     # All edges are now one-way only, from source to target
     on: bool = False
     flowing: bool = False
-

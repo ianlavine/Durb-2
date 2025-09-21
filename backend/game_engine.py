@@ -2,12 +2,17 @@
 Game Engine - Core game logic separated from server implementation.
 Handles game state management, validation, and game rules.
 """
-import time
 import math
+import time
 from typing import Any, Dict, List, Optional, Tuple
-from .models import Player, Node, Edge
-from .state import GraphState, build_state_from_dict
+from .constants import (
+    BRIDGE_BASE_COST,
+    BRIDGE_COST_PER_UNIT_DISTANCE,
+    GOLD_REWARD_FOR_NEUTRAL_CAPTURE,
+)
 from .graph_generator import graph_generator
+from .models import Edge, Node, Player
+from .state import GraphState, build_state_from_dict
 
 
 class GameValidationError(Exception):
@@ -20,7 +25,7 @@ class GameEngine:
     
     def __init__(self):
         self.state: Optional[GraphState] = None
-        self.screen: Dict[str, int] = {"width": 100, "height": 100, "margin": 0}
+        self.screen: Dict[str, int] = {"width": 220, "height": 90, "margin": 0}
         
         # Player management
         self.token_to_player_id: Dict[str, int] = {}
@@ -205,7 +210,6 @@ class GameEngine:
             # Check if this is for picking a starting node (node is unowned and player hasn't picked yet)
             if node.owner is None and not self.state.players_who_picked.get(player_id):
                 # This is a starting node pick - give gold reward for capturing unowned node
-                from .state import GOLD_REWARD_FOR_NEUTRAL_CAPTURE
                 self.state.player_gold[player_id] = self.state.player_gold.get(player_id, 0.0) + GOLD_REWARD_FOR_NEUTRAL_CAPTURE
                 node.owner = player_id
                 self.state.players_who_picked[player_id] = True
@@ -317,7 +321,7 @@ class GameEngine:
             }
 
             # Basic mismatch logging (could be extended to real logging system)
-            if cost and abs(cost - actual_cost) > 1:
+            if cost and abs(cost - actual_cost) > 0.51:
                 print(
                     f"[reverse] cost mismatch: client reported {cost}, server calculated {actual_cost}"
                 )
@@ -327,25 +331,23 @@ class GameEngine:
         except GameValidationError:
             return False
     
-    def _normalize_coordinate_scale(self) -> Tuple[float, float]:
-        """Return factors that normalize node coordinates to a 100x100 space."""
+    def _normalization_scale(self) -> float:
+        """Return a uniform scale factor so distance math stays orientation-neutral."""
         width = max(1.0, float(self.screen.get("width", 100)))
         height = max(1.0, float(self.screen.get("height", 100)))
-        return 100.0 / width, 100.0 / height
+        largest_span = max(width, height)
+        return 100.0 / largest_span if largest_span > 0 else 1.0
 
-    def calculate_bridge_cost(self, from_node: Node, to_node: Node) -> int:
+    def calculate_bridge_cost(self, from_node: Node, to_node: Node) -> float:
         """Calculate the gold cost for a bridge using normalized coordinates."""
-        norm_x, norm_y = self._normalize_coordinate_scale()
-        dx = (to_node.x - from_node.x) * norm_x
-        dy = (to_node.y - from_node.y) * norm_y
+        scale = self._normalization_scale()
+        dx = (to_node.x - from_node.x) * scale
+        dy = (to_node.y - from_node.y) * scale
         distance = math.hypot(dx, dy)
         if distance <= 0:
             return 0
 
-        base_cost = 1.0
-        cost_per_unit = 0.25  # scale slightly steeper with distance
-
-        total_cost = base_cost + distance * cost_per_unit
+        total_cost = BRIDGE_BASE_COST + distance * BRIDGE_COST_PER_UNIT_DISTANCE
         return int(round(total_cost))
 
     def handle_build_bridge(self, token: str, from_node_id: int, to_node_id: int, 
@@ -402,7 +404,7 @@ class GameEngine:
             self.state.player_gold[player_id] = max(0.0, self.state.player_gold[player_id] - actual_cost)
 
             # Basic mismatch logging (could be extended to real logging system)
-            if client_reported_cost and abs(client_reported_cost - actual_cost) > 1:
+            if client_reported_cost and abs(client_reported_cost - actual_cost) > 0.51:
                 print(
                     f"[bridge] cost mismatch: client reported {client_reported_cost}, server calculated {actual_cost}"
                 )

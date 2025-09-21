@@ -11,8 +11,9 @@ class GraphGenerator:
     """Handles graph generation with consistent parameters and async support."""
     
     def __init__(self):
-        self.default_width = 100
-        self.default_height = 100
+        # Default to a wider aspect so playfields stretch further horizontally than vertically
+        self.default_width = 220
+        self.default_height = 90
         self.default_margin = 0
     
     async def generate_async(self, width: int = None, height: int = None, margin: int = None) -> Tuple[List, List]:
