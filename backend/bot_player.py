@@ -5,11 +5,13 @@ The bot uses the existing game engine methods directly without going through web
 
 import math
 import time
-from typing import Dict, List, Optional, Tuple
+from collections import deque
+from typing import Dict, List, Optional, Set, Tuple
+
 from .models import Player
 from .game_engine import GameEngine
 from .state import GraphState
-from .constants import PLAYER_COLOR_SCHEMES
+from .constants import PLAYER_COLOR_SCHEMES, BRIDGE_COST_PER_UNIT_DISTANCE
 
 
 class BotPlayer:
@@ -300,9 +302,16 @@ class BotPlayer:
         if available_gold <= self.bridge_gold_reserve:
             return False
 
+        reachable_without_bridges = self._compute_reachable_nodes(include_enemy=False)
+        reasonable_cost = self._estimate_reasonable_bridge_cost()
+        candidates: List[Tuple[float, int, float, int, int]] = []
+
         # Find good bridge building opportunities
         for owned_node_id, owned_node in self.game_engine.state.nodes.items():
             if owned_node.owner != self.player_id:
+                continue
+
+            if not self._source_has_flow_capacity(owned_node):
                 continue
             
             # Look for nearby unowned nodes that would be good expansion targets
@@ -310,6 +319,10 @@ class BotPlayer:
                 if (target_node.owner is None and 
                     target_node_id != owned_node_id and
                     not self._edge_exists_between_nodes(owned_node_id, target_node_id)):
+
+                    if target_node_id in reachable_without_bridges:
+                        # We can already get here via natural expansion; skip
+                        continue
                     
                     # Check if this would be a good expansion opportunity
                     if self._is_good_bridge_target(target_node_id):
@@ -319,6 +332,9 @@ class BotPlayer:
                         if owned_node and target_node:
                             cost = self._calculate_bridge_cost(owned_node, target_node)
 
+                            if cost > reasonable_cost:
+                                continue
+
                             current_gold = self.game_engine.state.player_gold.get(self.player_id, 0)
                             if current_gold < cost:
                                 continue
@@ -326,27 +342,51 @@ class BotPlayer:
                             if current_gold - cost < self.bridge_gold_reserve:
                                 continue
 
-                            # Try to build the bridge
-                            success, new_edge, actual_cost, error_msg = self.game_engine.handle_build_bridge(
-                                self.bot_token, owned_node_id, target_node_id, cost
-                            )
-                            if success and new_edge:
-                                # Send frontend response
-                                await self._send_frontend_response({
-                                    "type": "newEdge",
-                                    "edge": {
-                                        "id": new_edge.id,
-                                        "source": new_edge.source_node_id,
-                                        "target": new_edge.target_node_id,
-                                        "bidirectional": False,
-                                        "forward": True,
-                                        "on": new_edge.on,
-                                        "flowing": new_edge.flowing
-                                    },
-                                    "cost": actual_cost  # Include the verified cost for frontend animation
-                                })
-                                self.last_bridge_time = current_time
-                                return True
+
+                            expansion_score = self._count_expandable_nodes(target_node_id)
+                            if expansion_score <= 0:
+                                continue
+
+                            dx = target_node.x - owned_node.x
+                            dy = target_node.y - owned_node.y
+                            distance = math.hypot(dx, dy)
+
+                            # Lower expansion_score (negative) so larger counts are considered earlier when sorting
+                            candidates.append((cost, -expansion_score, distance, owned_node_id, target_node_id))
+
+        if not candidates:
+            return False
+
+        candidates.sort()
+
+        for cost, _, _, owned_node_id, target_node_id in candidates:
+            current_gold = self.game_engine.state.player_gold.get(self.player_id, 0)
+            if current_gold < cost or current_gold - cost < self.bridge_gold_reserve:
+                continue
+
+            success, new_edge, actual_cost, error_msg = self.game_engine.handle_build_bridge(
+                self.bot_token, owned_node_id, target_node_id, cost
+            )
+            if success and new_edge:
+                # Ensure the new bridge is turned on to immediately send flow
+                if not new_edge.on:
+                    self.game_engine.handle_edge_click(self.bot_token, new_edge.id)
+
+                await self._send_frontend_response({
+                    "type": "newEdge",
+                    "edge": {
+                        "id": new_edge.id,
+                        "source": new_edge.source_node_id,
+                        "target": new_edge.target_node_id,
+                        "bidirectional": False,
+                        "forward": True,
+                        "on": new_edge.on,
+                        "flowing": new_edge.flowing
+                    },
+                    "cost": actual_cost  # Include the verified cost for frontend animation
+                })
+                self.last_bridge_time = current_time
+                return True
 
         return False
 
@@ -364,9 +404,15 @@ class BotPlayer:
             return False
 
         state = self.game_engine.state
+        reachable_with_attack = self._compute_reachable_nodes(include_enemy=True)
+        reasonable_cost = self._estimate_reasonable_bridge_cost()
         enemy_candidates = []
         for target_node_id, target_node in state.nodes.items():
             if target_node.owner is None or target_node.owner == self.player_id:
+                continue
+
+            if target_node_id in reachable_with_attack:
+                # Already on a path we can reach without new bridge
                 continue
 
             outflow_edges = 0
@@ -404,10 +450,16 @@ class BotPlayer:
                 if self._edge_exists_between_nodes(owned_node_id, target_node_id):
                     continue
 
+                if not self._source_has_flow_capacity(owned_node):
+                    continue
+
                 dx = target_node.x - owned_node.x
                 dy = target_node.y - owned_node.y
                 distance = math.hypot(dx, dy)
                 cost = self._calculate_bridge_cost(owned_node, target_node)
+
+                if cost > reasonable_cost:
+                    continue
                 candidate_sources.append((cost, distance, owned_node_id))
 
             candidate_sources.sort(key=lambda item: (item[0], item[1]))
@@ -439,7 +491,7 @@ class BotPlayer:
                     return True
 
         return False
-    
+
     def _is_good_bridge_target(self, target_node_id: int) -> bool:
         """Check if a node would be a good target for bridge building."""
         if not self.game_engine or not self.game_engine.state:
@@ -450,7 +502,92 @@ class BotPlayer:
         
         # Only build bridges to nodes that can expand to at least 2 other nodes
         return expansion_count >= 2
-    
+
+    def _compute_reachable_nodes(self, include_enemy: bool) -> Set[int]:
+        if not self.game_engine or not self.game_engine.state:
+            return set()
+
+        state = self.game_engine.state
+        start_nodes = [n.id for n in state.nodes.values() if n.owner == self.player_id]
+        if not start_nodes:
+            return set()
+
+        visited: Set[int] = set(start_nodes)
+        queue: deque[int] = deque(start_nodes)
+
+        while queue:
+            current_id = queue.popleft()
+            current_node = state.nodes.get(current_id)
+            if not current_node:
+                continue
+
+            for edge_id in current_node.attached_edge_ids:
+                edge = state.edges.get(edge_id)
+                if not edge or edge.source_node_id != current_id:
+                    continue
+
+                target_id = edge.target_node_id
+                target_node = state.nodes.get(target_id)
+                if not target_node:
+                    continue
+
+                target_owner = target_node.owner
+                if target_owner == self.player_id:
+                    pass
+                elif target_owner is None:
+                    pass
+                elif not include_enemy:
+                    continue
+
+                if target_id not in visited:
+                    visited.add(target_id)
+                    queue.append(target_id)
+
+        return visited
+
+    def _estimate_reasonable_bridge_cost(self) -> float:
+        if not self.game_engine or not self.game_engine.state:
+            return 60.0
+
+        state = self.game_engine.state
+        sample_costs: List[float] = []
+        for edge in state.edges.values():
+            from_node = state.nodes.get(edge.source_node_id)
+            to_node = state.nodes.get(edge.target_node_id)
+            if not from_node or not to_node:
+                continue
+            sample_costs.append(self._calculate_bridge_cost(from_node, to_node))
+            if len(sample_costs) >= 80:
+                break
+
+        if sample_costs:
+            sample_costs.sort()
+            median_cost = sample_costs[len(sample_costs) // 2]
+            return max(40.0, median_cost * 1.3)
+
+        # Fallback: base on map scale (100 normalized units)
+        return max(40.0, BRIDGE_COST_PER_UNIT_DISTANCE * 45.0)
+
+    def _source_has_flow_capacity(self, node) -> bool:
+        if node is None:
+            return False
+
+        # Prefer nodes that have either substantial juice reserves or intake
+        juice_ok = node.juice >= 12.0
+        intake_ok = node.cur_intake >= 2.5
+
+        outgoing_edges = 0
+        if self.game_engine and self.game_engine.state:
+            state = self.game_engine.state
+            for edge_id in node.attached_edge_ids:
+                edge = state.edges.get(edge_id)
+                if edge and edge.source_node_id == node.id:
+                    outgoing_edges += 1
+
+        capacity_ok = outgoing_edges < 4  # avoid overloading nodes already feeding many paths
+
+        return (juice_ok or intake_ok) and capacity_ok
+
     def _edge_exists_between_nodes(self, node_id1: int, node_id2: int) -> bool:
         """Check if an edge already exists between two nodes."""
         if not self.game_engine or not self.game_engine.state:

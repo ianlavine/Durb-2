@@ -3,7 +3,7 @@ import math
 import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from .models import Node, Edge
 
 
@@ -11,6 +11,10 @@ SEED: Optional[int] = 39
 NODE_COUNT: int = 60
 DESIRED_EDGE_COUNT: int = 55
 ONE_WAY_PERCENT: float = 0.5
+
+# Layout scaling (extra stretch toward top-right)
+WIDTH_SCALE: float = 1.25  # widen 25%, anchored on left edge
+HEIGHT_SCALE: float = 1.2  # extend 20% upward while keeping bottom fixed
 
 SCREEN_WIDTH: Optional[int] = None
 SCREEN_HEIGHT: Optional[int] = None
@@ -29,7 +33,7 @@ def try_get_screen_size() -> Tuple[int, int]:
     return 1920, 1080
 
 
-def generate_node_positions(num_nodes: int, width: int, height: int, margin: int) -> List[Node]:
+def generate_node_positions(num_nodes: int, width: float, height: float, margin: int) -> List[Node]:
     usable_w = max(1, width - 2 * margin)
     usable_h = max(1, height - 2 * margin)
     aspect = usable_w / usable_h
@@ -169,6 +173,37 @@ def remove_isolated_nodes(nodes: List[Node], edges: List[Edge]) -> Tuple[List[No
     return new_nodes, new_edges
 
 
+def apply_layout_scaling(nodes: List[Node], base_width: float, base_height: float) -> Tuple[float, float, float, float]:
+    """Stretch the layout to the right and upward while keeping left/bottom anchored."""
+    if not nodes:
+        return 0.0, 0.0, 0.0, 0.0
+
+    original_min_x = min(node.x for node in nodes)
+    original_max_y = max(node.y for node in nodes)
+
+    for node in nodes:
+        node.x = original_min_x + (node.x - original_min_x) * WIDTH_SCALE
+        node.y = original_max_y - (original_max_y - node.y) * HEIGHT_SCALE
+
+    min_x = min(node.x for node in nodes)
+    max_x = max(node.x for node in nodes)
+    min_y = min(node.y for node in nodes)
+    max_y = max(node.y for node in nodes)
+    return min_x, max_x, min_y, max_y
+
+
+def build_screen_metadata(min_x: float, max_x: float, min_y: float, max_y: float) -> Dict[str, float]:
+    width_span = max_x - min_x
+    height_span = max_y - min_y
+    return {
+        "width": round(width_span, 3),
+        "height": round(height_span, 3),
+        "minX": round(min_x, 3),
+        "minY": round(min_y, 3),
+        "margin": 0,
+    }
+
+
 def main() -> None:
     if SEED is not None:
         random.seed(SEED)
@@ -176,12 +211,15 @@ def main() -> None:
     width, height = 220, 90
     nodes = generate_node_positions(NODE_COUNT, width, height, 0)
     edges = generate_planar_edges(nodes, DESIRED_EDGE_COUNT, ONE_WAY_PERCENT)
-    
+
     # Remove isolated nodes after graph generation
     nodes, edges = remove_isolated_nodes(nodes, edges)
-    
+
+    min_x, max_x, min_y, max_y = apply_layout_scaling(nodes, width, height)
+    screen_meta = build_screen_metadata(min_x, max_x, min_y, max_y)
+
     data = {
-        "screen": {"width": width, "height": height, "margin": 0},
+        "screen": screen_meta,
         "nodes": [{"id": n.id, "x": round(n.x, 3), "y": round(n.y, 3)} for n in nodes],
         "edges": [
             {"id": e.id, "source": e.source_node_id, "target": e.target_node_id, "bidirectional": False}
@@ -205,12 +243,15 @@ def generate_graph_to_path(width: int, height: int, output_path: Path) -> None:
         random.seed(SEED)
     nodes = generate_node_positions(NODE_COUNT, width, height, 0)
     edges = generate_planar_edges(nodes, DESIRED_EDGE_COUNT, ONE_WAY_PERCENT)
-    
+
     # Remove isolated nodes after graph generation
     nodes, edges = remove_isolated_nodes(nodes, edges)
-    
+
+    min_x, max_x, min_y, max_y = apply_layout_scaling(nodes, width, height)
+    screen_meta = build_screen_metadata(min_x, max_x, min_y, max_y)
+
     data = {
-        "screen": {"width": width, "height": height, "margin": 0},
+        "screen": screen_meta,
         "nodes": [{"id": n.id, "x": round(n.x, 3), "y": round(n.y, 3)} for n in nodes],
         "edges": [
             {"id": e.id, "source": e.source_node_id, "target": e.target_node_id, "bidirectional": False}

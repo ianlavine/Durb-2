@@ -164,8 +164,8 @@
   function calculateBridgeCost(fromNode, toNode) {
     if (!fromNode || !toNode) return 0;
 
-    const baseWidth = screen && Number.isFinite(screen.width) ? screen.width : 220;
-    const baseHeight = screen && Number.isFinite(screen.height) ? screen.height : 90;
+    const baseWidth = screen && Number.isFinite(screen.width) ? screen.width : 275.0;
+    const baseHeight = screen && Number.isFinite(screen.height) ? screen.height : 108.0;
     const largestSpan = Math.max(1, baseWidth, baseHeight);
     const scale = 100 / largestSpan;
 
@@ -1370,32 +1370,27 @@ function hideReverseCostDisplay() {
 
   function computeTransform(viewW, viewH) {
     if (nodes.size === 0) return;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
 
-    const screenWidth = screen && Number.isFinite(screen.width) ? screen.width : null;
-    const screenHeight = screen && Number.isFinite(screen.height) ? screen.height : null;
+    nodes.forEach((node) => {
+      minX = Math.min(minX, node.x);
+      minY = Math.min(minY, node.y);
+      maxX = Math.max(maxX, node.x);
+      maxY = Math.max(maxY, node.y);
+    });
 
-    let minX;
-    let minY;
-    let maxX;
-    let maxY;
-
-    if (screenWidth && screenHeight) {
-      minX = 0;
-      minY = 0;
-      maxX = screenWidth;
-      maxY = screenHeight;
-    } else {
-      minX = Infinity;
-      minY = Infinity;
-      maxX = -Infinity;
-      maxY = -Infinity;
-      nodes.forEach((node) => {
-        minX = Math.min(minX, node.x);
-        minY = Math.min(minY, node.y);
-        maxX = Math.max(maxX, node.x);
-        maxY = Math.max(maxY, node.y);
-      });
-      if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+    if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+      if (screen && Number.isFinite(screen.width) && Number.isFinite(screen.height)) {
+        const screenMinX = Number.isFinite(screen.minX) ? screen.minX : 0;
+        const screenMinY = Number.isFinite(screen.minY) ? screen.minY : 0;
+        minX = screenMinX;
+        minY = screenMinY;
+        maxX = screenMinX + screen.width;
+        maxY = screenMinY + screen.height;
+      } else {
         minX = 0;
         minY = 0;
         maxX = 100;
@@ -1403,17 +1398,18 @@ function hideReverseCostDisplay() {
       }
     }
 
-    const topPadding = 100; // extra room for HUD
-    const bottomPadding = 60;
-    const rightReservedPx = 40; // space for gold number and margins
-    const horizontalPlayable = Math.max(1, viewW - 60 * 2 - rightReservedPx);
+    const topPadding = 60; // tighter HUD margin while keeping space for overlays
+    const bottomPadding = 40;
+    const sidePadding = 40;
+    const rightReservedPx = 24; // space for gold number and margins
+    const horizontalPlayable = Math.max(1, viewW - sidePadding * 2 - rightReservedPx);
     const verticalPlayable = Math.max(1, viewH - topPadding - bottomPadding);
 
     const width = Math.max(1, maxX - minX);
     const height = Math.max(1, maxY - minY);
     const scale = Math.min(horizontalPlayable / width, verticalPlayable / height);
 
-    const offsetX = 60 + (horizontalPlayable - scale * width) / 2 - scale * minX;
+    const offsetX = sidePadding + (horizontalPlayable - scale * width) / 2 - scale * minX;
     const offsetY = topPadding + (verticalPlayable - scale * height) / 2 - scale * minY;
     view = { minX, minY, maxX, maxY, scaleX: scale, scaleY: scale, offsetX, offsetY };
   }

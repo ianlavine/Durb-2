@@ -25,7 +25,7 @@ class GameEngine:
     
     def __init__(self):
         self.state: Optional[GraphState] = None
-        self.screen: Dict[str, int] = {"width": 220, "height": 90, "margin": 0}
+        self.screen: Dict[str, float] = {"width": 275.0, "height": 108.0, "minX": 0.0, "minY": -18.0, "margin": 0}
         
         # Player management
         self.token_to_player_id: Dict[str, int] = {}

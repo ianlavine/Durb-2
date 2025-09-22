@@ -36,6 +36,7 @@ class GraphGenerator:
         
         # Remove isolated nodes after graph generation
         nodes, edges = gen_graph.remove_isolated_nodes(nodes, edges)
+        gen_graph.apply_layout_scaling(nodes, width, height)
         
         return nodes, edges
     
@@ -54,11 +55,21 @@ class GraphGenerator:
         """
         Convert nodes and edges to the standard dictionary format.
         """
-        w = width or self.default_width
-        h = height or self.default_height
-        
+        min_x = min((n.x for n in nodes), default=0.0)
+        max_x = max((n.x for n in nodes), default=0.0)
+        min_y = min((n.y for n in nodes), default=0.0)
+        max_y = max((n.y for n in nodes), default=0.0)
+
+        screen = {
+            "width": round(max_x - min_x, 3),
+            "height": round(max_y - min_y, 3),
+            "minX": round(min_x, 3),
+            "minY": round(min_y, 3),
+            "margin": 0,
+        }
+
         return {
-            "screen": {"width": w, "height": h, "margin": 0},
+            "screen": screen,
             "nodes": [{"id": n.id, "x": round(n.x, 3), "y": round(n.y, 3)} for n in nodes],
             "edges": [
                 {"id": e.id, "source": e.source_node_id, "target": e.target_node_id, "bidirectional": False}
