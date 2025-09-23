@@ -55,6 +55,7 @@
   let mouseWorldY = 0;
   let bridgeCostDisplay = null; // current bridge cost display text object
   let reverseCostDisplay = null; // current reverse edge cost display text object
+  let lastReverseCostPosition = null; // last position where reverse cost was displayed
 
   const BRIDGE_BASE_COST = 0; // keep in sync with backend/constants.py
   const BRIDGE_COST_PER_UNIT = 2; // keep in sync with backend/constants.py
@@ -78,6 +79,22 @@
   let homeAutoExpandToggle = null;
   let myAutoExpand = false; // my player's auto-expand setting
   let persistentAutoExpand = false; // persistent setting stored in localStorage
+  
+  // Numbers toggle system
+  let numbersToggle = null;
+  let homeNumbersToggle = null;
+  let persistentNumbers = true; // persistent setting stored in localStorage (default to true)
+  
+  // Targeting toggle system
+  let targetingToggle = null;
+  let homeTargetingToggle = null;
+  let persistentTargeting = false; // persistent setting stored in localStorage (default to false)
+  
+  // Node juice display system
+  let nodeJuiceTexts = new Map(); // nodeId -> text object
+  
+  // Targeting visual indicator system
+  let currentTargetNodeId = null; // The node currently being targeted (for visual indicator)
   
   // Speed system
   let speedSlider = null;
@@ -121,6 +138,30 @@
   function savePersistentAutoExpand(value) {
     persistentAutoExpand = value;
     localStorage.setItem('autoExpand', value.toString());
+  }
+
+  // Numbers persistence functions
+  function loadPersistentNumbers() {
+    const saved = localStorage.getItem('numbers');
+    persistentNumbers = saved !== 'false'; // Default to true if not set
+    return persistentNumbers;
+  }
+
+  function savePersistentNumbers(value) {
+    persistentNumbers = value;
+    localStorage.setItem('numbers', value.toString());
+  }
+
+  // Targeting persistence functions
+  function loadPersistentTargeting() {
+    const saved = localStorage.getItem('targeting');
+    persistentTargeting = saved === 'true'; // Default to false if not set
+    return persistentTargeting;
+  }
+
+  function savePersistentTargeting(value) {
+    persistentTargeting = value;
+    localStorage.setItem('targeting', value.toString());
   }
 
   // Speed persistence functions
@@ -236,6 +277,9 @@ function updateReverseCostDisplay(edge) {
   const midX = (sourceNode.x + targetNode.x) / 2;
   const midY = (sourceNode.y + targetNode.y) / 2;
   const [sx, sy] = worldToScreen(midX, midY);
+  
+  // Store the position for later use in cost indicator animation
+  lastReverseCostPosition = { x: midX, y: midY };
 
   const cost = calculateBridgeCost(sourceNode, targetNode);
   const canAfford = goldValue >= cost;
@@ -269,6 +313,8 @@ function hideReverseCostDisplay() {
     reverseCostDisplay.destroy();
     reverseCostDisplay = null;
   }
+  // Clear stored position when hiding display
+  lastReverseCostPosition = null;
 }
 
 
@@ -357,6 +403,32 @@ function hideReverseCostDisplay() {
     }
   }
 
+  function updateHomeNumbersToggle() {
+    if (!homeNumbersToggle) return;
+    
+    const toggleSwitch = homeNumbersToggle.querySelector('.toggle-switch');
+    if (toggleSwitch) {
+      if (persistentNumbers) {
+        toggleSwitch.classList.add('enabled');
+      } else {
+        toggleSwitch.classList.remove('enabled');
+      }
+    }
+  }
+
+  function updateHomeTargetingToggle() {
+    if (!homeTargetingToggle) return;
+    
+    const toggleSwitch = homeTargetingToggle.querySelector('.toggle-switch');
+    if (toggleSwitch) {
+      if (persistentTargeting) {
+        toggleSwitch.classList.add('enabled');
+      } else {
+        toggleSwitch.classList.remove('enabled');
+      }
+    }
+  }
+
   function updateHomeSpeedSlider() {
     if (!homeSpeedRange || !homeSpeedValue) return;
     
@@ -373,6 +445,8 @@ function hideReverseCostDisplay() {
 
     // Load persistent settings
     loadPersistentAutoExpand();
+    loadPersistentNumbers();
+    loadPersistentTargeting();
     loadPersistentSpeedLevel();
 
     tryConnectWS();
@@ -492,6 +566,8 @@ function hideReverseCostDisplay() {
       const menuVisible = !menu.classList.contains('hidden');
       if (menuVisible && overlayMsg) overlayMsg.style.display = 'none';
       if (menuVisible && autoExpandToggle) autoExpandToggle.style.display = 'none';
+      if (menuVisible && numbersToggle) numbersToggle.style.display = 'none';
+      if (menuVisible && targetingToggle) targetingToggle.style.display = 'none';
     });
     menuObserver.observe(menu, { attributes: true, attributeFilter: ['class'] });
 
@@ -547,20 +623,53 @@ function hideReverseCostDisplay() {
 
   // Initialize auto-expand toggle
   autoExpandToggle = document.getElementById('autoExpandToggle');
+  if (autoExpandToggle) {
+    const toggleSwitch = autoExpandToggle.querySelector('.toggle-switch');
+    if (toggleSwitch) {
+      toggleSwitch.addEventListener('click', () => {
+        if (ws && ws.readyState === WebSocket.OPEN && !gameEnded) {
+          const token = localStorage.getItem('token');
+          ws.send(JSON.stringify({ type: 'toggleAutoExpand', token }));
+        }
+      });
+    }
+  }
+
+  // Initialize numbers toggle
+  numbersToggle = document.getElementById('numbersToggle');
+  if (numbersToggle) {
+    const toggleSwitch = numbersToggle.querySelector('.toggle-switch');
+    if (toggleSwitch) {
+      toggleSwitch.addEventListener('click', () => {
+        const newValue = !persistentNumbers;
+        savePersistentNumbers(newValue);
+        updateNumbersToggle();
+        updateHomeNumbersToggle();
+      });
+    }
+  }
+
+  // Initialize targeting toggle
+  targetingToggle = document.getElementById('targetingToggle');
+  if (targetingToggle) {
+    const toggleSwitch = targetingToggle.querySelector('.toggle-switch');
+    if (toggleSwitch) {
+      toggleSwitch.addEventListener('click', () => {
+        const newValue = !persistentTargeting;
+        savePersistentTargeting(newValue);
+        updateTargetingToggle();
+        updateHomeTargetingToggle();
+        
+        // Clear targeting indicator when targeting is turned off
+        if (!newValue) {
+          currentTargetNodeId = null;
+        }
+      });
+    }
+  }
   
   // Initialize speed display
   speedDisplay = document.getElementById('speedDisplay');
-    if (autoExpandToggle) {
-      const toggleSwitch = autoExpandToggle.querySelector('.toggle-switch');
-      if (toggleSwitch) {
-        toggleSwitch.addEventListener('click', () => {
-          if (ws && ws.readyState === WebSocket.OPEN && !gameEnded) {
-            const token = localStorage.getItem('token');
-            ws.send(JSON.stringify({ type: 'toggleAutoExpand', token }));
-          }
-        });
-      }
-    }
 
     // Initialize home screen speed slider
     homeSpeedSlider = document.getElementById('homeSpeedSlider');
@@ -593,6 +702,43 @@ function hideReverseCostDisplay() {
       }
       // Initialize the toggle state
       updateHomeAutoExpandToggle();
+    }
+
+    // Initialize home screen numbers toggle
+    homeNumbersToggle = document.getElementById('homeNumbersToggle');
+    if (homeNumbersToggle) {
+      const toggleSwitch = homeNumbersToggle.querySelector('.toggle-switch');
+      if (toggleSwitch) {
+        toggleSwitch.addEventListener('click', () => {
+          const newValue = !persistentNumbers;
+          savePersistentNumbers(newValue);
+          updateHomeNumbersToggle();
+          updateNumbersToggle();
+        });
+      }
+      // Initialize the toggle state
+      updateHomeNumbersToggle();
+    }
+
+    // Initialize home screen targeting toggle
+    homeTargetingToggle = document.getElementById('homeTargetingToggle');
+    if (homeTargetingToggle) {
+      const toggleSwitch = homeTargetingToggle.querySelector('.toggle-switch');
+      if (toggleSwitch) {
+        toggleSwitch.addEventListener('click', () => {
+          const newValue = !persistentTargeting;
+          savePersistentTargeting(newValue);
+          updateHomeTargetingToggle();
+          updateTargetingToggle();
+          
+          // Clear targeting indicator when targeting is turned off
+          if (!newValue) {
+            currentTargetNodeId = null;
+          }
+        });
+      }
+      // Initialize the toggle state
+      updateHomeTargetingToggle();
     }
 
 
@@ -636,7 +782,7 @@ function hideReverseCostDisplay() {
       }
     }
     
-    if (hasFlowingEdges || moneyIndicators.length > 0) {
+    if (hasFlowingEdges || moneyIndicators.length > 0 || (persistentTargeting && currentTargetNodeId !== null)) {
       redrawStatic();
     }
   }
@@ -807,6 +953,8 @@ function hideReverseCostDisplay() {
       });
     }
     updateAutoExpandToggle();
+    updateNumbersToggle();
+    updateTargetingToggle();
 
     myEliminated = eliminatedPlayers.has(myPlayerId);
     updateQuitButtonLabel();
@@ -965,6 +1113,8 @@ function hideReverseCostDisplay() {
       });
     }
     updateAutoExpandToggle();
+    updateNumbersToggle();
+    updateTargetingToggle();
 
     if (Array.isArray(msg.eliminatedPlayers)) {
       eliminatedPlayers.clear();
@@ -1066,14 +1216,26 @@ function hideReverseCostDisplay() {
           existingEdge.flowStartTime = null;
         }
         
-        // Show cost indicator near the mouse position (but offset to the side)
+        // Show cost indicator at the position where it was displayed during hover
         if (msg.cost) {
-          // Position the indicator much closer to the mouse
-          const offsetX = 5; // much smaller offset to the right of mouse
-          const offsetY = -5; // much smaller offset upward from mouse
+          let indicatorX, indicatorY;
+          
+          if (lastReverseCostPosition) {
+            // Use the position where the cost was shown during hover
+            indicatorX = lastReverseCostPosition.x;
+            indicatorY = lastReverseCostPosition.y;
+            lastReverseCostPosition = null; // Clear after use
+          } else {
+            // Fallback to mouse position if no hover position was stored
+            const offsetX = 5; // much smaller offset to the right of mouse
+            const offsetY = -5; // much smaller offset upward from mouse
+            indicatorX = mouseWorldX + offsetX;
+            indicatorY = mouseWorldY + offsetY;
+          }
+          
           createMoneyIndicator(
-            mouseWorldX + offsetX, 
-            mouseWorldY + offsetY, 
+            indicatorX, 
+            indicatorY, 
             `-$${msg.cost}`, 
             0xcd853f, // browner gold color (peru)
             2000 // 2 seconds
@@ -1209,8 +1371,10 @@ function hideReverseCostDisplay() {
       if (progressBar) progressBar.style.display = 'none';
       // Hide timer when menu is visible
       if (timerDisplay) timerDisplay.style.display = 'none';
-      // Hide auto-expand toggle when menu is visible
+      // Hide toggles when menu is visible
       if (autoExpandToggle) autoExpandToggle.style.display = 'none';
+      if (numbersToggle) numbersToggle.style.display = 'none';
+      if (targetingToggle) targetingToggle.style.display = 'none';
       // Hide speed display when menu is visible
       if (speedDisplay) speedDisplay.style.display = 'none';
       return; // Do not draw game under menu
@@ -1228,9 +1392,15 @@ function hideReverseCostDisplay() {
     if (timerDisplay && nodes.size > 0 && gameStartTime) {
       timerDisplay.style.display = 'block';
     }
-    // Show auto-expand toggle when graph is being drawn and we have nodes/game data
+    // Show toggles when graph is being drawn and we have nodes/game data
     if (autoExpandToggle && nodes.size > 0) {
       autoExpandToggle.style.display = 'block';
+    }
+    if (numbersToggle && nodes.size > 0) {
+      numbersToggle.style.display = 'block';
+    }
+    if (targetingToggle && nodes.size > 0) {
+      targetingToggle.style.display = 'block';
     }
     // Show speed display when graph is being drawn and we have nodes/game data
     if (speedDisplay && nodes.size > 0) {
@@ -1254,8 +1424,37 @@ function hideReverseCostDisplay() {
       const r = Math.max(1, radius);
       graphicsNodes.fillCircle(nx, ny, r);
       
+      // Show juice text if toggle is enabled
+      if (persistentNumbers) {
+        const juiceValue = Math.floor(n.size || 0); // No decimals
+        let juiceText = nodeJuiceTexts.get(id);
+        
+        if (!juiceText) {
+          // Create new text object
+          juiceText = sceneRef.add.text(nx, ny, juiceValue.toString(), {
+            font: '12px monospace',
+            color: n.owner === null ? '#ffffff' : '#000000', // White for neutrals, black for owned
+            align: 'center'
+          });
+          juiceText.setOrigin(0.5, 0.5); // Center the text
+          nodeJuiceTexts.set(id, juiceText);
+        } else {
+          // Update existing text
+          juiceText.setText(juiceValue.toString());
+          juiceText.setPosition(nx, ny);
+          juiceText.setColor(n.owner === null ? '#ffffff' : '#000000');
+          juiceText.setVisible(true);
+        }
+      } else {
+        // Hide juice text if toggle is disabled
+        const juiceText = nodeJuiceTexts.get(id);
+        if (juiceText) {
+          juiceText.setVisible(false);
+        }
+      }
+      
       // Max-size thick black border
-      const juiceVal = (n.juice != null ? n.juice : (n.size || 0));
+      const juiceVal = (n.size || 0);
       if (juiceVal >= nodeMaxJuice - 1e-6) {
         graphicsNodes.lineStyle(4, 0x000000, 1);
         graphicsNodes.strokeCircle(nx, ny, r + 2);
@@ -1313,6 +1512,36 @@ function hideReverseCostDisplay() {
       if (hoveredNodeId === id && activeAbility === 'destroy' && n.owner === myPlayerId) {
         graphicsNodes.lineStyle(3, 0x000000, 0.8); // black highlight
         graphicsNodes.strokeCircle(nx, ny, r + 3);
+      }
+      
+      // Targeting visual indicator: pulsing ring (grows then snaps back), darkens as it grows
+      if (persistentTargeting && currentTargetNodeId === id) {
+        // Suppress showing the ring if this node has an outgoing edge by me that is on/flowing
+        if (shouldSuppressTargetRingForNode(id)) {
+          currentTargetNodeId = null; // stop future redraws for targeting
+        } else {
+          const myColor = ownerToColor(myPlayerId);
+          const pulseDuration = 0.625; // seconds per grow cycle (twice as fast)
+          const innerRadius = r + 6;   // inner edge stays fixed at this radius
+          const minThickness = 3;
+          const maxThickness = 10;
+          const cycleT = (animationTime % pulseDuration) / pulseDuration; // 0..1
+          const thickness = minThickness + (maxThickness - minThickness) * cycleT;
+          const pathRadius = innerRadius + thickness / 2; // keep inner edge constant
+
+          // Darken as it grows, but keep it relatively bright (1.0 -> 0.8)
+          const baseR = (myColor >> 16) & 0xFF;
+          const baseG = (myColor >> 8) & 0xFF;
+          const baseB = myColor & 0xFF;
+          const brightness = 1 - 0.2 * cycleT; // 1.0 at small -> 0.8 at largest
+          const darkR = Math.max(0, Math.min(255, Math.floor(baseR * brightness)));
+          const darkG = Math.max(0, Math.min(255, Math.floor(baseG * brightness)));
+          const darkB = Math.max(0, Math.min(255, Math.floor(baseB * brightness)));
+          const darkenedColor = (darkR << 16) | (darkG << 8) | darkB;
+
+          graphicsNodes.lineStyle(thickness, darkenedColor, 1);
+          graphicsNodes.strokeCircle(nx, ny, pathRadius);
+        }
       }
     }
 
@@ -1458,6 +1687,16 @@ function hideReverseCostDisplay() {
     return true;
   }
 
+  function playerControlsEdge(edge) {
+    if (!edge) return false;
+    
+    const sourceNode = nodes.get(edge.source);
+    if (!sourceNode) return false;
+    
+    // Player controls the edge if they own the source node
+    return sourceNode.owner === myPlayerId;
+  }
+
   function canTargetNodeForFlow(targetNodeId) {
     // Check if I have any edges that I own (source node owned by me) that point to this target node
     for (const [edgeId, edge] of edges.entries()) {
@@ -1465,6 +1704,21 @@ function hideReverseCostDisplay() {
         const sourceNode = nodes.get(edge.source);
         if (sourceNode && sourceNode.owner === myPlayerId) {
           return true; // Found at least one edge I can flow through to this node
+        }
+      }
+    }
+    return false;
+  }
+
+  // Suppress the target ring if the node is expelling juice (has an outgoing edge owned by me that is on/flowing)
+  function shouldSuppressTargetRingForNode(targetNodeId) {
+    for (const [edgeId, edge] of edges.entries()) {
+      if (edge.source === targetNodeId) {
+        const sourceNode = nodes.get(edge.source);
+        if (sourceNode && sourceNode.owner === myPlayerId) {
+          if (edge.on || edge.flowing) {
+            return true;
+          }
         }
       }
     }
@@ -1635,12 +1889,22 @@ function hideReverseCostDisplay() {
       if (nodeId != null) {
         // Check if this is a node we can target for flow
         if (canTargetNodeForFlow(nodeId)) {
-          // Redirect energy towards this node
-          ws.send(JSON.stringify({
-            type: 'redirectEnergy',
-            targetNodeId: nodeId,
-            token: token
-          }));
+          if (persistentTargeting) {
+            // Full targeting mode: redirect energy towards this node (existing behavior)
+            currentTargetNodeId = nodeId; // Set for visual indicator
+            ws.send(JSON.stringify({
+              type: 'redirectEnergy',
+              targetNodeId: nodeId,
+              token: token
+            }));
+          } else {
+            // Local targeting mode: just activate edges flowing into this node
+            ws.send(JSON.stringify({
+              type: 'localTargeting',
+              targetNodeId: nodeId,
+              token: token
+            }));
+          }
           return;
         } else {
           // Regular node click
@@ -1781,7 +2045,8 @@ function hideReverseCostDisplay() {
     }
 
     const hoveredEdge = (hoveredEdgeId != null) ? edges.get(hoveredEdgeId) : null;
-    const shouldShowReverseCost = Boolean(hoveredEdge && canReverseEdge(hoveredEdge));
+    // Show reverse cost only if edge can be reversed AND player doesn't already control it
+    const shouldShowReverseCost = Boolean(hoveredEdge && canReverseEdge(hoveredEdge) && !playerControlsEdge(hoveredEdge));
 
     if (shouldShowReverseCost) {
       updateReverseCostDisplay(hoveredEdge);
@@ -1966,10 +2231,23 @@ function hideReverseCostDisplay() {
     if (progressMarkerRight) progressMarkerRight.style.display = 'none';
     hideTimerDisplay();
     if (autoExpandToggle) autoExpandToggle.style.display = 'none';
+    if (numbersToggle) numbersToggle.style.display = 'none';
+    if (targetingToggle) targetingToggle.style.display = 'none';
     if (speedDisplay) speedDisplay.style.display = 'none';
 
     updateHomeAutoExpandToggle();
+    updateHomeNumbersToggle();
+    updateHomeTargetingToggle();
 
+    // Clean up juice text objects
+    nodeJuiceTexts.forEach(text => {
+      if (text) text.destroy();
+    });
+    nodeJuiceTexts.clear();
+    
+    // Clear targeting indicator
+    currentTargetNodeId = null;
+    
     nodes.clear();
     edges.clear();
     players.clear();
@@ -2063,6 +2341,32 @@ function hideReverseCostDisplay() {
     const toggleSwitch = autoExpandToggle.querySelector('.toggle-switch');
     if (toggleSwitch) {
       if (myAutoExpand) {
+        toggleSwitch.classList.add('enabled');
+      } else {
+        toggleSwitch.classList.remove('enabled');
+      }
+    }
+  }
+
+  function updateNumbersToggle() {
+    if (!numbersToggle) return;
+    
+    const toggleSwitch = numbersToggle.querySelector('.toggle-switch');
+    if (toggleSwitch) {
+      if (persistentNumbers) {
+        toggleSwitch.classList.add('enabled');
+      } else {
+        toggleSwitch.classList.remove('enabled');
+      }
+    }
+  }
+
+  function updateTargetingToggle() {
+    if (!targetingToggle) return;
+    
+    const toggleSwitch = targetingToggle.querySelector('.toggle-switch');
+    if (toggleSwitch) {
+      if (persistentTargeting) {
         toggleSwitch.classList.add('enabled');
       } else {
         toggleSwitch.classList.remove('enabled');

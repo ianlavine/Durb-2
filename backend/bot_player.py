@@ -250,8 +250,8 @@ class BotPlayer:
                                 "forward": True,
                                 "on": edge.on,
                                 "flowing": edge.flowing
-                            },
-                            "cost": cost,
+                            }
+                            # No cost included - human player shouldn't see bot's spending
                         })
                         return True
         
@@ -382,8 +382,8 @@ class BotPlayer:
                         "forward": True,
                         "on": new_edge.on,
                         "flowing": new_edge.flowing
-                    },
-                    "cost": actual_cost  # Include the verified cost for frontend animation
+                    }
+                    # No cost included - human player shouldn't see bot's spending
                 })
                 self.last_bridge_time = current_time
                 return True
@@ -483,9 +483,8 @@ class BotPlayer:
                             "forward": True,
                             "on": new_edge.on,
                             "flowing": new_edge.flowing
-                        },
-                        "cost": actual_cost,
-                        "strategy": "offensive"
+                        }
+                        # No cost included - human player shouldn't see bot's spending
                     })
                     self.last_bridge_time = current_time
                     return True

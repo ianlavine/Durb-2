@@ -137,6 +137,24 @@
         display: none; 
       }
       
+      /* Numbers toggle */
+      #numbersToggle { 
+        position: absolute; 
+        bottom: 20px; 
+        left: 250px; 
+        z-index: 10; 
+        display: none; 
+      }
+      
+      /* Targeting toggle */
+      #targetingToggle { 
+        position: absolute; 
+        bottom: 20px; 
+        left: 480px; 
+        z-index: 10; 
+        display: none; 
+      }
+      
       #speedDisplay { 
         position: absolute; 
         bottom: 80px; 
@@ -401,6 +419,22 @@
             <div class="toggle-slider"></div>
           </div>
         </div>
+        
+        <!-- Numbers toggle for home screen -->
+        <div id="homeNumbersToggle" class="home-toggle-container" style="left: 250px;">
+          <span class="toggle-label">Show Numbers</span>
+          <div class="toggle-switch">
+            <div class="toggle-slider"></div>
+          </div>
+        </div>
+        
+        <!-- Targeting toggle for home screen -->
+        <div id="homeTargetingToggle" class="home-toggle-container" style="left: 480px;">
+          <span class="toggle-label">Targeting</span>
+          <div class="toggle-switch">
+            <div class="toggle-slider"></div>
+          </div>
+        </div>
       </div>
       <div id="lobby">Joining lobby...</div>
     </div>
@@ -419,6 +453,26 @@
     <div id="autoExpandToggle">
       <div class="toggle-container">
         <span class="toggle-label">Auto-Expand</span>
+        <div class="toggle-switch">
+          <div class="toggle-slider"></div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Numbers toggle -->
+    <div id="numbersToggle">
+      <div class="toggle-container">
+        <span class="toggle-label">Show Numbers</span>
+        <div class="toggle-switch">
+          <div class="toggle-slider"></div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Targeting toggle -->
+    <div id="targetingToggle">
+      <div class="toggle-container">
+        <span class="toggle-label">Targeting</span>
         <div class="toggle-switch">
           <div class="toggle-slider"></div>
         </div>

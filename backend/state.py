@@ -460,7 +460,8 @@ class GraphState:
                         self.pending_node_captures = []
                     self.pending_node_captures.append({
                         'nodeId': nid,
-                        'reward': reward
+                        'reward': reward,
+                        'player_id': new_owner
                     })
 
                 node.owner = new_owner

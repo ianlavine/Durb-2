@@ -223,7 +223,8 @@ class GameEngine:
                     self.state.pending_node_captures = []
                 self.state.pending_node_captures.append({
                     'nodeId': node_id,
-                    'reward': GOLD_REWARD_FOR_NEUTRAL_CAPTURE
+                    'reward': GOLD_REWARD_FOR_NEUTRAL_CAPTURE,
+                    'player_id': player_id
                 })
 
                 # Transition to playing state if everyone has picked
@@ -593,6 +594,33 @@ class GameEngine:
             return winner_id
         
         return None
+    
+    def handle_local_targeting(self, token: str, target_node_id: int) -> bool:
+        """
+        Handle local targeting - just turn on edges flowing directly into the target node.
+        This is the simplified targeting behavior when the targeting toggle is OFF.
+        Returns True if the action was successful.
+        """
+        try:
+            self.validate_game_active()
+            player_id = self.validate_player(token)
+            self.validate_player_can_act(player_id)
+            target_node = self.validate_node_exists(target_node_id)
+            
+            # Find all edges that flow into the target node and are owned by the player
+            edges_activated = False
+            for edge in self.state.edges.values():
+                if edge.target_node_id == target_node_id:
+                    source_node = self.state.nodes.get(edge.source_node_id)
+                    if source_node and source_node.owner == player_id:
+                        # Turn on this edge
+                        edge.on = True
+                        edges_activated = True
+            
+            return edges_activated
+            
+        except GameValidationError:
+            return False
     
     def handle_redirect_energy(self, token: str, target_node_id: int) -> bool:
         """

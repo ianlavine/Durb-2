@@ -134,12 +134,20 @@ class WebSocketServer:
                 state = engine.state
                 if hasattr(state, "pending_node_captures") and state.pending_node_captures:
                     for capture_data in state.pending_node_captures:
-                        capture_msg = {
-                            "type": "nodeCaptured",
-                            "nodeId": capture_data["nodeId"],
-                            "reward": capture_data["reward"],
-                        }
-                        await self.message_router._broadcast_to_game(game_info, capture_msg)
+                        # Send node capture notification only to the player who captured it
+                        capturing_player_id = capture_data.get("player_id")
+                        if capturing_player_id is not None:
+                            # Find the token and websocket for this player
+                            capturing_token = engine.player_id_to_token.get(capturing_player_id)
+                            if capturing_token:
+                                capturing_websocket = game_info.get("clients", {}).get(capturing_token)
+                                if capturing_websocket:
+                                    capture_msg = {
+                                        "type": "nodeCaptured",
+                                        "nodeId": capture_data["nodeId"],
+                                        "reward": capture_data["reward"],
+                                    }
+                                    await self.message_router._send_safe(capturing_websocket, json.dumps(capture_msg))
                     state.pending_node_captures = []
 
                 tick_msg = state.to_tick_message(now)
@@ -160,14 +168,22 @@ class WebSocketServer:
                 state = bot_game_engine.state
                 if state and hasattr(state, "pending_node_captures") and state.pending_node_captures:
                     for capture_data in state.pending_node_captures:
-                        capture_msg = json.dumps(
-                            {
-                                "type": "nodeCaptured",
-                                "nodeId": capture_data["nodeId"],
-                                "reward": capture_data["reward"],
-                            }
-                        )
-                        await self._broadcast_to_specific(bot_clients, capture_msg)
+                        # Send node capture notification only to the player who captured it
+                        capturing_player_id = capture_data.get("player_id")
+                        if capturing_player_id is not None:
+                            # Find the websocket for this player
+                            capturing_token = bot_game_engine.player_id_to_token.get(capturing_player_id)
+                            if capturing_token:
+                                capturing_websocket = self.server_context.get("bot_game_clients", {}).get(capturing_token)
+                                if capturing_websocket:
+                                    capture_msg = json.dumps(
+                                        {
+                                            "type": "nodeCaptured",
+                                            "nodeId": capture_data["nodeId"],
+                                            "reward": capture_data["reward"],
+                                        }
+                                    )
+                                    await self._broadcast_to_specific([capturing_websocket], capture_msg)
                     state.pending_node_captures = []
 
                 if state:

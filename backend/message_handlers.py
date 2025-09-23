@@ -22,6 +22,7 @@ class MessageRouter:
             "reverseEdge": self.handle_reverse_edge,
             "buildBridge": self.handle_build_bridge,
             "redirectEnergy": self.handle_redirect_energy,
+            "localTargeting": self.handle_local_targeting,
             "destroyNode": self.handle_destroy_node,
             "quitGame": self.handle_quit_game,
             "toggleAutoExpand": self.handle_toggle_auto_expand,
@@ -174,13 +175,16 @@ class MessageRouter:
         engine = game_info["engine"]
         success = engine.handle_node_click(token, int(node_id))
         if success and engine.state and getattr(engine.state, "pending_node_captures", None):
+            player_id = engine.get_player_id(token)
             for capture_data in engine.state.pending_node_captures:
-                capture_msg = {
-                    "type": "nodeCaptured",
-                    "nodeId": capture_data["nodeId"],
-                    "reward": capture_data["reward"],
-                }
-                await self._send_safe(websocket, json.dumps(capture_msg))
+                # Only send notification to the player who captured the node
+                if capture_data.get("player_id") == player_id:
+                    capture_msg = {
+                        "type": "nodeCaptured",
+                        "nodeId": capture_data["nodeId"],
+                        "reward": capture_data["reward"],
+                    }
+                    await self._send_safe(websocket, json.dumps(capture_msg))
             engine.state.pending_node_captures = []
 
     async def handle_click_edge(
@@ -233,7 +237,8 @@ class MessageRouter:
         if engine.state:
             edge = engine.state.edges.get(int(edge_id))
             if edge:
-                message = {
+                # Send edge state update to all players (without cost indicator for others)
+                edge_update_message = {
                     "type": "edgeReversed",
                     "edge": {
                         "id": edge.id,
@@ -243,10 +248,20 @@ class MessageRouter:
                         "forward": True,
                         "on": edge.on,
                         "flowing": edge.flowing,
-                    },
-                    "cost": actual_cost,
+                    }
                 }
-                await self._broadcast_to_game(game_info, message)
+                
+                # Send to all players, but include cost only for the acting player
+                for token_key, client_websocket in game_info.get("clients", {}).items():
+                    if not client_websocket:
+                        continue
+                    
+                    message_to_send = edge_update_message.copy()
+                    # Only include cost for the player who performed the action
+                    if token_key == token:
+                        message_to_send["cost"] = actual_cost
+                    
+                    await self._send_safe(client_websocket, json.dumps(message_to_send))
 
             if hasattr(engine.state, "pending_edge_reversal"):
                 engine.state.pending_edge_reversal = None
@@ -281,7 +296,8 @@ class MessageRouter:
             return
 
         if new_edge:
-            message = {
+            # Send edge state update to all players (without cost)
+            edge_update_message = {
                 "type": "newEdge",
                 "edge": {
                     "id": new_edge.id,
@@ -291,10 +307,20 @@ class MessageRouter:
                     "forward": True,
                     "on": new_edge.on,
                     "flowing": new_edge.flowing,
-                },
-                "cost": actual_cost,
+                }
             }
-            await self._broadcast_to_game(game_info, message)
+            
+            # Send to all players, but include cost only for the acting player
+            for token_key, client_websocket in game_info.get("clients", {}).items():
+                if not client_websocket:
+                    continue
+                
+                message_to_send = edge_update_message.copy()
+                # Only include cost for the player who built the bridge
+                if token_key == token:
+                    message_to_send["cost"] = actual_cost
+                
+                await self._send_safe(client_websocket, json.dumps(message_to_send))
 
     async def handle_redirect_energy(
         self,
@@ -330,6 +356,46 @@ class MessageRouter:
                         },
                     }
                 )
+            for update in updates:
+                await self._broadcast_to_game(game_info, update)
+
+    async def handle_local_targeting(
+        self,
+        websocket: websockets.WebSocketServerProtocol,
+        msg: Dict[str, Any],
+        server_context: Dict[str, Any],
+    ) -> None:
+        token = msg.get("token")
+        target_node_id = msg.get("targetNodeId")
+        if token is None or target_node_id is None:
+            return
+
+        game_info = self._get_game_info(token, server_context)
+        if not game_info:
+            return
+
+        engine = game_info["engine"]
+        success = engine.handle_local_targeting(token, int(target_node_id))
+        if success and engine.state:
+            updates = []
+            # Only send updates for edges that were actually changed
+            for edge in engine.state.edges.values():
+                source_node = engine.state.nodes.get(edge.source_node_id)
+                if source_node and source_node.owner == engine.get_player_id(token) and edge.target_node_id == int(target_node_id):
+                    updates.append(
+                        {
+                            "type": "edgeUpdated",
+                            "edge": {
+                                "id": edge.id,
+                                "source": edge.source_node_id,
+                                "target": edge.target_node_id,
+                                "bidirectional": False,
+                                "forward": True,
+                                "on": edge.on,
+                                "flowing": edge.flowing,
+                            },
+                        }
+                    )
             for update in updates:
                 await self._broadcast_to_game(game_info, update)
 
@@ -516,13 +582,16 @@ class MessageRouter:
             if node_id is not None:
                 success = bot_game_engine.handle_node_click(token, int(node_id))
                 if success and bot_game_engine.state and getattr(bot_game_engine.state, "pending_node_captures", None):
+                    player_id = bot_game_engine.get_player_id(token)
                     for capture_data in bot_game_engine.state.pending_node_captures:
-                        capture_msg = {
-                            "type": "nodeCaptured",
-                            "nodeId": capture_data["nodeId"],
-                            "reward": capture_data["reward"],
-                        }
-                        await self._send_safe(websocket, json.dumps(capture_msg))
+                        # Only send notification to the player who captured the node
+                        if capture_data.get("player_id") == player_id:
+                            capture_msg = {
+                                "type": "nodeCaptured",
+                                "nodeId": capture_data["nodeId"],
+                                "reward": capture_data["reward"],
+                            }
+                            await self._send_safe(websocket, json.dumps(capture_msg))
                     bot_game_engine.state.pending_node_captures = []
 
         elif msg_type == "clickEdge":
@@ -541,22 +610,24 @@ class MessageRouter:
                         json.dumps({"type": "reverseEdgeError", "message": "Pipe controlled by opponent"}),
                     )
                 else:
-                    edge = bot_game_engine.state.edges.get(int(edge_id)) if bot_game_engine.state else None
-                    if edge:
-                        message = {
-                            "type": "edgeReversed",
-                            "edge": {
-                                "id": edge.id,
-                                "source": edge.source_node_id,
-                                "target": edge.target_node_id,
-                                "bidirectional": False,
-                                "forward": True,
-                                "on": edge.on,
-                                "flowing": edge.flowing,
-                            },
-                            "cost": cost,
-                        }
-                        await self._send_safe(websocket, json.dumps(message))
+                    # Send response for human player moves only (bot moves are handled by bot_player.py)
+                    if not bot_game_manager.bot_player or token != bot_game_manager.bot_player.bot_token:
+                        edge = bot_game_engine.state.edges.get(int(edge_id)) if bot_game_engine.state else None
+                        if edge:
+                            message = {
+                                "type": "edgeReversed",
+                                "edge": {
+                                    "id": edge.id,
+                                    "source": edge.source_node_id,
+                                    "target": edge.target_node_id,
+                                    "bidirectional": False,
+                                    "forward": True,
+                                    "on": edge.on,
+                                    "flowing": edge.flowing,
+                                },
+                                "cost": cost,
+                            }
+                            await self._send_safe(websocket, json.dumps(message))
 
         elif msg_type == "buildBridge":
             from_node_id = msg.get("fromNodeId")
@@ -591,6 +662,11 @@ class MessageRouter:
             target_node_id = msg.get("targetNodeId")
             if target_node_id is not None:
                 bot_game_engine.handle_redirect_energy(token, int(target_node_id))
+
+        elif msg_type == "localTargeting":
+            target_node_id = msg.get("targetNodeId")
+            if target_node_id is not None:
+                bot_game_engine.handle_local_targeting(token, int(target_node_id))
 
         elif msg_type == "destroyNode":
             node_id = msg.get("nodeId")
