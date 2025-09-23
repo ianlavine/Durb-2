@@ -1517,9 +1517,7 @@ function hideReverseCostDisplay() {
       // Targeting visual indicator: pulsing ring (grows then snaps back), darkens as it grows
       if (persistentTargeting && currentTargetNodeId === id) {
         // Suppress showing the ring if this node has an outgoing edge by me that is on/flowing
-        if (shouldSuppressTargetRingForNode(id)) {
-          currentTargetNodeId = null; // stop future redraws for targeting
-        } else {
+        if (!shouldSuppressTargetRingForNode(id)) {
           const myColor = ownerToColor(myPlayerId);
           const pulseDuration = 0.625; // seconds per grow cycle (twice as fast)
           const innerRadius = r + 6;   // inner edge stays fixed at this radius
