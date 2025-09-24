@@ -16,6 +16,7 @@ class MessageRouter:
     def __init__(self) -> None:
         self.handlers = {
             "joinLobby": self.handle_join_lobby,
+            "leaveLobby": self.handle_leave_lobby,
             "requestInit": self.handle_request_init,
             "clickNode": self.handle_click_node,
             "clickEdge": self.handle_click_edge,
@@ -102,6 +103,27 @@ class MessageRouter:
         if len(lobby_queue) >= player_count:
             players = [lobby_queue.pop(0) for _ in range(player_count)]
             await self._start_friend_game(players, player_count, server_context)
+
+    async def handle_leave_lobby(
+        self,
+        websocket: websockets.WebSocketServerProtocol,
+        msg: Dict[str, Any],
+        server_context: Dict[str, Any],
+    ) -> None:
+        """Explicitly remove a client from any lobby queues, similar to disconnect behavior."""
+        # Remove this websocket from all lobby queues
+        lobbies: Dict[int, List[Dict[str, Any]]] = server_context.setdefault("lobbies", {})
+        for queue in lobbies.values():
+            if not queue:
+                continue
+            queue[:] = [entry for entry in queue if entry.get("websocket") is not websocket]
+
+        # Mirror disconnect behavior by clearing the ws->token mapping
+        ws_to_token = server_context.setdefault("ws_to_token", {})
+        ws_to_token.pop(websocket, None)
+
+        # Acknowledge (optional for frontend UX)
+        await self._send_safe(websocket, json.dumps({"type": "lobbyLeft"}))
 
     async def _start_friend_game(
         self,
@@ -224,10 +246,29 @@ class MessageRouter:
         engine = game_info["engine"]
         success = engine.handle_reverse_edge(token, int(edge_id), cost)
         if not success:
-            await self._send_safe(
-                websocket,
-                json.dumps({"type": "reverseEdgeError", "message": "Pipe controlled by opponent"}),
-            )
+            # Derive a more specific error message
+            error_message = "Can't reverse this pipe!"
+            try:
+                if engine.state:
+                    player_id = engine.get_player_id(token)
+                    edge = engine.state.edges.get(int(edge_id)) if player_id is not None else None
+                    if edge:
+                        source_node = engine.state.nodes.get(edge.source_node_id)
+                        target_node = engine.state.nodes.get(edge.target_node_id)
+                        # Check opponent control first
+                        if source_node and source_node.owner is not None and source_node.owner != player_id:
+                            error_message = "Pipe controlled by opponent"
+                        else:
+                            # Compare required cost vs available gold
+                            if source_node and target_node:
+                                actual_cost = engine.calculate_bridge_cost(source_node, target_node)
+                                player_gold = engine.state.player_gold.get(player_id, 0.0)
+                                if player_gold < actual_cost:
+                                    error_message = "Not enough gold"
+            except Exception:
+                pass
+
+            await self._send_safe(websocket, json.dumps({"type": "reverseEdgeError", "message": error_message}))
             return
 
         actual_cost = cost
@@ -605,10 +646,28 @@ class MessageRouter:
             if edge_id is not None:
                 success = bot_game_engine.handle_reverse_edge(token, int(edge_id), cost)
                 if not success:
-                    await self._send_safe(
-                        websocket,
-                        json.dumps({"type": "reverseEdgeError", "message": "Pipe controlled by opponent"}),
-                    )
+                    # Derive a more specific error message for bot game
+                    error_message = "Can't reverse this pipe!"
+                    try:
+                        if bot_game_engine.state:
+                            player_id = bot_game_engine.get_player_id(token)
+                            edge = bot_game_engine.state.edges.get(int(edge_id)) if player_id is not None else None
+                            if edge:
+                                source_node = bot_game_engine.state.nodes.get(edge.source_node_id)
+                                target_node = bot_game_engine.state.nodes.get(edge.target_node_id)
+                                # Opponent control check
+                                if source_node and source_node.owner is not None and source_node.owner != player_id:
+                                    error_message = "Pipe controlled by opponent"
+                                else:
+                                    if source_node and target_node:
+                                        actual_cost = bot_game_engine.calculate_bridge_cost(source_node, target_node)
+                                        player_gold = bot_game_engine.state.player_gold.get(player_id, 0.0)
+                                        if player_gold < actual_cost:
+                                            error_message = "Not enough gold"
+                    except Exception:
+                        pass
+
+                    await self._send_safe(websocket, json.dumps({"type": "reverseEdgeError", "message": error_message}))
                 else:
                     # Send response for human player moves only (bot moves are handled by bot_player.py)
                     if not bot_game_manager.bot_player or token != bot_game_manager.bot_player.bot_token:

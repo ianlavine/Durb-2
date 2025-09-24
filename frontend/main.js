@@ -95,6 +95,7 @@
   
   // Targeting visual indicator system
   let currentTargetNodeId = null; // The node currently being targeted (for visual indicator)
+  let currentTargetSetTime = null; // Animation time when target was last set
   
   // Speed system
   let speedSlider = null;
@@ -112,6 +113,7 @@
 
   let sceneRef = null;
   let quitButton = null;
+  let lobbyBackButton = null;
   
   
   // Animation system for juice flow
@@ -472,10 +474,15 @@ function hideReverseCostDisplay() {
       playBtn.addEventListener('click', () => {
         if (ws && ws.readyState === WebSocket.OPEN) {
           document.getElementById('lobby').style.display = 'block';
+          // Show selected player count immediately
+          const lobbyEl = document.getElementById('lobby');
+          if (lobbyEl) lobbyEl.textContent = `Waiting for players to join... (${selectedPlayerCount}-player game)`;
           // Hide both buttons when entering lobby
           if (buttonContainer) {
             buttonContainer.style.display = 'none';
           }
+          // Show lobby back button
+          if (lobbyBackButton) lobbyBackButton.style.display = 'block';
           ws.send(JSON.stringify({ 
             type: 'joinLobby',
             token: localStorage.getItem('token') || null,
@@ -571,6 +578,31 @@ function hideReverseCostDisplay() {
     });
     menuObserver.observe(menu, { attributes: true, attributeFilter: ['class'] });
 
+    // Lobby "Go Back" button (visible only when lobby is shown in the menu)
+    const backBtn = document.createElement('button');
+    backBtn.textContent = 'Back';
+    Object.assign(backBtn.style, {
+      position: 'absolute',
+      left: '10px',
+      top: '10px',
+      zIndex: 12,
+      padding: '8px 14px',
+      borderRadius: '8px',
+      border: '2px solid #666',
+      background: '#eeeeee',
+      color: '#111',
+      cursor: 'pointer',
+      display: 'none'
+    });
+    document.body.appendChild(backBtn);
+    backBtn.addEventListener('click', () => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'leaveLobby' }));
+      }
+      returnToMenu();
+    });
+    lobbyBackButton = backBtn;
+
     // Overlay message (centered) for Win/Lose messages
     overlayMsg = document.createElement('div');
     Object.assign(overlayMsg.style, {
@@ -663,6 +695,7 @@ function hideReverseCostDisplay() {
         // Clear targeting indicator when targeting is turned off
         if (!newValue) {
           currentTargetNodeId = null;
+          currentTargetSetTime = null;
         }
       });
     }
@@ -734,6 +767,7 @@ function hideReverseCostDisplay() {
           // Clear targeting indicator when targeting is turned off
           if (!newValue) {
             currentTargetNodeId = null;
+            currentTargetSetTime = null;
           }
         });
       }
@@ -807,6 +841,7 @@ function hideReverseCostDisplay() {
       if (msg.type === 'init') handleInit(msg);
       else if (msg.type === 'tick') handleTick(msg);
       else if (msg.type === 'lobbyJoined') handleLobby(msg);
+      else if (msg.type === 'lobbyLeft') returnToMenu();
       else if (msg.type === 'gameOver') handleGameOver(msg);
       else if (msg.type === 'newEdge') handleNewEdge(msg);
       else if (msg.type === 'edgeReversed') handleEdgeReversed(msg);
@@ -962,6 +997,7 @@ function hideReverseCostDisplay() {
     computeTransform(game.scale.gameSize.width, game.scale.gameSize.height);
     const menu = document.getElementById('menu');
     if (menu) menu.classList.add('hidden');
+    if (lobbyBackButton) lobbyBackButton.style.display = 'none';
     if (overlayMsg) overlayMsg.style.display = 'none';
 
     redrawStatic();
@@ -982,12 +1018,19 @@ function hideReverseCostDisplay() {
   function handleLobby(msg) {
     const lobby = document.getElementById('lobby');
     if (lobby) {
-      lobby.textContent = msg.status === 'waiting' ? 'Waiting for players to join...' : 'Starting...';
+      if (msg.status === 'waiting') {
+        const count = Number.isFinite(msg.playerCount) ? msg.playerCount : selectedPlayerCount;
+        lobby.textContent = `Waiting for players to join... (${count}-player game)`;
+      } else {
+        lobby.textContent = 'Starting...';
+      }
     }
     if (msg.token) localStorage.setItem('token', msg.token);
     // Hide the PLAY button while waiting
     const playBtn = document.getElementById('playBtn');
     if (playBtn) playBtn.style.display = 'none';
+    // Ensure back button visible while in lobby
+    if (lobbyBackButton) lobbyBackButton.style.display = 'block';
   }
 
   function handleLobbyTimeout() {
@@ -1188,8 +1231,9 @@ function hideReverseCostDisplay() {
       redrawStatic();
     }
     
-    // Reset bridge building state on successful edge creation
-    if (activeAbility === 'bridge1way') {
+    // Reset bridge building state only when this edge was created by me
+    // Backend includes `cost` on the message only for the acting player
+    if (activeAbility === 'bridge1way' && msg.cost) {
       activeAbility = null;
       bridgeFirstNode = null;
       hideBridgeCostDisplay();
@@ -1246,11 +1290,7 @@ function hideReverseCostDisplay() {
       }
     }
     
-    // Reset reverse mode on successful edge reversal
-    if (activeAbility === 'reverse') {
-      activeAbility = null;
-      bridgeFirstNode = null;
-    }
+    // Hide reverse cost indicator after server updates
     hideReverseCostDisplay();
   }
 
@@ -1277,12 +1317,16 @@ function hideReverseCostDisplay() {
 
   function handleBridgeError(msg) {
     // Show error message to the player
-    showErrorMessage(msg.message || "Invalid Pipe!");
+    const mapped = translateErrorMessage(msg.message, 'bridge');
+    const variant = mapped.toLowerCase().includes('money') ? 'money' : 'error';
+    showErrorMessage(mapped, variant);
   }
 
   function handleReverseEdgeError(msg) {
     // Show error message to the player
-    showErrorMessage(msg.message || "Can't reverse this pipe!");
+    const mapped = translateErrorMessage(msg.message, 'reverse');
+    const variant = mapped.toLowerCase().includes('money') ? 'money' : 'error';
+    showErrorMessage(mapped, variant);
   }
 
   function handleNodeDestroyed(msg) {
@@ -1323,7 +1367,7 @@ function hideReverseCostDisplay() {
     }
   }
 
-  function showErrorMessage(message) {
+  function showErrorMessage(message, variant = 'error') {
     // Create or update error message element
     let errorMsg = document.getElementById('errorMessage');
     if (!errorMsg) {
@@ -1351,12 +1395,33 @@ function hideReverseCostDisplay() {
     }
     
     errorMsg.textContent = message;
+    if (variant === 'money') {
+      errorMsg.style.background = '#cd853f';
+      errorMsg.style.color = '#111111';
+      errorMsg.style.border = '2px solid #5a3c1a';
+    } else {
+      errorMsg.style.background = 'rgba(255, 0, 0, 0.9)';
+      errorMsg.style.color = 'white';
+      errorMsg.style.border = '2px solid #ff0000';
+    }
     errorMsg.style.display = 'block';
     
     // Auto-hide after 2 seconds
     setTimeout(() => {
       errorMsg.style.display = 'none';
     }, 2000);
+  }
+
+  function translateErrorMessage(message, context) {
+    const original = (message || '').toString();
+    const lower = original.toLowerCase();
+    if (lower.includes('not enough gold')) return 'Not enough money';
+    if (lower.includes('intersect')) return 'No overlapping pipes';
+    if (lower.includes('pipe controlled')) return 'Pipe controlled by Opponent';
+    // Fallbacks per context
+    if (context === 'bridge') return original || 'Invalid Pipe!';
+    if (context === 'reverse') return original || "Can't reverse this pipe!";
+    return original || 'Error';
   }
 
   function redrawStatic() {
@@ -1430,7 +1495,7 @@ function hideReverseCostDisplay() {
         let juiceText = nodeJuiceTexts.get(id);
         
         if (!juiceText) {
-          // Create new text object
+          // Create new text object (world-space; camera handles positioning)
           juiceText = sceneRef.add.text(nx, ny, juiceValue.toString(), {
             font: '12px monospace',
             color: n.owner === null ? '#ffffff' : '#000000', // White for neutrals, black for owned
@@ -1438,12 +1503,20 @@ function hideReverseCostDisplay() {
           });
           juiceText.setOrigin(0.5, 0.5); // Center the text
           nodeJuiceTexts.set(id, juiceText);
+          // Cache last owner to avoid unnecessary color updates
+          juiceText._lastOwner = n.owner;
         } else {
-          // Update existing text
-          juiceText.setText(juiceValue.toString());
-          juiceText.setPosition(nx, ny);
-          juiceText.setColor(n.owner === null ? '#ffffff' : '#000000');
-          juiceText.setVisible(true);
+          // Update only when changed to reduce per-frame overhead
+          const newTextValue = juiceValue.toString();
+          if (juiceText.text !== newTextValue) {
+            juiceText.setText(newTextValue);
+          }
+          const desiredColor = (n.owner === null ? '#ffffff' : '#000000');
+          if (juiceText._lastOwner !== n.owner) {
+            juiceText.setColor(desiredColor);
+            juiceText._lastOwner = n.owner;
+          }
+          if (!juiceText.visible) juiceText.setVisible(true);
         }
       } else {
         // Hide juice text if toggle is disabled
@@ -1517,7 +1590,10 @@ function hideReverseCostDisplay() {
       // Targeting visual indicator: pulsing ring (grows then snaps back), darkens as it grows
       if (persistentTargeting && currentTargetNodeId === id) {
         // Suppress showing the ring if this node has an outgoing edge by me that is on/flowing
-        if (!shouldSuppressTargetRingForNode(id)) {
+        // Allow a small grace window immediately after setting the target to let outflow shut off
+        const GRACE_SECONDS = 0.25;
+        const withinGrace = currentTargetSetTime != null && (animationTime - currentTargetSetTime) < GRACE_SECONDS;
+        if (withinGrace || !shouldSuppressTargetRingForNode(id)) {
           const myColor = ownerToColor(myPlayerId);
           const pulseDuration = 0.625; // seconds per grow cycle (twice as fast)
           const innerRadius = r + 6;   // inner edge stays fixed at this radius
@@ -1539,6 +1615,10 @@ function hideReverseCostDisplay() {
 
           graphicsNodes.lineStyle(thickness, darkenedColor, 1);
           graphicsNodes.strokeCircle(nx, ny, pathRadius);
+        } else {
+          // Outflow persists beyond grace, permanently clear target so it won't reappear
+          currentTargetNodeId = null;
+          currentTargetSetTime = null;
         }
       }
     }
@@ -1769,8 +1849,8 @@ function hideReverseCostDisplay() {
             // Don't reset bridge building state here - wait for server response
             return true; // Handled
           } else if (goldValue < cost) {
-            // Not enough gold to complete bridge building - don't show error, just ignore click
-            // The visual feedback (red highlight) already shows this
+            // Not enough gold to complete bridge building - show brief error
+            showErrorMessage('Not enough money', 'money');
             return true; // Handled
           }
         } else {
@@ -1798,36 +1878,7 @@ function hideReverseCostDisplay() {
       return; // Bridge building was handled
     }
     
-    // Handle reverse edge mode
-    if (activeAbility === 'reverse') {
-      const candidateEdgeId = pickEdgeNear(wx, wy, 14 / baseScale);
-      if (candidateEdgeId != null) {
-        const edge = edges.get(candidateEdgeId);
-        if (edge) {
-          if (!canReverseEdge(edge)) {
-            return;
-          }
-          const sourceNode = nodes.get(edge.source);
-          const targetNode = nodes.get(edge.target);
-          if (sourceNode && targetNode) {
-            const cost = calculateBridgeCost(sourceNode, targetNode);
-            if (goldValue >= cost && ws && ws.readyState === WebSocket.OPEN) {
-              const token = localStorage.getItem('token');
-              ws.send(JSON.stringify({
-                type: 'reverseEdge',
-                edgeId: candidateEdgeId,
-                cost: cost,
-                token: token
-              }));
-            }
-          }
-          
-          // Don't reset reverse mode here - wait for server response
-          // Reset will happen in handleEdgeReversed() on success or stay active on error
-        }
-      }
-      return; // Don't handle normal clicks in reverse mode
-    }
+    // Reverse is not a persistent mode anymore (handled via right-click only)
     
     // Handle destroy mode
     if (activeAbility === 'destroy') {
@@ -1890,6 +1941,7 @@ function hideReverseCostDisplay() {
           if (persistentTargeting) {
             // Full targeting mode: redirect energy towards this node (existing behavior)
             currentTargetNodeId = nodeId; // Set for visual indicator
+            currentTargetSetTime = animationTime; // mark when we set it (seconds)
             ws.send(JSON.stringify({
               type: 'redirectEnergy',
               targetNodeId: nodeId,
@@ -1949,44 +2001,41 @@ function hideReverseCostDisplay() {
     if (edgeId != null && ws && ws.readyState === WebSocket.OPEN) {
       ev.preventDefault();
       const edge = edges.get(edgeId);
-      if (edge && canReverseEdge(edge)) {
-        const sourceNode = nodes.get(edge.source);
-        const targetNode = nodes.get(edge.target);
-        if (sourceNode && targetNode) {
-          const cost = calculateBridgeCost(sourceNode, targetNode);
-          if (goldValue >= cost) {
-            const token = localStorage.getItem('token');
-            ws.send(JSON.stringify({ type: 'reverseEdge', edgeId, cost, token }));
+      if (edge) {
+        if (!canReverseEdge(edge)) {
+          const sourceNode = nodes.get(edge.source);
+          if (sourceNode && sourceNode.owner != null && sourceNode.owner !== myPlayerId) {
+            showErrorMessage('Pipe controlled by Opponent');
+          }
+        } else {
+          const sourceNode = nodes.get(edge.source);
+          const targetNode = nodes.get(edge.target);
+          if (sourceNode && targetNode) {
+            const cost = calculateBridgeCost(sourceNode, targetNode);
+            if (goldValue >= cost) {
+              const token = localStorage.getItem('token');
+              ws.send(JSON.stringify({ type: 'reverseEdge', edgeId, cost, token }));
+            } else {
+              showErrorMessage('Not enough money', 'money');
+            }
           }
         }
       }
     }
   });
 
-  // Keyboard shortcuts for abilities
+  // Keyboard shortcuts: only support Escape to cancel transient modes
   window.addEventListener('keydown', (ev) => {
     if (gameEnded) return;
     const menuVisible = !document.getElementById('menu')?.classList.contains('hidden');
     if (menuVisible) return;
-    
-    switch (ev.key.toLowerCase()) {
-      case 'a':
-        ev.preventDefault();
-        handleAbilityClick('bridge1way');
-        break;
-      case 'd':
-        ev.preventDefault();
-        handleAbilityClick('destroy');
-        break;
-      case 'escape':
-        // Cancel active ability
-        if (activeAbility) {
-          activeAbility = null;
-          bridgeFirstNode = null;
-          hideBridgeCostDisplay();
-          hideReverseCostDisplay();
-        }
-        break;
+    if (ev.key.toLowerCase() === 'escape') {
+      if (activeAbility) {
+        activeAbility = null;
+        bridgeFirstNode = null;
+        hideBridgeCostDisplay();
+        hideReverseCostDisplay();
+      }
     }
   });
 
@@ -2052,6 +2101,12 @@ function hideReverseCostDisplay() {
       hideReverseCostDisplay();
     }
 
+    // Avoid excessive redraws when numbers & targeting overlays are off and nothing changed
+    const overlaysActive = Boolean((persistentNumbers) || (persistentTargeting && currentTargetNodeId !== null) || moneyIndicators.length > 0);
+    if (!needsRedraw && !overlaysActive) {
+      return;
+    }
+
     if (needsRedraw) {
       redrawStatic();
     }
@@ -2068,17 +2123,11 @@ function hideReverseCostDisplay() {
     
     const abilities = {
       'bridge1way': { cost: 4 },
-      'reverse': { cost: 4 },
       'destroy': { cost: 2 }
     };
     
     const ability = abilities[abilityName];
     if (!ability) return;
-    
-    // Check if player has enough gold
-    if (goldValue < ability.cost) {
-      return; // Not enough gold, do nothing (could add visual feedback later)
-    }
     
     // Toggle ability activation
     if (activeAbility === abilityName) {
@@ -2092,11 +2141,6 @@ function hideReverseCostDisplay() {
       activeAbility = abilityName;
       bridgeFirstNode = null;
       hideReverseCostDisplay();
-    } else if (abilityName === 'reverse') {
-      // Activate reverse mode (click an edge to reverse)
-      activeAbility = abilityName;
-      bridgeFirstNode = null;
-      hideBridgeCostDisplay();
     } else if (abilityName === 'destroy') {
       // Activate destroy mode
       activeAbility = abilityName;
@@ -2220,6 +2264,7 @@ function hideReverseCostDisplay() {
     if (difficultyDropdown) difficultyDropdown.style.display = 'none';
     if (homeButtons) homeButtons.style.display = 'flex';
     if (playBtnEl) playBtnEl.style.display = 'block';
+    if (lobbyBackButton) lobbyBackButton.style.display = 'none';
 
     if (quitButton) quitButton.style.display = 'none';
     if (overlayMsg) overlayMsg.style.display = 'none';
@@ -2245,6 +2290,7 @@ function hideReverseCostDisplay() {
     
     // Clear targeting indicator
     currentTargetNodeId = null;
+    currentTargetSetTime = null;
     
     nodes.clear();
     edges.clear();
@@ -2533,25 +2579,17 @@ function hideReverseCostDisplay() {
     
     const canLeftClick = (from && from.owner === myPlayerId);
     const canReverse = canReverseEdge(e);
-    const isReverseMode = (activeAbility === 'reverse');
 
     let hoverColor = null;
     let hoverAllowed = false;
 
     if (isHovered) {
-      if (isReverseMode) {
-        if (canReverse) {
-          hoverColor = ownerToSecondaryColor(myPlayerId);
-          hoverAllowed = true;
-        }
-      } else {
-        if (canLeftClick) {
-          hoverColor = ownerToColor(myPlayerId);
-          hoverAllowed = true;
-        } else if (canReverse) {
-          hoverColor = ownerToSecondaryColor(myPlayerId);
-          hoverAllowed = true;
-        }
+      if (canLeftClick) {
+        hoverColor = ownerToColor(myPlayerId);
+        hoverAllowed = true;
+      } else if (canReverse) {
+        hoverColor = ownerToSecondaryColor(myPlayerId);
+        hoverAllowed = true;
       }
     }
     for (let i = 0; i < packedCount; i++) {
