@@ -30,6 +30,9 @@ class BotPlayer:
         self.bridge_cooldown = 8.0  # Extra delay between bridge builds
         self.bridge_gold_reserve = 10.0  # Keep a proportional gold buffer when bridging
         self.websocket = None  # Will be set by the bot game manager
+        # Targeting cadence so we don't thrash edges every tick
+        self.last_target_update_time = 0.0
+        self.target_cooldown = 3.0
     
     def join_game(self, game_engine: GameEngine) -> None:
         """Join the game engine as a bot player."""
@@ -202,59 +205,96 @@ class BotPlayer:
 
     async def _make_hard_move(self) -> bool:
         """
-        Hard bot strategy: medium+bridge plan plus targeted offensive bridges.
+        Hard bot strategy focused on:
+        - Directing flow to one strong target at a time
+        - Avoiding wasteful reversals into dead-end side branches
+        - Building/bridging only when cost-effective and high-reach
         Returns True if a move was made.
         """
-        if await self._make_medium_plus_bridge_move():
+        # 1) Prioritize retargeting flow smartly
+        if self._try_target_best_node():
             return True
-        
+
+        # 2) Opportunistic but filtered reversal for expansion
+        if await self._try_edge_reversal_for_expansion():
+            return True
+
+        # 3) Build cheap, high-reach neutral bridges
+        if await self._try_bridge_building():
+            return True
+
+        # 4) Bridge into weak, high-reach enemy weakpoints
         if await self._try_offensive_bridge_building():
             return True
-        
+
         return False
     
     async def _try_edge_reversal_for_expansion(self) -> bool:
-        """Try to reverse edges to expand to more unowned nodes."""
+        """Try to reverse edges to expand to more unowned nodes, avoiding dead-end side branches."""
         if not self.game_engine or not self.game_engine.state:
             return False
         
-        # Find edges that could be reversed to reach unowned nodes
-        for edge in self.game_engine.state.edges.values():
-            # Check if we can reverse this edge to reach an unowned node
-            source_node = self.game_engine.state.nodes.get(edge.source_node_id)
-            target_node = self.game_engine.state.nodes.get(edge.target_node_id)
-            
+        # Gather reversal candidates and score them by downstream expansion potential per cost
+        candidates: List[Tuple[float, int]] = []  # (negative score for sorting, edge_id)
+        state = self.game_engine.state
+        for edge in state.edges.values():
+            source_node = state.nodes.get(edge.source_node_id)
+            target_node = state.nodes.get(edge.target_node_id)
             if not source_node or not target_node:
                 continue
-            
-            # Check if reversing would give us access to an unowned node
-            # We need to own the target node but not the source node
+
+            # Reverse only if: target owned by us, source is neutral (unowned), so reversal would let us capture source
             if (target_node.owner == self.player_id and 
-                source_node.owner != self.player_id and 
-                source_node.owner is None):  # Source is unowned
-                
-                # Check if we have enough gold
+                source_node.owner is None):
+                # Estimate expansion if we owned 'source_node' after reversal/capture
+                expansion = self._count_expandable_nodes(source_node.id)
+                if expansion < 2:
+                    # Skip dead-end or tiny side branches
+                    continue
+
                 cost = self._calculate_bridge_cost(source_node, target_node)
-                if self.game_engine.state.player_gold.get(self.player_id, 0) >= cost:
-                    # Try to reverse the edge
-                    success = self.game_engine.handle_reverse_edge(self.bot_token, edge.id, cost)
-                    if success:
-                        # Send frontend response
-                        await self._send_frontend_response({
-                            "type": "edgeReversed",
-                            "edge": {
-                                "id": edge.id,
-                                "source": edge.source_node_id,
-                                "target": edge.target_node_id,
-                                "bidirectional": False,
-                                "forward": True,
-                                "on": edge.on,
-                                "flowing": edge.flowing
-                            }
-                            # No cost included - human player shouldn't see bot's spending
-                        })
-                        return True
-        
+                player_gold = state.player_gold.get(self.player_id, 0)
+                if player_gold < cost:
+                    continue
+
+                # Higher expansion, lower cost is better
+                score = expansion / max(1.0, float(cost))
+                candidates.append((-score, edge.id))
+
+        if not candidates:
+            return False
+
+        candidates.sort()
+
+        # Try best candidate
+        _, best_edge_id = candidates[0]
+        edge = state.edges.get(best_edge_id)
+        if not edge:
+            return False
+        from_node = state.nodes.get(edge.source_node_id)
+        to_node = state.nodes.get(edge.target_node_id)
+        if not from_node or not to_node:
+            return False
+        cost = self._calculate_bridge_cost(from_node, to_node)
+        if state.player_gold.get(self.player_id, 0) < cost:
+            return False
+
+        success = self.game_engine.handle_reverse_edge(self.bot_token, edge.id, cost)
+        if success:
+            await self._send_frontend_response({
+                "type": "edgeReversed",
+                "edge": {
+                    "id": edge.id,
+                    "source": edge.source_node_id,
+                    "target": edge.target_node_id,
+                    "bidirectional": False,
+                    "forward": True,
+                    "on": edge.on,
+                    "flowing": edge.flowing
+                }
+            })
+            return True
+
         return False
     
     def _try_attack_opponent(self) -> bool:
@@ -288,6 +328,122 @@ class BotPlayer:
         if not self.game_engine:
             return 0
         return self.game_engine.calculate_bridge_cost(from_node, to_node)
+
+    def _count_downstream_reach(self, start_node_id: int, include_enemy: bool = True, max_depth: int = 16) -> int:
+        """Count how many nodes are reachable following edge directions from a start node.
+        Includes neutral and optionally enemy nodes. Caps traversal depth to avoid long scans.
+        """
+        if not self.game_engine or not self.game_engine.state:
+            return 0
+        state = self.game_engine.state
+        visited: Set[int] = set([start_node_id])
+        queue: deque[Tuple[int, int]] = deque([(start_node_id, 0)])
+        count = 0
+        while queue:
+            node_id, depth = queue.popleft()
+            if depth >= max_depth:
+                continue
+            node = state.nodes.get(node_id)
+            if not node:
+                continue
+            for edge_id in node.attached_edge_ids:
+                edge = state.edges.get(edge_id)
+                if not edge or edge.source_node_id != node_id:
+                    continue
+                nxt_id = edge.target_node_id
+                nxt = state.nodes.get(nxt_id)
+                if not nxt:
+                    continue
+                # Filter by ownership if include_enemy is False
+                if nxt.owner is not None and nxt.owner != self.player_id and not include_enemy:
+                    continue
+                if nxt_id not in visited:
+                    visited.add(nxt_id)
+                    count += 1
+                    queue.append((nxt_id, depth + 1))
+        return count
+
+    def _has_direct_owned_incoming_edge(self, target_node_id: int) -> bool:
+        if not self.game_engine or not self.game_engine.state:
+            return False
+        state = self.game_engine.state
+        for edge in state.edges.values():
+            if edge.target_node_id != target_node_id:
+                continue
+            src = state.nodes.get(edge.source_node_id)
+            if src and src.owner == self.player_id:
+                return True
+        return False
+
+    def _try_target_best_node(self) -> bool:
+        """Choose a single high-value target and redirect energy to it using server-side optimizer.
+        Prefers weak enemy nodes with high downstream reach; falls back to neutral gateways.
+        """
+        if not self.game_engine or not self.game_engine.state:
+            return False
+
+        now = time.time()
+        if now - self.last_target_update_time < self.target_cooldown:
+            return False
+
+        state = self.game_engine.state
+
+        best_target_id = None
+        best_score = -1.0
+
+        # Consider enemy targets that we can attack directly (we have a direct edge into them)
+        for node in state.nodes.values():
+            if node.owner is None or node.owner == self.player_id:
+                continue
+            if not self._has_direct_owned_incoming_edge(node.id):
+                continue
+            out_edges = 0
+            for eid in node.attached_edge_ids:
+                e = state.edges.get(eid)
+                if e and e.source_node_id == node.id:
+                    out_edges += 1
+            if out_edges == 0:
+                continue
+            inflow = max(0.0, node.cur_intake)
+            pressure = out_edges / (1.0 + inflow)
+            reach = self._count_downstream_reach(node.id, include_enemy=True)
+            # Composite value: prioritize reach, tempered by pressure (weakness)
+            value = reach * 0.7 + pressure * 3.0
+            if value > best_score:
+                best_score = value
+                best_target_id = node.id
+
+        # If no enemy target available, choose a neutral gateway we can directly flow into
+        if best_target_id is None:
+            for node in state.nodes.values():
+                if node.owner is not None:
+                    continue
+                if not self._has_direct_owned_incoming_edge(node.id):
+                    continue
+                expansion = self._count_expandable_nodes(node.id)
+                if expansion <= 0:
+                    continue
+                # Slightly prefer nodes with more downstream reach too
+                reach = self._count_downstream_reach(node.id, include_enemy=False)
+                value = expansion * 1.0 + reach * 0.2
+                if value > best_score:
+                    best_score = value
+                    best_target_id = node.id
+
+        if best_target_id is None:
+            return False
+
+        # Use redirectEnergy which optimizes the entire owned subgraph towards the target
+        success = self.game_engine.handle_redirect_energy(self.bot_token, best_target_id)
+        if success:
+            self.last_target_update_time = now
+            return True
+        # If redirect fails (e.g., validation), try local targeting as a fallback
+        success = self.game_engine.handle_local_targeting(self.bot_token, best_target_id)
+        if success:
+            self.last_target_update_time = now
+            return True
+        return False
 
     async def _try_bridge_building(self) -> bool:
         """Try to build bridges for expansion opportunities."""
@@ -391,7 +547,7 @@ class BotPlayer:
         return False
 
     async def _try_offensive_bridge_building(self) -> bool:
-        """Bridge to high-value opponent nodes that are hard to defend."""
+        """Bridge to high-value opponent nodes that are weak and unlock downstream reach."""
         if not self.game_engine or not self.game_engine.state:
             return False
 
@@ -406,7 +562,7 @@ class BotPlayer:
         state = self.game_engine.state
         reachable_with_attack = self._compute_reachable_nodes(include_enemy=True)
         reasonable_cost = self._estimate_reasonable_bridge_cost()
-        enemy_candidates = []
+        enemy_candidates = []  # list of (composite_score, pressure_score, reach, target_node_id)
         for target_node_id, target_node in state.nodes.items():
             if target_node.owner is None or target_node.owner == self.player_id:
                 continue
@@ -428,15 +584,17 @@ class BotPlayer:
 
             inflow_intake = max(0.0, target_node.cur_intake)
             pressure_score = outflow_edges / (1.0 + inflow_intake)
-            if pressure_score < 0.5:
+            if pressure_score < 0.4:
                 continue
 
-            enemy_candidates.append((pressure_score, outflow_edges, inflow_intake, target_node_id))
+            reach = self._count_downstream_reach(target_node_id, include_enemy=True)
+            composite = reach * 0.6 + pressure_score * 3.0
+            enemy_candidates.append((composite, pressure_score, reach, target_node_id))
 
         if not enemy_candidates:
             return False
 
-        enemy_candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        enemy_candidates.sort(key=lambda item: item[0], reverse=True)
 
         for _, _, _, target_node_id in enemy_candidates:
             target_node = state.nodes.get(target_node_id)
