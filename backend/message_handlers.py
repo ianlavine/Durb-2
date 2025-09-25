@@ -7,7 +7,7 @@ import websockets
 
 from .constants import MAX_FRIEND_PLAYERS, MIN_FRIEND_PLAYERS, PLAYER_COLOR_SCHEMES
 from .game_engine import GameEngine
-from .bot_player import bot_game_manager
+from .bot_manager import bot_game_manager
 
 
 class MessageRouter:
@@ -602,7 +602,6 @@ class MessageRouter:
             await self._send_safe(websocket, json.dumps(message))
 
         if bot_game_manager.bot_player:
-            bot_game_manager.bot_player.set_websocket(websocket)
             await bot_game_manager.make_bot_move()
 
     async def _route_to_bot_game(

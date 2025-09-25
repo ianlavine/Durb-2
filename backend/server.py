@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Set
 import websockets
 
 from .message_handlers import MessageRouter
-from .bot_player import bot_game_manager
+from .bot_manager import bot_game_manager
 
 
 GRAPH_PATH: Path = Path(__file__).resolve().parent.parent / "graph.json"
@@ -160,6 +160,13 @@ class WebSocketServer:
             if bot_game_manager.game_active:
                 bot_game_engine = bot_game_manager.get_game_engine()
                 await bot_game_manager.make_bot_move()
+
+                # If the manager recorded a last_client_event, broadcast it now
+                if bot_game_manager.last_client_event:
+                    payload = json.dumps(bot_game_manager.last_client_event)
+                    await self._broadcast_to_specific(list(self.server_context.get("bot_game_clients", {}).values()), payload)
+                    # Clear after broadcasting to avoid repeats
+                    bot_game_manager.last_client_event = None
 
                 winner_id = bot_game_engine.simulate_tick(TICK_INTERVAL_SECONDS)
 
