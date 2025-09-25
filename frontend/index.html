@@ -16,50 +16,6 @@
       #playBtn:hover, #playBotBtn:hover { filter: brightness(1.1); }
       .button-container { display: flex; flex-direction: column; align-items: center; gap: 12px; }
       
-      /* Custom difficulty dropdown */
-      .dropdown-container {
-        position: relative;
-        display: inline-block;
-      }
-      
-      #difficultyDropdown { 
-        position: absolute;
-        top: 100%;
-        left: 0;
-        width: 100%;
-        background: #111;
-        border: 3px solid #ffffff;
-        border-top: none;
-        border-radius: 0 0 12px 12px;
-        box-shadow: 0 8px 24px rgba(0,0,0,0.4);
-        z-index: 1000;
-        display: none;
-        overflow: hidden;
-        margin-top: 0;
-        box-sizing: border-box;
-      }
-      
-      .dropdown-option {
-        font-size: 32px;
-        padding: 12px 24px;
-        color: #ffffff;
-        cursor: pointer;
-        border: none;
-        background: transparent;
-        width: 100%;
-        text-align: center;
-        transition: background-color 0.2s ease;
-        border-bottom: 1px solid #333;
-      }
-      
-      .dropdown-option:hover {
-        background: #ffff00;
-        color: #111;
-      }
-      
-      .dropdown-option:last-child {
-        border-bottom: none;
-      }
       
       /* Progress bar styles */
       #progressBar { 
@@ -155,13 +111,6 @@
         display: none; 
       }
       
-      #speedDisplay { 
-        position: absolute; 
-        bottom: 80px; 
-        left: 20px; 
-        z-index: 10; 
-        display: none; 
-      }
       
       .toggle-container {
         display: flex;
@@ -209,69 +158,6 @@
         transform: translateX(28px);
       }
       
-      /* Home screen speed slider styling */
-      .home-speed-container {
-        position: absolute;
-        bottom: 80px;
-        left: 20px;
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        z-index: 10;
-      }
-      
-      .speed-label {
-        color: #ffffff;
-        font-family: monospace;
-        font-size: 18px;
-        font-weight: bold;
-        user-select: none;
-        min-width: 60px;
-      }
-      
-      .speed-range {
-        width: 120px;
-        height: 6px;
-        background: #666;
-        border-radius: 3px;
-        outline: none;
-        cursor: pointer;
-        -webkit-appearance: none;
-        appearance: none;
-        background: linear-gradient(to right, #00cc66 0%, #66ff99 100%);
-      }
-      
-      .speed-range::-webkit-slider-thumb {
-        -webkit-appearance: none;
-        appearance: none;
-        width: 20px;
-        height: 20px;
-        background: #ffffff;
-        border-radius: 50%;
-        cursor: pointer;
-        border: 2px solid #00aa55;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
-      }
-      
-      .speed-range::-moz-range-thumb {
-        width: 20px;
-        height: 20px;
-        background: #ffffff;
-        border-radius: 50%;
-        cursor: pointer;
-        border: 2px solid #00aa55;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
-      }
-      
-      .speed-value {
-        color: #ffffff;
-        font-family: monospace;
-        font-size: 18px;
-        font-weight: bold;
-        user-select: none;
-        min-width: 20px;
-        text-align: center;
-      }
       
       /* Home screen toggle styling - match in-game positioning and font size */
       .home-toggle-container {
@@ -367,15 +253,13 @@
         border-color: #aaaaaa;
       }
 
-      .dropdown-container {
+
+      #playBtn, #playBotBtn {
         width: 100%;
         max-width: 640px;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
       }
 
-      #playBtn, #playBotBtn, .player-count-selector {
+      .player-count-selector {
         width: 100%;
         max-width: 640px;
       }
@@ -397,21 +281,7 @@
           </div>
         </div>
         <button id="playBtn">PLAY FRIENDS</button>
-        <div class="dropdown-container">
-          <button id="playBotBtn">PLAY BOT</button>
-          <div id="difficultyDropdown">
-            <button class="dropdown-option" data-difficulty="easy">Easy</button>
-            <button class="dropdown-option" data-difficulty="medium">Medium</button>
-            <button class="dropdown-option" data-difficulty="hard">Hard</button>
-          </div>
-        </div>
-        <!-- Speed slider for home screen -->
-        <div id="homeSpeedSlider" class="home-speed-container">
-          <span class="speed-label">Speed</span>
-          <input type="range" id="homeSpeedRange" min="1" max="5" value="3" class="speed-range">
-          <span id="homeSpeedValue" class="speed-value">1x</span>
-        </div>
-        
+        <button id="playBotBtn">PLAY BOT</button>
         <!-- Auto-expand toggle for home screen -->
         <div id="homeAutoExpandToggle" class="home-toggle-container">
           <span class="toggle-label">Auto-Expand</span>
@@ -479,13 +349,6 @@
       </div>
     </div>
     
-    <!-- Speed display -->
-    <div id="speedDisplay">
-      <div class="toggle-container">
-        <span class="toggle-label">Speed</span>
-        <span id="speedValue" class="speed-value">1x</span>
-      </div>
-    </div>
     
     <script src="main.js"></script>
   </body>

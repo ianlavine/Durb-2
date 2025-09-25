@@ -20,7 +20,6 @@ class BotPlayer:
         self.difficulty = difficulty
         self.game_engine: Optional[GameEngine] = None
         self.bot_token = "bot_token_" + str(int(time.time()))
-        self.has_acted = False
         self.last_action_time = 0.0
         self.action_cooldown = 2.0  # Minimum seconds between actions
         self.last_bridge_time = 0.0
@@ -77,9 +76,7 @@ class BotPlayer:
 
             # Pick the starting node
             success = self.game_engine.handle_node_click(self.bot_token, best_node_id)
-            if success:
-                self.has_acted = True
-                return True
+            return success
 
         return False
 
@@ -661,19 +658,5 @@ class BotPlayer:
                 (edge.source_node_id == node_id2 and edge.target_node_id == node_id1)):
                 return True
         return False
-
-    def get_game_state(self) -> Optional[Dict]:
-        """Get the current game state for debugging/analysis."""
-        if not self.game_engine or not self.game_engine.state:
-            return None
-
-        return {
-            "phase": self.game_engine.state.phase,
-            "player_id": self.player_id,
-            "has_picked": self.game_engine.state.players_who_picked.get(self.player_id, False),
-            "auto_expand": self.game_engine.state.player_auto_expand.get(self.player_id, False),
-            "gold": self.game_engine.state.player_gold.get(self.player_id, 0.0),
-            "nodes_owned": len([n for n in self.game_engine.state.nodes.values() if n.owner == self.player_id])
-        }
 
 

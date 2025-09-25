@@ -97,15 +97,6 @@
   let currentTargetNodeId = null; // The node currently being targeted (for visual indicator)
   let currentTargetSetTime = null; // Animation time when target was last set
   
-  // Speed system
-  let speedSlider = null;
-  let speedRange = null;
-  let speedValue = null;
-  let homeSpeedSlider = null;
-  let homeSpeedRange = null;
-  let homeSpeedValue = null;
-  let mySpeedLevel = 3; // my player's speed level setting
-  let persistentSpeedLevel = 3; // persistent setting stored in localStorage
   let selectedPlayerCount = 2;
 
   // Money transparency system
@@ -166,36 +157,6 @@
     localStorage.setItem('targeting', value.toString());
   }
 
-  // Speed persistence functions
-  const SPEED_MULTIPLIERS = [0.3, 0.45, 0.6, 0.75, 0.9];
-  const SPEED_DISPLAY_LABELS = ['0.5x', '0.75x', '1x', '1.25x', '1.5x'];
-
-  function loadPersistentSpeedLevel() {
-    const saved = localStorage.getItem('speedLevel');
-    const parsed = saved ? parseInt(saved, 10) : 3;
-    if (!Number.isFinite(parsed) || parsed < 1 || parsed > SPEED_MULTIPLIERS.length) {
-      persistentSpeedLevel = 3;
-    } else {
-      persistentSpeedLevel = parsed;
-    }
-    return persistentSpeedLevel;
-  }
-
-  function savePersistentSpeedLevel(value) {
-    const clamped = Math.max(1, Math.min(SPEED_MULTIPLIERS.length, value));
-    persistentSpeedLevel = clamped;
-    localStorage.setItem('speedLevel', clamped.toString());
-  }
-
-  function getSpeedMultiplier(level) {
-    const levelIndex = Math.max(0, Math.min(SPEED_MULTIPLIERS.length - 1, level - 1));
-    return SPEED_MULTIPLIERS[levelIndex];
-  }
-
-  function formatSpeedDisplay(level) {
-    const levelIndex = Math.max(0, Math.min(SPEED_DISPLAY_LABELS.length - 1, level - 1));
-    return SPEED_DISPLAY_LABELS[levelIndex];
-  }
 
   // Helper: convert 0xRRGGBB -> "#rrggbb"
   function toCssColor(hex) {
@@ -431,13 +392,6 @@ function hideReverseCostDisplay() {
     }
   }
 
-  function updateHomeSpeedSlider() {
-    if (!homeSpeedRange || !homeSpeedValue) return;
-    
-    homeSpeedRange.value = persistentSpeedLevel;
-    homeSpeedValue.textContent = formatSpeedDisplay(persistentSpeedLevel);
-    mySpeedLevel = persistentSpeedLevel;
-  }
 
   function create() {
     sceneRef = this;
@@ -449,14 +403,12 @@ function hideReverseCostDisplay() {
     loadPersistentAutoExpand();
     loadPersistentNumbers();
     loadPersistentTargeting();
-    loadPersistentSpeedLevel();
 
     tryConnectWS();
     const menu = document.getElementById('menu');
     const playBtn = document.getElementById('playBtn');
     const playBotBtn = document.getElementById('playBotBtn');
     const buttonContainer = document.querySelector('.button-container');
-    const difficultyDropdown = document.getElementById('difficultyDropdown');
     const playerCountButtons = document.querySelectorAll('.player-count-option');
 
     if (playerCountButtons && playerCountButtons.length) {
@@ -483,11 +435,10 @@ function hideReverseCostDisplay() {
           }
           // Show lobby back button
           if (lobbyBackButton) lobbyBackButton.style.display = 'block';
-          ws.send(JSON.stringify({ 
+          ws.send(JSON.stringify({
             type: 'joinLobby',
             token: localStorage.getItem('token') || null,
             autoExpand: persistentAutoExpand,
-            speedLevel: persistentSpeedLevel,
             playerCount: selectedPlayerCount
           }));
         }
@@ -496,49 +447,23 @@ function hideReverseCostDisplay() {
     
     if (playBotBtn) {
       playBotBtn.addEventListener('click', () => {
-        // Toggle difficulty dropdown
-        if (difficultyDropdown) {
-          const isVisible = difficultyDropdown.style.display === 'block';
-          difficultyDropdown.style.display = isVisible ? 'none' : 'block';
-        }
-      });
-    }
-    
-    // Handle dropdown option clicks
-    if (difficultyDropdown) {
-      const options = difficultyDropdown.querySelectorAll('.dropdown-option');
-      options.forEach(option => {
-        option.addEventListener('click', () => {
-          const selectedDifficulty = option.getAttribute('data-difficulty');
-          if (selectedDifficulty && ws && ws.readyState === WebSocket.OPEN) {
-            console.log('Starting bot game with difficulty:', selectedDifficulty);
-            document.getElementById('lobby').style.display = 'block';
-            document.getElementById('lobby').textContent = `Starting ${selectedDifficulty} bot game...`;
-            // Hide buttons and dropdown when starting bot game
-            if (buttonContainer) {
-              buttonContainer.style.display = 'none';
-            }
-            difficultyDropdown.style.display = 'none'; // Hide dropdown
-            ws.send(JSON.stringify({ 
-              type: 'startBotGame',
-              difficulty: selectedDifficulty,
-              autoExpand: persistentAutoExpand,
-              speedLevel: persistentSpeedLevel
-            }));
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          console.log('Starting hard bot game');
+          document.getElementById('lobby').style.display = 'block';
+          document.getElementById('lobby').textContent = 'Starting hard bot game...';
+          // Hide buttons when starting bot game
+          if (buttonContainer) {
+            buttonContainer.style.display = 'none';
           }
-        });
+          ws.send(JSON.stringify({
+            type: 'startBotGame',
+            difficulty: 'hard',
+            autoExpand: persistentAutoExpand
+          }));
+        }
       });
     }
     
-    // Close dropdown when clicking outside
-    document.addEventListener('click', (event) => {
-      const dropdownContainer = document.querySelector('.dropdown-container');
-      if (dropdownContainer && !dropdownContainer.contains(event.target)) {
-        if (difficultyDropdown) {
-          difficultyDropdown.style.display = 'none';
-        }
-      }
-    });
     // Quit overlay button
     const quitBtn = document.createElement('button');
     quitBtn.textContent = 'Forfeit';
@@ -701,26 +626,6 @@ function hideReverseCostDisplay() {
     }
   }
   
-  // Initialize speed display
-  speedDisplay = document.getElementById('speedDisplay');
-
-    // Initialize home screen speed slider
-    homeSpeedSlider = document.getElementById('homeSpeedSlider');
-    homeSpeedRange = document.getElementById('homeSpeedRange');
-    homeSpeedValue = document.getElementById('homeSpeedValue');
-    if (homeSpeedRange && homeSpeedValue) {
-      // Initialize with persistent value
-      homeSpeedRange.value = persistentSpeedLevel;
-      homeSpeedValue.textContent = formatSpeedDisplay(persistentSpeedLevel);
-      mySpeedLevel = persistentSpeedLevel;
-      
-      homeSpeedRange.addEventListener('input', () => {
-        const newSpeed = parseInt(homeSpeedRange.value);
-        homeSpeedValue.textContent = formatSpeedDisplay(newSpeed);
-        mySpeedLevel = newSpeed;
-        savePersistentSpeedLevel(newSpeed);
-      });
-    }
 
     // Initialize home screen auto-expand toggle
     homeAutoExpandToggle = document.getElementById('homeAutoExpandToggle');
@@ -1008,7 +913,6 @@ function hideReverseCostDisplay() {
 
     updateGoldBar();
     updateProgressBar();
-    updateSpeedDisplay();
 
     if (progressBar) {
       progressBar.style.display = players.size > 0 ? 'block' : 'none';
@@ -1064,17 +968,13 @@ function hideReverseCostDisplay() {
     const menu = document.getElementById('menu');
     const lobby = document.getElementById('lobby');
     const buttonContainer = document.querySelector('.button-container');
-    const difficultyDropdown = document.getElementById('difficultyDropdown');
-    
+
     if (lobby) {
       lobby.textContent = '';
       lobby.style.display = 'none';
     }
     if (buttonContainer) {
       buttonContainer.style.display = 'flex';
-    }
-    if (difficultyDropdown) {
-      difficultyDropdown.style.display = 'none'; // Hide dropdown
     }
     // Don't show menu immediately - wait for user to click Quit button
   }
@@ -1192,7 +1092,6 @@ function hideReverseCostDisplay() {
 
     updateGoldBar();
     updateProgressBar();
-    updateSpeedDisplay();
     redrawStatic();
   }
 
@@ -1440,8 +1339,6 @@ function hideReverseCostDisplay() {
       if (autoExpandToggle) autoExpandToggle.style.display = 'none';
       if (numbersToggle) numbersToggle.style.display = 'none';
       if (targetingToggle) targetingToggle.style.display = 'none';
-      // Hide speed display when menu is visible
-      if (speedDisplay) speedDisplay.style.display = 'none';
       return; // Do not draw game under menu
     }
     
@@ -1466,10 +1363,6 @@ function hideReverseCostDisplay() {
     }
     if (targetingToggle && nodes.size > 0) {
       targetingToggle.style.display = 'block';
-    }
-    // Show speed display when graph is being drawn and we have nodes/game data
-    if (speedDisplay && nodes.size > 0) {
-      speedDisplay.style.display = 'block';
     }
     for (const [id, e] of edges.entries()) {
       const s = nodes.get(e.source);
@@ -2252,7 +2145,6 @@ function hideReverseCostDisplay() {
   function returnToMenu() {
     const menu = document.getElementById('menu');
     const lobby = document.getElementById('lobby');
-    const difficultyDropdown = document.getElementById('difficultyDropdown');
     const homeButtons = document.querySelector('.button-container');
     const playBtnEl = document.getElementById('playBtn');
 
@@ -2261,7 +2153,6 @@ function hideReverseCostDisplay() {
       lobby.style.display = 'none';
     }
     if (menu) menu.classList.remove('hidden');
-    if (difficultyDropdown) difficultyDropdown.style.display = 'none';
     if (homeButtons) homeButtons.style.display = 'flex';
     if (playBtnEl) playBtnEl.style.display = 'block';
     if (lobbyBackButton) lobbyBackButton.style.display = 'none';
@@ -2276,7 +2167,6 @@ function hideReverseCostDisplay() {
     if (autoExpandToggle) autoExpandToggle.style.display = 'none';
     if (numbersToggle) numbersToggle.style.display = 'none';
     if (targetingToggle) targetingToggle.style.display = 'none';
-    if (speedDisplay) speedDisplay.style.display = 'none';
 
     updateHomeAutoExpandToggle();
     updateHomeNumbersToggle();
@@ -2418,15 +2308,6 @@ function hideReverseCostDisplay() {
     }
   }
 
-  function updateSpeedDisplay() {
-    if (!speedDisplay) return;
-    
-    const speedValueElement = speedDisplay.querySelector('#speedValue');
-    if (speedValueElement) {
-      const speedText = formatSpeedDisplay(mySpeedLevel);
-      speedValueElement.textContent = speedText;
-    }
-  }
 
 
   function pickNearestNode(wx, wy, maxDist) {
