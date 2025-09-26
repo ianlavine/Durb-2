@@ -111,6 +111,163 @@
   let quitButton = null;
   let lobbyBackButton = null;
   
+  // Sound system
+  let soundEnabled = true; // persisted in localStorage
+  let audioCtx = null;
+  let globalGain = null;
+  function loadPersistentSound() {
+    const saved = localStorage.getItem('soundEnabled');
+    soundEnabled = saved !== 'false'; // default true
+    return soundEnabled;
+  }
+  function savePersistentSound(value) {
+    soundEnabled = !!value;
+    localStorage.setItem('soundEnabled', soundEnabled.toString());
+    if (globalGain) globalGain.gain.value = soundEnabled ? 1.0 : 0.0;
+  }
+  function ensureAudio() {
+    if (!audioCtx) {
+      try {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        globalGain = audioCtx.createGain();
+        globalGain.gain.value = soundEnabled ? 1.0 : 0.0;
+        globalGain.connect(audioCtx.destination);
+      } catch (e) {
+        console.warn('Audio init failed', e);
+      }
+    }
+    if (audioCtx && audioCtx.state === 'suspended') {
+      audioCtx.resume().catch(() => {});
+    }
+  }
+  function playToneSequence(steps) {
+    if (!soundEnabled) return;
+    ensureAudio();
+    if (!audioCtx) return;
+    const now = audioCtx.currentTime;
+    steps.forEach((step) => {
+      const t0 = now + (step.delay || 0);
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = step.type || 'sine';
+      osc.frequency.setValueAtTime(step.freq, t0);
+      const attack = step.attack ?? 0.005;
+      const decay = step.decay ?? 0.15;
+      const vol = (step.volume ?? 0.2);
+      gain.gain.setValueAtTime(0.0001, t0);
+      gain.gain.exponentialRampToValueAtTime(Math.max(0.0002, vol), t0 + attack);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + attack + decay);
+      osc.connect(gain);
+      gain.connect(globalGain);
+      osc.start(t0);
+      osc.stop(t0 + attack + decay + 0.05);
+    });
+  }
+  // Minimal noise utilities
+  function createWhiteNoiseBuffer(durationSec) {
+    if (!audioCtx) return null;
+    const sampleRate = audioCtx.sampleRate || 44100;
+    const frameCount = Math.max(1, Math.floor(durationSec * sampleRate));
+    const buffer = audioCtx.createBuffer(1, frameCount, sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < frameCount; i++) {
+      data[i] = (Math.random() * 2 - 1);
+    }
+    return buffer;
+  }
+  function playNoiseBurst({ duration = 0.15, volume = 0.15, filterType = 'lowpass', filterFreq = 600, q = 0.7, attack = 0.004, decay = 0.10 }) {
+    if (!soundEnabled) return;
+    ensureAudio();
+    if (!audioCtx) return;
+    const now = audioCtx.currentTime;
+    const src = audioCtx.createBufferSource();
+    const noise = createWhiteNoiseBuffer(duration);
+    if (!noise) return;
+    src.buffer = noise;
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = filterType;
+    filter.frequency.value = filterFreq;
+    filter.Q.value = q;
+    const gain = audioCtx.createGain();
+    // Envelope
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(Math.max(0.0002, volume), now + attack);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + attack + decay);
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(globalGain);
+    src.start(now);
+    src.stop(now + duration);
+  }
+  function playCaptureDing() {
+    // Soft positive ding (two quick notes)
+    playToneSequence([
+      { freq: 880, type: 'sine', attack: 0.005, decay: 0.12, volume: 0.15, delay: 0.00 },
+      { freq: 1320, type: 'sine', attack: 0.005, decay: 0.12, volume: 0.12, delay: 0.05 },
+    ]);
+  }
+  function playBridgeDonk() {
+    if (!soundEnabled) return;
+    ensureAudio();
+    if (!audioCtx) return;
+    const now = audioCtx.currentTime;
+    // Low thud: quick pitch drop + lowpass noise hit
+    // Pitch drop thump
+    const osc = audioCtx.createOscillator();
+    const og = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(240, now);
+    osc.frequency.exponentialRampToValueAtTime(70, now + 0.14);
+    og.gain.setValueAtTime(0.0001, now);
+    og.gain.exponentialRampToValueAtTime(0.25, now + 0.008);
+    og.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
+    osc.connect(og);
+    og.connect(globalGain);
+    osc.start(now);
+    osc.stop(now + 0.22);
+    // Body of the thud with muffled noise
+    playNoiseBurst({ duration: 0.18, volume: 0.22, filterType: 'lowpass', filterFreq: 450, q: 0.6, attack: 0.004, decay: 0.14 });
+  }
+  function playReverseShuffle() {
+    if (!soundEnabled) return;
+    ensureAudio();
+    if (!audioCtx) return;
+    const grains = 8;
+    for (let i = 0; i < grains; i++) {
+      const delay = i * 0.018 + (Math.random() * 0.006);
+      // Rustle: small bandpass noise bursts with random center freq and Q
+      const center = 900 + Math.random() * 1800; // 900Hz - 2700Hz
+      const q = 0.8 + Math.random() * 1.4;
+      const vol = 0.045 + Math.random() * 0.03;
+      // Slightly vary attack/decay for naturalness
+      const attack = 0.004 + Math.random() * 0.006;
+      const decay = 0.045 + Math.random() * 0.030;
+      // Schedule using timeout against audio clock for simplicity
+      setTimeout(() => {
+        // Use noise burst routed through bandpass by temporarily switching filter
+        if (!audioCtx) return;
+        const now = audioCtx.currentTime;
+        const src = audioCtx.createBufferSource();
+        const buf = createWhiteNoiseBuffer(0.08);
+        if (!buf) return;
+        src.buffer = buf;
+        const filter = audioCtx.createBiquadFilter();
+        filter.type = 'bandpass';
+        filter.frequency.value = center;
+        filter.Q.value = q;
+        const gain = audioCtx.createGain();
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.exponentialRampToValueAtTime(Math.max(0.0002, vol), now + attack);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + attack + decay);
+        src.connect(filter);
+        filter.connect(gain);
+        gain.connect(globalGain);
+        src.start(now);
+        src.stop(now + 0.09);
+      }, Math.floor(delay * 1000));
+    }
+  }
+  
   
   // Animation system for juice flow
   let animationTime = 0; // Global animation timer
@@ -415,6 +572,7 @@ function hideReverseCostDisplay() {
     loadPersistentNumbers();
     loadPersistentEdgeFlow();
     loadPersistentTargeting();
+    loadPersistentSound();
 
     tryConnectWS();
     const menu = document.getElementById('menu');
@@ -435,6 +593,21 @@ function hideReverseCostDisplay() {
         togglesPanelEl.style.display = next;
         savePersistentSettingsOpen(next === 'grid');
       });
+    }
+    const soundBtn = document.getElementById('soundButton');
+    if (soundBtn) {
+      const updateIcon = () => {
+        soundBtn.textContent = soundEnabled ? '🔊' : '🔇';
+        soundBtn.title = soundEnabled ? 'Sound On' : 'Sound Off';
+        soundBtn.setAttribute('aria-label', soundEnabled ? 'Sound On' : 'Sound Off');
+      };
+      updateIcon();
+      soundBtn.addEventListener('click', () => {
+        savePersistentSound(!soundEnabled);
+        updateIcon();
+        ensureAudio();
+      });
+      soundBtn.addEventListener('pointerdown', ensureAudio, { once: false });
     }
     const playBtn = document.getElementById('playBtn');
     const playBotBtn = document.getElementById('playBotBtn');
@@ -781,7 +954,7 @@ function hideReverseCostDisplay() {
       // The backend will handle the actual game end logic
     }
     
-    // Redraw if there are any flowing edges (for animation) or money indicators
+    // Redraw if there are any flowing edges (for animation), money indicators, targeting, or spin animations
     let hasFlowingEdges = false;
     for (const [id, edge] of edges.entries()) {
       if (edge.flowing) {
@@ -789,10 +962,41 @@ function hideReverseCostDisplay() {
         break;
       }
     }
-    
-    if (hasFlowingEdges || moneyIndicators.length > 0 || (persistentTargeting && currentTargetNodeId !== null)) {
+    const anySpinning = updateReverseSpinAnimations();
+    if (hasFlowingEdges || anySpinning || moneyIndicators.length > 0 || (persistentTargeting && currentTargetNodeId !== null)) {
       redrawStatic();
     }
+  }
+
+  // Edge reversal spin animation state helpers
+  const EDGE_SPIN_PER_TRIANGLE_SEC = 0.06;
+  function startEdgeReverseSpin(edge) {
+    const s = nodes.get(edge.source);
+    const t = nodes.get(edge.target);
+    if (!s || !t) return;
+    const [sx0, sy0] = worldToScreen(s.x, s.y);
+    const [tx0, ty0] = worldToScreen(t.x, t.y);
+    const len = Math.max(1, Math.hypot(tx0 - sx0, ty0 - sy0));
+    const triH = 16;
+    const triCount = Math.max(1, Math.floor(len / triH));
+    edge._spin = {
+      spinStartTime: animationTime,
+      spinCount: triCount,
+      spinDuration: triCount * EDGE_SPIN_PER_TRIANGLE_SEC + 0.12
+    };
+  }
+  function updateReverseSpinAnimations() {
+    let any = false;
+    for (const e of edges.values()) {
+      if (e._spin) {
+        any = true;
+        const elapsed = animationTime - e._spin.spinStartTime;
+        if (elapsed >= e._spin.spinDuration) {
+          delete e._spin;
+        }
+      }
+    }
+    return any;
   }
 
   function tryConnectWS() {
@@ -1202,6 +1406,10 @@ function hideReverseCostDisplay() {
           );
         }
       }
+      // Play bridge sound if this action was from me (server includes cost for actor)
+      if (msg.cost) {
+        playBridgeDonk();
+      }
       
       redrawStatic();
     }
@@ -1261,6 +1469,11 @@ function hideReverseCostDisplay() {
           );
         }
         
+        // Trigger reverse animation and sound (only if this action was mine)
+        startEdgeReverseSpin(existingEdge);
+        if (msg.cost) {
+          playReverseShuffle();
+        }
         redrawStatic();
       }
     }
@@ -1338,6 +1551,7 @@ function hideReverseCostDisplay() {
           0xffd700, // golden color
           2000 // 2 seconds
         );
+        playCaptureDing();
       }
     }
   }
@@ -2598,9 +2812,17 @@ function hideReverseCostDisplay() {
     const color = (overrideColor != null) ? overrideColor : edgeColor(e, fromNode);
     const halfW = baseW / 2;
     // Triangle points oriented such that tip points along +x before rotation
-    const p1 = rotatePoint(cx + height / 2, cy, cx, cy, angle); // tip
-    const p2 = rotatePoint(cx - height / 2, cy - halfW, cx, cy, angle); // base left
-    const p3 = rotatePoint(cx - height / 2, cy + halfW, cx, cy, angle); // base right
+    let finalAngle = angle;
+    if (e._spin) {
+      const elapsed = Math.max(0, animationTime - e._spin.spinStartTime);
+      const perIndexDelay = EDGE_SPIN_PER_TRIANGLE_SEC;
+      const local = Math.max(0, elapsed - (triangleIndex || 0) * perIndexDelay);
+      const spinPhase = Math.min(1, local / 0.18); // 180deg over ~0.18s
+      finalAngle = angle + Math.PI * spinPhase;
+    }
+    const p1 = rotatePoint(cx + height / 2, cy, cx, cy, finalAngle); // tip
+    const p2 = rotatePoint(cx - height / 2, cy - halfW, cx, cy, finalAngle); // base left
+    const p3 = rotatePoint(cx - height / 2, cy + halfW, cx, cy, finalAngle); // base right
     
     if (e.flowing) {
       // Animated juice flow effect - filled triangles

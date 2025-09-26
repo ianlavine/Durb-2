@@ -133,6 +133,42 @@
         outline-offset: 2px;
       }
       
+      /* Sound button (above the gear) */
+      #soundButton {
+        position: fixed;
+        bottom: 70px; /* closer to the gear */
+        left: 10px; /* align with gear */
+        z-index: 12;
+        width: 64px;
+        height: 64px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        margin: 0;
+        -webkit-appearance: none;
+        appearance: none;
+        border: none;
+        background: transparent;
+        color: #aaaaaa;
+        font-family: system-ui, sans-serif;
+        font-size: 40px;
+        cursor: pointer;
+        line-height: 0;
+        text-shadow: 0 2px 6px rgba(0,0,0,0.6);
+        transition: transform 0.08s ease, filter 0.15s ease;
+        transform-origin: bottom left;
+      }
+      #soundButton:hover { filter: brightness(1.2); }
+      #soundButton:active {
+        transform: scale(0.9) rotate(-6deg);
+        filter: brightness(1.35);
+      }
+      #soundButton:focus-visible {
+        outline: 2px solid #ffffff88;
+        outline-offset: 2px;
+      }
+      
       
       .toggle-container {
         display: flex;
@@ -327,6 +363,7 @@
     <div id="timerDisplay">7:00</div>
     
     <!-- Settings button and unified toggles panel (works in menu and in-game) -->
+    <button id="soundButton" aria-label="Sound" title="Sound">🔊</button>
     <button id="settingsButton" aria-label="Settings" title="Settings">⚙</button>
     <div class="toggle-grid" id="togglesPanel" style="display: none;">
       <div id="autoExpandToggle">
