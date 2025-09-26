@@ -31,3 +31,5 @@ class Edge:
     # All edges are now one-way only, from source to target
     on: bool = False
     flowing: bool = False
+    # Amount of juice that flowed through this edge in the most recent tick
+    last_transfer: float = 0.0

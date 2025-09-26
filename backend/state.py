@@ -246,7 +246,7 @@ class GraphState:
         }
 
     def to_tick_message(self, current_time: float = 0.0) -> Dict:
-        edges_arr = [[eid, 1 if e.on else 0, 1 if e.flowing else 0, 1] for eid, e in self.edges.items()]  # Always forward now
+        edges_arr = [[eid, 1 if e.on else 0, 1 if e.flowing else 0, 1, round(getattr(e, 'last_transfer', 0.0), 3)] for eid, e in self.edges.items()]  # Always forward now
         nodes_arr = [
             [nid, round(n.juice, 3), (n.owner if n.owner is not None else None)]
             for nid, n in self.nodes.items()
@@ -349,6 +349,10 @@ class GraphState:
                 base_rate = scaled_production_rate
                 size_delta[node.id] += base_rate
 
+        # Reset last_transfer for all edges at the start of the tick
+        for e in self.edges.values():
+            e.last_transfer = 0.0
+
         # Flows using intake-influenced transfer amounts
         pending_ownership: Dict[int, int] = {}  # node_id -> new_owner_id
         outgoing_by_node: Dict[int, List[int]] = {}
@@ -417,6 +421,9 @@ class GraphState:
 
             size_delta[from_id] -= actual_transfer
             remaining_transfer[from_id] = max(0.0, remaining - actual_transfer)
+
+            # Record the actual amount that flowed on this edge for UI display
+            edge.last_transfer = actual_transfer
 
             if is_friendly_flow:
                 intake_tracking[to_id] += actual_transfer

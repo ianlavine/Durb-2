@@ -27,6 +27,8 @@
   let screen = null;
   let nodes = new Map(); // id -> {x,y,size,owner}
   let edges = new Map(); // id -> {source,target,on,flowing,flowStartTime}
+  let tickIntervalSec = 0.1; // provided by backend init; used to show per-second edge flow
+  let settingsOpen = false; // persisted visibility of settings/toggles panel
 
   let graphicsEdges;
   let graphicsNodes;
@@ -82,12 +84,15 @@
   
   // Numbers toggle system
   let numbersToggle = null;
-  let homeNumbersToggle = null;
   let persistentNumbers = true; // persistent setting stored in localStorage (default to true)
+  
+  // Edge Flow toggle system
+  let edgeFlowToggle = null;
+  let persistentEdgeFlow = false; // persistent setting stored in localStorage (default to false)
+  let edgeFlowTexts = new Map(); // edgeId -> text object
   
   // Targeting toggle system
   let targetingToggle = null;
-  let homeTargetingToggle = null;
   let persistentTargeting = false; // persistent setting stored in localStorage (default to false)
   
   // Node juice display system
@@ -133,6 +138,17 @@
     localStorage.setItem('autoExpand', value.toString());
   }
 
+  // Settings panel persistence
+  function loadPersistentSettingsOpen() {
+    const saved = localStorage.getItem('settingsOpen');
+    settingsOpen = saved === 'true';
+    return settingsOpen;
+  }
+  function savePersistentSettingsOpen(value) {
+    settingsOpen = !!value;
+    localStorage.setItem('settingsOpen', settingsOpen.toString());
+  }
+
   // Numbers persistence functions
   function loadPersistentNumbers() {
     const saved = localStorage.getItem('numbers');
@@ -143,6 +159,18 @@
   function savePersistentNumbers(value) {
     persistentNumbers = value;
     localStorage.setItem('numbers', value.toString());
+  }
+
+  // Edge flow persistence functions
+  function loadPersistentEdgeFlow() {
+    const saved = localStorage.getItem('edgeFlow');
+    persistentEdgeFlow = saved === 'true';
+    return persistentEdgeFlow;
+  }
+
+  function savePersistentEdgeFlow(value) {
+    persistentEdgeFlow = value;
+    localStorage.setItem('edgeFlow', value.toString());
   }
 
   // Targeting persistence functions
@@ -353,43 +381,26 @@ function hideReverseCostDisplay() {
     moneyIndicators = [];
   }
 
+  // Keep function for backward-compat, but update the actual in-panel toggle instead
   function updateHomeAutoExpandToggle() {
-    if (!homeAutoExpandToggle) return;
-    
-    const toggleSwitch = homeAutoExpandToggle.querySelector('.toggle-switch');
-    if (toggleSwitch) {
-      if (persistentAutoExpand) {
-        toggleSwitch.classList.add('enabled');
-      } else {
-        toggleSwitch.classList.remove('enabled');
-      }
-    }
+    const autoToggle = document.querySelector('#autoExpandToggle .toggle-switch');
+    if (!autoToggle) return;
+    if (persistentAutoExpand) autoToggle.classList.add('enabled');
+    else autoToggle.classList.remove('enabled');
   }
 
   function updateHomeNumbersToggle() {
-    if (!homeNumbersToggle) return;
-    
-    const toggleSwitch = homeNumbersToggle.querySelector('.toggle-switch');
-    if (toggleSwitch) {
-      if (persistentNumbers) {
-        toggleSwitch.classList.add('enabled');
-      } else {
-        toggleSwitch.classList.remove('enabled');
-      }
-    }
+    const toggleSwitch = document.querySelector('#numbersToggle .toggle-switch');
+    if (!toggleSwitch) return;
+    if (persistentNumbers) toggleSwitch.classList.add('enabled');
+    else toggleSwitch.classList.remove('enabled');
   }
 
   function updateHomeTargetingToggle() {
-    if (!homeTargetingToggle) return;
-    
-    const toggleSwitch = homeTargetingToggle.querySelector('.toggle-switch');
-    if (toggleSwitch) {
-      if (persistentTargeting) {
-        toggleSwitch.classList.add('enabled');
-      } else {
-        toggleSwitch.classList.remove('enabled');
-      }
-    }
+    const toggleSwitch = document.querySelector('#targetingToggle .toggle-switch');
+    if (!toggleSwitch) return;
+    if (persistentTargeting) toggleSwitch.classList.add('enabled');
+    else toggleSwitch.classList.remove('enabled');
   }
 
 
@@ -402,10 +413,29 @@ function hideReverseCostDisplay() {
     // Load persistent settings
     loadPersistentAutoExpand();
     loadPersistentNumbers();
+    loadPersistentEdgeFlow();
     loadPersistentTargeting();
 
     tryConnectWS();
     const menu = document.getElementById('menu');
+    // Ensure toggles panel follows persisted state in both menu and in-game
+    const togglesPanelEl = document.getElementById('togglesPanel');
+    loadPersistentSettingsOpen();
+    if (togglesPanelEl) togglesPanelEl.style.display = settingsOpen ? 'grid' : 'none';
+    // Ensure visual state matches persisted values on refresh while in menu
+    updateHomeAutoExpandToggle();
+    updateHomeNumbersToggle();
+    updateHomeEdgeFlowToggle();
+    updateHomeTargetingToggle();
+    const settingsBtn = document.getElementById('settingsButton');
+    if (settingsBtn && togglesPanelEl) {
+      settingsBtn.addEventListener('click', () => {
+        const isHidden = (togglesPanelEl.style.display === 'none');
+        const next = isHidden ? 'grid' : 'none';
+        togglesPanelEl.style.display = next;
+        savePersistentSettingsOpen(next === 'grid');
+      });
+    }
     const playBtn = document.getElementById('playBtn');
     const playBotBtn = document.getElementById('playBotBtn');
     const buttonContainer = document.querySelector('.button-container');
@@ -493,13 +523,11 @@ function hideReverseCostDisplay() {
       quitBtn.style.display = menuVisible ? 'none' : 'block';
     });
     observer.observe(menu, { attributes: true, attributeFilter: ['class'] });
-    // Also hide win/lose overlay and auto-expand toggle when menu is visible
+    // Also hide win/lose overlay when menu is visible (keep settings panel state)
     const menuObserver = new MutationObserver(() => {
       const menuVisible = !menu.classList.contains('hidden');
       if (menuVisible && overlayMsg) overlayMsg.style.display = 'none';
-      if (menuVisible && autoExpandToggle) autoExpandToggle.style.display = 'none';
-      if (menuVisible && numbersToggle) numbersToggle.style.display = 'none';
-      if (menuVisible && targetingToggle) targetingToggle.style.display = 'none';
+      // Do not auto-hide the toggles panel so its state persists into menu
     });
     menuObserver.observe(menu, { attributes: true, attributeFilter: ['class'] });
 
@@ -578,12 +606,21 @@ function hideReverseCostDisplay() {
     timerDisplay = document.getElementById('timerDisplay');
     
 
-  // Initialize auto-expand toggle
+  // Initialize auto-expand toggle (works in menu and in-game)
   autoExpandToggle = document.getElementById('autoExpandToggle');
   if (autoExpandToggle) {
     const toggleSwitch = autoExpandToggle.querySelector('.toggle-switch');
     if (toggleSwitch) {
       toggleSwitch.addEventListener('click', () => {
+        // Always flip local persistent state and visuals immediately
+        const newValue = !persistentAutoExpand;
+        savePersistentAutoExpand(newValue);
+        // Keep in-panel and in-game views in sync instantly while waiting for server
+        myAutoExpand = newValue;
+        updateHomeAutoExpandToggle();
+        updateAutoExpandToggle();
+
+        // Notify server whenever possible (menu or in-game)
         if (ws && ws.readyState === WebSocket.OPEN && !gameEnded) {
           const token = localStorage.getItem('token');
           ws.send(JSON.stringify({ type: 'toggleAutoExpand', token }));
@@ -602,6 +639,21 @@ function hideReverseCostDisplay() {
         savePersistentNumbers(newValue);
         updateNumbersToggle();
         updateHomeNumbersToggle();
+      });
+    }
+  }
+
+  // Initialize edge flow toggle
+  edgeFlowToggle = document.getElementById('edgeFlowToggle');
+  if (edgeFlowToggle) {
+    const toggleSwitch = edgeFlowToggle.querySelector('.toggle-switch');
+    if (toggleSwitch) {
+      toggleSwitch.addEventListener('click', () => {
+        const newValue = !persistentEdgeFlow;
+        savePersistentEdgeFlow(newValue);
+        updateEdgeFlowToggle();
+        updateHomeEdgeFlowToggle();
+        redrawStatic();
       });
     }
   }
@@ -656,6 +708,23 @@ function hideReverseCostDisplay() {
       }
       // Initialize the toggle state
       updateHomeNumbersToggle();
+    }
+
+    // Initialize home screen edge flow toggle
+    homeEdgeFlowToggle = document.getElementById('homeEdgeFlowToggle');
+    if (homeEdgeFlowToggle) {
+      const toggleSwitch = homeEdgeFlowToggle.querySelector('.toggle-switch');
+      if (toggleSwitch) {
+        toggleSwitch.addEventListener('click', () => {
+          const newValue = !persistentEdgeFlow;
+          savePersistentEdgeFlow(newValue);
+          updateHomeEdgeFlowToggle();
+          updateEdgeFlowToggle();
+          redrawStatic();
+        });
+      }
+      // Initialize the toggle state
+      updateHomeEdgeFlowToggle();
     }
 
     // Initialize home screen targeting toggle
@@ -771,6 +840,9 @@ function hideReverseCostDisplay() {
     hideTimerDisplay();
 
     screen = msg.screen || null;
+    if (typeof msg.tickInterval === 'number' && Number.isFinite(msg.tickInterval) && msg.tickInterval > 0) {
+      tickIntervalSec = msg.tickInterval;
+    }
     nodes.clear();
     edges.clear();
     players.clear();
@@ -894,6 +966,7 @@ function hideReverseCostDisplay() {
     }
     updateAutoExpandToggle();
     updateNumbersToggle();
+    updateEdgeFlowToggle();
     updateTargetingToggle();
 
     myEliminated = eliminatedPlayers.has(myPlayerId);
@@ -913,6 +986,7 @@ function hideReverseCostDisplay() {
 
     updateGoldBar();
     updateProgressBar();
+    // Do not auto-show toggles; they remain behind Settings button
 
     if (progressBar) {
       progressBar.style.display = players.size > 0 ? 'block' : 'none';
@@ -991,12 +1065,13 @@ function hideReverseCostDisplay() {
     }
 
     if (Array.isArray(msg.edges)) {
-      msg.edges.forEach(([id, on, flowing]) => {
+      msg.edges.forEach(([id, on, flowing, forward, lastTransfer]) => {
         const edge = edges.get(id);
         if (!edge) return;
         const wasFlowing = edge.flowing;
         edge.on = !!on;
         edge.flowing = !!flowing;
+        edge.lastTransfer = Number(lastTransfer) || 0;
         if (!wasFlowing && edge.flowing) {
           edge.flowStartTime = animationTime;
         } else if (!edge.flowing) {
@@ -1057,6 +1132,7 @@ function hideReverseCostDisplay() {
     }
     updateAutoExpandToggle();
     updateNumbersToggle();
+    updateEdgeFlowToggle();
     updateTargetingToggle();
 
     if (Array.isArray(msg.eliminatedPlayers)) {
@@ -1335,10 +1411,9 @@ function hideReverseCostDisplay() {
       if (progressBar) progressBar.style.display = 'none';
       // Hide timer when menu is visible
       if (timerDisplay) timerDisplay.style.display = 'none';
-      // Hide toggles when menu is visible
-      if (autoExpandToggle) autoExpandToggle.style.display = 'none';
-      if (numbersToggle) numbersToggle.style.display = 'none';
-      if (targetingToggle) targetingToggle.style.display = 'none';
+      // Hide toggles grid when menu is visible
+      const togglesGrid = document.getElementById('inGameToggles');
+      if (togglesGrid) togglesGrid.style.display = 'none';
       return; // Do not draw game under menu
     }
     
@@ -1354,21 +1429,41 @@ function hideReverseCostDisplay() {
     if (timerDisplay && nodes.size > 0 && gameStartTime) {
       timerDisplay.style.display = 'block';
     }
-    // Show toggles when graph is being drawn and we have nodes/game data
-    if (autoExpandToggle && nodes.size > 0) {
-      autoExpandToggle.style.display = 'block';
-    }
-    if (numbersToggle && nodes.size > 0) {
-      numbersToggle.style.display = 'block';
-    }
-    if (targetingToggle && nodes.size > 0) {
-      targetingToggle.style.display = 'block';
-    }
+    // Do not auto-show toggles; they are behind Settings button
     for (const [id, e] of edges.entries()) {
       const s = nodes.get(e.source);
       const t = nodes.get(e.target);
       if (!s || !t) continue;
       drawEdge(e, s, t, id);
+
+      // Edge flow labels at midpoint
+      const midX = (s.x + t.x) / 2;
+      const midY = (s.y + t.y) / 2;
+      const [sx, sy] = worldToScreen(midX, midY);
+      let textObj = edgeFlowTexts.get(id);
+      if (persistentEdgeFlow && (e.lastTransfer || 0) > 0) {
+        const perSecond = (e.lastTransfer || 0) / Math.max(1e-6, tickIntervalSec);
+        const label = Math.round(perSecond).toString();
+        if (!textObj) {
+          textObj = sceneRef.add.text(sx, sy, label, {
+            font: '14px monospace',
+            color: '#000000',
+            align: 'center',
+            stroke: '#ffffff',
+            strokeThickness: 3
+          });
+          textObj.setOrigin(0.5, 0.5);
+          edgeFlowTexts.set(id, textObj);
+        } else {
+          if (textObj.text !== label) textObj.setText(label);
+          textObj.setPosition(sx, sy);
+          if (textObj.style && textObj.style.fontSize !== '14px') textObj.setFontSize(14);
+          textObj.setStroke('#ffffff', 3);
+          if (!textObj.visible) textObj.setVisible(true);
+        }
+      } else {
+        if (textObj) textObj.setVisible(false);
+      }
     }
 
     graphicsNodes.clear();
@@ -2164,12 +2259,12 @@ function hideReverseCostDisplay() {
     if (progressMarkerLeft) progressMarkerLeft.style.display = 'none';
     if (progressMarkerRight) progressMarkerRight.style.display = 'none';
     hideTimerDisplay();
-    if (autoExpandToggle) autoExpandToggle.style.display = 'none';
-    if (numbersToggle) numbersToggle.style.display = 'none';
-    if (targetingToggle) targetingToggle.style.display = 'none';
+    const togglesPanel = document.getElementById('togglesPanel');
+    if (togglesPanel) togglesPanel.style.display = settingsOpen ? 'grid' : 'none';
 
     updateHomeAutoExpandToggle();
     updateHomeNumbersToggle();
+    updateHomeEdgeFlowToggle();
     updateHomeTargetingToggle();
 
     // Clean up juice text objects
@@ -2293,6 +2388,25 @@ function hideReverseCostDisplay() {
         toggleSwitch.classList.remove('enabled');
       }
     }
+  }
+
+  function updateEdgeFlowToggle() {
+    if (!edgeFlowToggle) return;
+    const toggleSwitch = edgeFlowToggle.querySelector('.toggle-switch');
+    if (toggleSwitch) {
+      if (persistentEdgeFlow) {
+        toggleSwitch.classList.add('enabled');
+      } else {
+        toggleSwitch.classList.remove('enabled');
+      }
+    }
+  }
+
+  function updateHomeEdgeFlowToggle() {
+    const toggleSwitch = document.querySelector('#edgeFlowToggle .toggle-switch');
+    if (!toggleSwitch) return;
+    if (persistentEdgeFlow) toggleSwitch.classList.add('enabled');
+    else toggleSwitch.classList.remove('enabled');
   }
 
   function updateTargetingToggle() {
