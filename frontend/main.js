@@ -216,55 +216,32 @@
   function playLoseNodeWarning() {
     // Intentionally silent for now; keeping function for future use
   }
-  function playBridgeDonk() {
-    // Legacy single-hit; kept for compatibility if needed
+
+  function playBridgeHammerHit(hitIndex = 0) {
     if (!soundEnabled) return;
     ensureAudio();
     if (!audioCtx) return;
     const now = audioCtx.currentTime;
+    // Hammer thud
     const osc = audioCtx.createOscillator();
     const og = audioCtx.createGain();
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(240, now);
-    osc.frequency.exponentialRampToValueAtTime(70, now + 0.14);
+    const startFreq = 220 - hitIndex * 10;
+    const endFreq = 95 - hitIndex * 3;
+    osc.frequency.setValueAtTime(Math.max(80, startFreq), now);
+    osc.frequency.exponentialRampToValueAtTime(Math.max(60, endFreq), now + 0.10);
     og.gain.setValueAtTime(0.0001, now);
-    og.gain.exponentialRampToValueAtTime(0.25, now + 0.008);
+    og.gain.exponentialRampToValueAtTime(0.22, now + 0.008);
     og.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
-    osc.connect(og);
-    og.connect(globalGain);
+    osc.connect(og); og.connect(globalGain);
     osc.start(now);
-    osc.stop(now + 0.22);
-    playNoiseBurst({ duration: 0.18, volume: 0.22, filterType: 'lowpass', filterFreq: 450, q: 0.6, attack: 0.004, decay: 0.14 });
+    osc.stop(now + 0.18);
+    // Wood/metal impact noise
+    playNoiseBurst({ duration: 0.12, volume: 0.20, filterType: 'bandpass', filterFreq: 850 + hitIndex * 110, q: 3.5, attack: 0.002, decay: 0.11 });
   }
 
-  function playBridgeBuildSequence() {
-    if (!soundEnabled) return;
-    ensureAudio();
-    if (!audioCtx) return;
-    const hits = 8; // twice as long overall
-    for (let i = 0; i < hits; i++) {
-      const delayMs = i * 160; // a little more time between hits
-      setTimeout(() => {
-        const now = audioCtx.currentTime;
-        // Hammer thud
-        const osc = audioCtx.createOscillator();
-        const og = audioCtx.createGain();
-        osc.type = 'sine';
-        const startFreq = 220 - i * 10;
-        const endFreq = 95 - i * 3;
-        osc.frequency.setValueAtTime(Math.max(80, startFreq), now);
-        osc.frequency.exponentialRampToValueAtTime(Math.max(60, endFreq), now + 0.10);
-        og.gain.setValueAtTime(0.0001, now);
-        og.gain.exponentialRampToValueAtTime(0.22, now + 0.008);
-        og.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
-        osc.connect(og); og.connect(globalGain);
-        osc.start(now);
-        osc.stop(now + 0.18);
-        // Wood/metal impact noise
-        playNoiseBurst({ duration: 0.12, volume: 0.20, filterType: 'bandpass', filterFreq: 850 + i*110, q: 3.5, attack: 0.002, decay: 0.11 });
-      }, delayMs);
-    }
-  }
+  // Target spacing between hammer hits in seconds (consistent regardless of bridge size)
+  const BRIDGE_HIT_SPACING_SEC = 0.25;
   function playReverseShuffle() {
     if (!soundEnabled) return;
     ensureAudio();
@@ -1122,6 +1099,9 @@ function hideReverseCostDisplay() {
           buildTicksRequired: Number(buildReq || 0),
           buildTicksElapsed: Number(buildElap || 0),
           buildStartTime: animationTime,
+          builtByMe: false,
+          hammerAccumSec: 0,
+          hammerHitIndex: 0,
         });
       }
     }
@@ -1342,7 +1322,25 @@ function hideReverseCostDisplay() {
         edge.lastTransfer = Number(lastTransfer) || 0;
         edge.building = !!building;
         edge.buildTicksRequired = Number(buildReq || 0);
+        const prevElapsed = Number(edge.buildTicksElapsed || 0);
         edge.buildTicksElapsed = Number(buildElap || 0);
+        // Fixed-interval metronome: accumulate real time and play hits when threshold crossed
+        edge.hammerAccumSec = edge.hammerAccumSec || 0;
+        if (edge.building) {
+          edge.hammerAccumSec += tickIntervalSec;
+          while (edge.hammerAccumSec >= BRIDGE_HIT_SPACING_SEC) {
+            if (edge.builtByMe) playBridgeHammerHit(edge.hammerHitIndex || 0);
+            edge.hammerHitIndex = (edge.hammerHitIndex || 0) + 1;
+            edge.hammerAccumSec -= BRIDGE_HIT_SPACING_SEC;
+          }
+        } else if (!edge.building && prevElapsed < edge.buildTicksRequired) {
+          // Flush one last hit if the accumulator had built up enough (optional)
+          if ((edge.hammerAccumSec || 0) >= BRIDGE_HIT_SPACING_SEC * 0.6) {
+            if (edge.builtByMe) playBridgeHammerHit(edge.hammerHitIndex || 0);
+            edge.hammerHitIndex = (edge.hammerHitIndex || 0) + 1;
+          }
+          edge.hammerAccumSec = 0;
+        }
         if (!wasFlowing && edge.flowing) {
           edge.flowStartTime = animationTime;
         } else if (!edge.flowing) {
@@ -1456,6 +1454,9 @@ function hideReverseCostDisplay() {
         buildTicksRequired: Number(edge.buildTicksRequired || 0),
         buildTicksElapsed: Number(edge.buildTicksElapsed || 0),
         buildStartTime: animationTime,
+        hammerAccumSec: 0,
+        hammerHitIndex: 0,
+        builtByMe: !!msg.cost, // server only includes cost for the actor
       });
       
       // Show cost indicator for bridge building
@@ -1478,9 +1479,7 @@ function hideReverseCostDisplay() {
         }
       }
       // Play bridge sound if this action was from me (server includes cost for actor)
-      if (msg.cost) {
-        playBridgeBuildSequence();
-      }
+      // No immediate sequence here; tick-driven hits will play only for builtByMe
       
       redrawStatic();
     }
@@ -2915,7 +2914,8 @@ function hideReverseCostDisplay() {
       const perIndexDelay = EDGE_SPIN_PER_TRIANGLE_SEC;
       const local = Math.max(0, elapsed - (triangleIndex || 0) * perIndexDelay);
       const spinPhase = Math.min(1, local / 0.24); // 180deg over ~0.24s (slower)
-      finalAngle = angle + Math.PI * spinPhase;
+      // Start from previous orientation (new angle + PI) and settle on new angle
+      finalAngle = angle + Math.PI * (1 - spinPhase);
     }
     const p1 = rotatePoint(cx + height / 2, cy, cx, cy, finalAngle); // tip
     const p2 = rotatePoint(cx - height / 2, cy - halfW, cx, cy, finalAngle); // base left
