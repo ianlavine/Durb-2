@@ -17,7 +17,6 @@ class BotPlayer:
     def __init__(self, player_id: int = 2, color: str = "#3388ff", difficulty: str = "hard"):
         self.player_id = player_id
         self.color = color
-        self.difficulty = difficulty
         self.game_engine: Optional[GameEngine] = None
         self.bot_token = "bot_token_" + str(int(time.time()))
         self.last_action_time = 0.0
@@ -55,7 +54,7 @@ class BotPlayer:
             return success
 
 
-        success = await self._make_hard_move()
+        success = await self._make_move()
         if success:
             self.last_action_time = current_time
         return success
@@ -146,9 +145,9 @@ class BotPlayer:
 
         return expandable_count
 
-    async def _make_hard_move(self) -> bool:
+    async def _make_move(self) -> bool:
         """
-        Hard bot strategy focused on:
+        Strategy focused on:
         - Directing flow to one strong target at a time
         - Avoiding wasteful reversals into dead-end side branches
         - Building/bridging only when cost-effective and high-reach

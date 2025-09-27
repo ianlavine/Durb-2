@@ -103,31 +103,46 @@ class BotGameManager:
                             },
                         }
                         break
-            # Edge reversals (on-state or direction changes) if not already set
+            # Only emit 'edgeReversed' for true direction swaps; otherwise 'edgeUpdated'
             if not self.last_client_event:
                 for eid, before in (pre_edges or {}).items():
                     after = post_edges.get(eid)
                     if not after:
                         continue
-                    # If 'on' changed from False to True and it looks like a reversal path, treat as reversal
-                    on_changed = before[2] != after[2]
-                    flowing_changed = before[3] != after[3]
+                    before_src, before_tgt, before_on, before_flowing = before
+                    after_src, after_tgt, after_on, after_flowing = after
+                    e = state.edges.get(eid)
+                    if not e:
+                        continue
+                    # True reversal when source/target swap places
+                    reversed_dir = (after_src == before_tgt and after_tgt == before_src)
+                    if reversed_dir:
+                        self.last_client_event = {
+                            "type": "edgeReversed",
+                            "edge": {
+                                "id": e.id,
+                                "source": e.source_node_id,
+                                "target": e.target_node_id,
+                                "bidirectional": False,
+                                "forward": True,
+                                "on": e.on,
+                                "flowing": e.flowing,
+                            },
+                        }
+                        break
+                    # Otherwise, if state changed, emit a standard update
+                    on_changed = (before_on != after_on)
+                    flowing_changed = (before_flowing != after_flowing)
                     if on_changed or flowing_changed:
-                        e = state.edges.get(eid)
-                        if e:
-                            self.last_client_event = {
-                                "type": "edgeReversed",
-                                "edge": {
-                                    "id": e.id,
-                                    "source": e.source_node_id,
-                                    "target": e.target_node_id,
-                                    "bidirectional": False,
-                                    "forward": True,
-                                    "on": e.on,
-                                    "flowing": e.flowing,
-                                },
-                            }
-                            break
+                        self.last_client_event = {
+                            "type": "edgeUpdated",
+                            "edge": {
+                                "id": e.id,
+                                "on": e.on,
+                                "flowing": e.flowing,
+                            },
+                        }
+                        break
 
         return moved
 
