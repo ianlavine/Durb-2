@@ -97,6 +97,9 @@ class BotGameManager:
                                 "forward": True,
                                 "on": e.on,
                                 "flowing": e.flowing,
+                                "building": bool(getattr(e, 'building', False)),
+                                "buildTicksRequired": int(getattr(e, 'build_ticks_required', 0)),
+                                "buildTicksElapsed": int(getattr(e, 'build_ticks_elapsed', 0)),
                             },
                         }
                         break

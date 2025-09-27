@@ -203,7 +203,16 @@ class GraphState:
             for nid, n in self.nodes.items()
         ]
         edges_arr = [
-            [eid, e.source_node_id, e.target_node_id, 0, 1]  # Always one-way, always forward
+            [
+                eid,
+                e.source_node_id,
+                e.target_node_id,
+                0,
+                1,
+                int(getattr(e, 'build_ticks_required', 0)),
+                int(getattr(e, 'build_ticks_elapsed', 0)),
+                1 if getattr(e, 'building', False) else 0,
+            ]
             for eid, e in self.edges.items()
         ]
         players_arr = [
@@ -246,7 +255,16 @@ class GraphState:
         }
 
     def to_tick_message(self, current_time: float = 0.0) -> Dict:
-        edges_arr = [[eid, 1 if e.on else 0, 1 if e.flowing else 0, 1, round(getattr(e, 'last_transfer', 0.0), 3)] for eid, e in self.edges.items()]  # Always forward now
+        edges_arr = [[
+            eid,
+            1 if e.on else 0,
+            1 if e.flowing else 0,
+            1,
+            round(getattr(e, 'last_transfer', 0.0), 3),
+            int(getattr(e, 'build_ticks_required', 0)),
+            int(getattr(e, 'build_ticks_elapsed', 0)),
+            1 if getattr(e, 'building', False) else 0,
+        ] for eid, e in self.edges.items()]  # Always forward now
         nodes_arr = [
             [nid, round(n.juice, 3), (n.owner if n.owner is not None else None)]
             for nid, n in self.nodes.items()
@@ -292,6 +310,10 @@ class GraphState:
         3. For attacking flows: always flow when on (regardless of target capacity)
         """
         for edge in self.edges.values():
+            # Handle bridge build gating: while building, edge cannot be on/flowing
+            if getattr(edge, 'building', False):
+                edge.flowing = False
+                continue
             if not edge.on:
                 # Edge is not turned on, so it cannot flow
                 edge.flowing = False
@@ -323,6 +345,27 @@ class GraphState:
                 edge.flowing = False
 
     def simulate_tick(self, tick_interval_seconds: float) -> None:
+        # Progress bridge builds
+        for e in self.edges.values():
+            if getattr(e, 'building', False):
+                e.build_ticks_elapsed = int(getattr(e, 'build_ticks_elapsed', 0)) + 1
+                if e.build_ticks_elapsed >= int(getattr(e, 'build_ticks_required', 0)):
+                    e.building = False
+                    # Edge becomes eligible for being on, but do not auto-on here unless previously intended
+                    # If it was intended to be on (e.g., creator owns source), we can turn it on now
+                    src = self.nodes.get(e.source_node_id)
+                    if src and src.owner is not None:
+                        # Leave 'on' state as-is; game logic elsewhere may toggle it
+                        pass
+        # Update edge build progress and apply post-build on-state
+        for e in self.edges.values():
+            if getattr(e, 'building', False):
+                continue
+            if getattr(e, 'post_build_turn_on', False):
+                # Apply intended on-state once
+                e.on = True
+                setattr(e, 'post_build_turn_on', False)
+
         # Update flowing status for all edges based on target node capacity
         self._update_edge_flowing_status()
 

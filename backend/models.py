@@ -33,3 +33,7 @@ class Edge:
     flowing: bool = False
     # Amount of juice that flowed through this edge in the most recent tick
     last_transfer: float = 0.0
+    # Bridge build gating
+    build_ticks_required: int = 0  # number of ticks required before edge can turn on
+    build_ticks_elapsed: int = 0  # ticks that have elapsed since creation
+    building: bool = False  # if True, edge cannot be toggled/clicked and will not flow

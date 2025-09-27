@@ -392,8 +392,11 @@ class GameEngine:
                 id=new_edge_id,
                 source_node_id=from_node_id,
                 target_node_id=to_node_id,
-                on=new_edge_should_be_on,
-                flowing=False  # Will be set to True by _update_edge_flowing_status if conditions are met
+                on=False,
+                flowing=False,  # Will be set to True by _update_edge_flowing_status when built and conditions are met
+                build_ticks_required=max(1, int(math.hypot(to_node.x - from_node.x, to_node.y - from_node.y) * 0.3)),
+                build_ticks_elapsed=0,
+                building=True,
             )
             
             # Add to state
@@ -403,6 +406,11 @@ class GameEngine:
             
             # Deduct gold using verified cost
             self.state.player_gold[player_id] = max(0.0, self.state.player_gold[player_id] - actual_cost)
+
+            # Record the intended on-state so it can be applied when build completes
+            if new_edge_should_be_on:
+                # Mark that once building finishes, this edge should turn on
+                setattr(new_edge, 'post_build_turn_on', True)
 
             # Basic mismatch logging (could be extended to real logging system)
             if client_reported_cost and abs(client_reported_cost - actual_cost) > 0.51:

@@ -346,8 +346,11 @@ class MessageRouter:
                     "target": new_edge.target_node_id,
                     "bidirectional": False,
                     "forward": True,
-                    "on": new_edge.on,
-                    "flowing": new_edge.flowing,
+                        "on": new_edge.on,
+                        "flowing": new_edge.flowing,
+                        "building": bool(getattr(new_edge, 'building', False)),
+                        "buildTicksRequired": int(getattr(new_edge, 'build_ticks_required', 0)),
+                        "buildTicksElapsed": int(getattr(new_edge, 'build_ticks_elapsed', 0)),
                 }
             }
             

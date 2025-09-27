@@ -206,13 +206,22 @@
       { freq: 1320, type: 'sine', attack: 0.005, decay: 0.12, volume: 0.12, delay: 0.05 },
     ]);
   }
+  function playEnemyCaptureDing() {
+    // Slightly different positive cue for capturing opponent nodes
+    playToneSequence([
+      { freq: 780, type: 'sine', attack: 0.005, decay: 0.12, volume: 0.14, delay: 0.00 },
+      { freq: 1170, type: 'sine', attack: 0.005, decay: 0.12, volume: 0.11, delay: 0.05 },
+    ]);
+  }
+  function playLoseNodeWarning() {
+    // Intentionally silent for now; keeping function for future use
+  }
   function playBridgeDonk() {
+    // Legacy single-hit; kept for compatibility if needed
     if (!soundEnabled) return;
     ensureAudio();
     if (!audioCtx) return;
     const now = audioCtx.currentTime;
-    // Low thud: quick pitch drop + lowpass noise hit
-    // Pitch drop thump
     const osc = audioCtx.createOscillator();
     const og = audioCtx.createGain();
     osc.type = 'sine';
@@ -225,8 +234,36 @@
     og.connect(globalGain);
     osc.start(now);
     osc.stop(now + 0.22);
-    // Body of the thud with muffled noise
     playNoiseBurst({ duration: 0.18, volume: 0.22, filterType: 'lowpass', filterFreq: 450, q: 0.6, attack: 0.004, decay: 0.14 });
+  }
+
+  function playBridgeBuildSequence() {
+    if (!soundEnabled) return;
+    ensureAudio();
+    if (!audioCtx) return;
+    const hits = 8; // twice as long overall
+    for (let i = 0; i < hits; i++) {
+      const delayMs = i * 160; // a little more time between hits
+      setTimeout(() => {
+        const now = audioCtx.currentTime;
+        // Hammer thud
+        const osc = audioCtx.createOscillator();
+        const og = audioCtx.createGain();
+        osc.type = 'sine';
+        const startFreq = 220 - i * 10;
+        const endFreq = 95 - i * 3;
+        osc.frequency.setValueAtTime(Math.max(80, startFreq), now);
+        osc.frequency.exponentialRampToValueAtTime(Math.max(60, endFreq), now + 0.10);
+        og.gain.setValueAtTime(0.0001, now);
+        og.gain.exponentialRampToValueAtTime(0.22, now + 0.008);
+        og.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
+        osc.connect(og); og.connect(globalGain);
+        osc.start(now);
+        osc.stop(now + 0.18);
+        // Wood/metal impact noise
+        playNoiseBurst({ duration: 0.12, volume: 0.20, filterType: 'bandpass', filterFreq: 850 + i*110, q: 3.5, attack: 0.002, decay: 0.11 });
+      }, delayMs);
+    }
   }
   function playReverseShuffle() {
     if (!soundEnabled) return;
@@ -969,7 +1006,7 @@ function hideReverseCostDisplay() {
   }
 
   // Edge reversal spin animation state helpers
-  const EDGE_SPIN_PER_TRIANGLE_SEC = 0.06;
+  const EDGE_SPIN_PER_TRIANGLE_SEC = 0.08;
   function startEdgeReverseSpin(edge) {
     const s = nodes.get(edge.source);
     const t = nodes.get(edge.target);
@@ -1054,6 +1091,12 @@ function hideReverseCostDisplay() {
     eliminatedPlayers.clear();
     playerOrder = [];
 
+    // Clear any lingering edge flow labels between games
+    edgeFlowTexts.forEach(text => {
+      if (text) text.destroy();
+    });
+    edgeFlowTexts.clear();
+
     activeAbility = null;
     bridgeFirstNode = null;
     hideBridgeCostDisplay();
@@ -1068,8 +1111,18 @@ function hideReverseCostDisplay() {
 
     if (Array.isArray(msg.edges)) {
       for (const arr of msg.edges) {
-        const [id, s, t] = arr;
-        edges.set(id, { source: s, target: t, on: false, flowing: false, flowStartTime: null });
+        const [id, s, t, _forward, _always1, buildReq = 0, buildElap = 0, building = 0] = arr;
+        edges.set(id, {
+          source: s,
+          target: t,
+          on: false,
+          flowing: false,
+          flowStartTime: null,
+          building: !!building,
+          buildTicksRequired: Number(buildReq || 0),
+          buildTicksElapsed: Number(buildElap || 0),
+          buildStartTime: animationTime,
+        });
       }
     }
 
@@ -1262,20 +1315,34 @@ function hideReverseCostDisplay() {
       msg.nodes.forEach(([id, size, owner]) => {
         const node = nodes.get(id);
         if (node) {
+          const oldOwner = node.owner;
           node.size = size;
           node.owner = owner;
+          if (oldOwner !== owner) {
+            // Enemy capture sound: you captured from someone else
+            if (owner === myPlayerId && oldOwner != null && oldOwner !== myPlayerId) {
+              playEnemyCaptureDing();
+            }
+            // Warning sound: you lost a node to someone else
+            if (oldOwner === myPlayerId && owner != null && owner !== myPlayerId) {
+              playLoseNodeWarning();
+            }
+          }
         }
       });
     }
 
     if (Array.isArray(msg.edges)) {
-      msg.edges.forEach(([id, on, flowing, forward, lastTransfer]) => {
+      msg.edges.forEach(([id, on, flowing, forward, lastTransfer, buildReq = 0, buildElap = 0, building = 0]) => {
         const edge = edges.get(id);
         if (!edge) return;
         const wasFlowing = edge.flowing;
         edge.on = !!on;
         edge.flowing = !!flowing;
         edge.lastTransfer = Number(lastTransfer) || 0;
+        edge.building = !!building;
+        edge.buildTicksRequired = Number(buildReq || 0);
+        edge.buildTicksElapsed = Number(buildElap || 0);
         if (!wasFlowing && edge.flowing) {
           edge.flowStartTime = animationTime;
         } else if (!edge.flowing) {
@@ -1384,7 +1451,11 @@ function hideReverseCostDisplay() {
         target: edge.target,
         on: edge.on,
         flowing: edge.flowing,
-        flowStartTime: edge.flowing ? animationTime : null
+        flowStartTime: edge.flowing ? animationTime : null,
+        building: !!edge.building,
+        buildTicksRequired: Number(edge.buildTicksRequired || 0),
+        buildTicksElapsed: Number(edge.buildTicksElapsed || 0),
+        buildStartTime: animationTime,
       });
       
       // Show cost indicator for bridge building
@@ -1408,7 +1479,7 @@ function hideReverseCostDisplay() {
       }
       // Play bridge sound if this action was from me (server includes cost for actor)
       if (msg.cost) {
-        playBridgeDonk();
+        playBridgeBuildSequence();
       }
       
       redrawStatic();
@@ -1551,7 +1622,18 @@ function hideReverseCostDisplay() {
           0xffd700, // golden color
           2000 // 2 seconds
         );
-        playCaptureDing();
+        // This is sent only to the capturer; differentiate neutral vs enemy capture by reward amount
+        if (Number(msg.reward) > 0) {
+          if (Number(msg.reward) >= 10) {
+            // neutral capture reward currently 10
+            playCaptureDing();
+          } else {
+            // enemy capture reward (if any) gets a slightly different cue
+            playEnemyCaptureDing();
+          }
+        } else {
+          playCaptureDing();
+        }
       }
     }
   }
@@ -2115,10 +2197,15 @@ function hideReverseCostDisplay() {
     if (candidateNodeId != null) {
       nodeId = candidateNodeId;
     } else {
-      const candidateEdgeId = pickEdgeNear(wx, wy, 14 / baseScale);
+    const candidateEdgeId = pickEdgeNear(wx, wy, 14 / baseScale);
       if (candidateEdgeId != null) {
         const e = edges.get(candidateEdgeId);
         if (e) {
+        // Block clicking edges that are still building
+        if (e.building) {
+          // Show a brief hint? For now, silently ignore
+          return;
+        }
           const sourceNode = nodes.get(e.source);
           // Only eligible if you own the source node
           if (sourceNode && sourceNode.owner === myPlayerId) edgeId = candidateEdgeId;
@@ -2486,6 +2573,11 @@ function hideReverseCostDisplay() {
       if (text) text.destroy();
     });
     nodeJuiceTexts.clear();
+    // Clean up edge flow text objects
+    edgeFlowTexts.forEach(text => {
+      if (text) text.destroy();
+    });
+    edgeFlowTexts.clear();
     
     // Clear targeting indicator
     currentTargetNodeId = null;
@@ -2786,7 +2878,7 @@ function hideReverseCostDisplay() {
     // Calculate actual spacing to ensure last triangle tip touches node edge
     const actualSpacing = len / packedCount;
     
-    const canLeftClick = (from && from.owner === myPlayerId);
+    const canLeftClick = (from && from.owner === myPlayerId) && !e.building;
     const canReverse = canReverseEdge(e);
 
     let hoverColor = null;
@@ -2801,7 +2893,12 @@ function hideReverseCostDisplay() {
         hoverAllowed = true;
       }
     }
-    for (let i = 0; i < packedCount; i++) {
+
+    // If edge is building: show progressive triangle addition animation from source to target
+    const buildingProgress = e.building ? Math.max(0, Math.min(1, (e.buildTicksElapsed || 0) / Math.max(1, e.buildTicksRequired || 1))) : 1;
+    const visibleTriangles = Math.max(1, Math.floor(packedCount * buildingProgress));
+
+    for (let i = 0; i < (e.building ? visibleTriangles : packedCount); i++) {
       const cx = sx + (i + 0.5) * actualSpacing * ux;
       const cy = sy + (i + 0.5) * actualSpacing * uy;
       drawTriangle(cx, cy, triW, triH, angle, e, from, hoverColor, hoverAllowed, i, packedCount);
@@ -2817,7 +2914,7 @@ function hideReverseCostDisplay() {
       const elapsed = Math.max(0, animationTime - e._spin.spinStartTime);
       const perIndexDelay = EDGE_SPIN_PER_TRIANGLE_SEC;
       const local = Math.max(0, elapsed - (triangleIndex || 0) * perIndexDelay);
-      const spinPhase = Math.min(1, local / 0.18); // 180deg over ~0.18s
+      const spinPhase = Math.min(1, local / 0.24); // 180deg over ~0.24s (slower)
       finalAngle = angle + Math.PI * spinPhase;
     }
     const p1 = rotatePoint(cx + height / 2, cy, cx, cy, finalAngle); // tip
