@@ -7,7 +7,7 @@ exposing simple controls for ticking and lifecycle.
 from typing import Optional, Tuple
 
 from .game_engine import GameEngine
-from .bots import BotPlayer
+from .bots import Bot1
 
 
 class BotGameManager:
@@ -30,7 +30,7 @@ class BotGameManager:
             speed_level = max(1, min(5, speed_level))
 
             # Create bot player with specified difficulty
-            self.bot_player = BotPlayer(player_id=2, color="#3388ff", difficulty=difficulty)
+            self.bot_player = Bot1(player_id=2, color="#3388ff", difficulty=difficulty)
             self.human_token = human_token
 
             from .message_handlers import PLAYER_COLOR_SCHEMES  # avoid circular import at top level

@@ -10,9 +10,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from .game_engine import GameEngine
 from .constants import BRIDGE_COST_PER_UNIT_DISTANCE
 
-
-class BotPlayer:
-    """AI bot that can play the game with different difficulty levels."""
+class BotTemplate:
 
     def __init__(self, player_id: int = 2, color: str = "#3388ff", difficulty: str = "hard"):
         self.player_id = player_id
@@ -20,7 +18,7 @@ class BotPlayer:
         self.game_engine: Optional[GameEngine] = None
         self.bot_token = "bot_token_" + str(int(time.time()))
         self.last_action_time = 0.0
-        self.action_cooldown = 2.0  # Minimum seconds between actions
+        self.action_cooldown = 0.5  # Minimum seconds between actions
         self.last_bridge_time = 0.0
         self.bridge_cooldown = 8.0  # Extra delay between bridge builds
         self.bridge_gold_reserve = 10.0  # Keep a proportional gold buffer when bridging
@@ -48,7 +46,7 @@ class BotPlayer:
 
         # If we haven't picked a starting node yet, do that first
         if not self.game_engine.state.players_who_picked.get(self.player_id, False):
-            success = self._pick_optimal_starting_node()
+            success = self._pick_starting_node()
             if success:
                 self.last_action_time = current_time
             return success
@@ -59,8 +57,71 @@ class BotPlayer:
             self.last_action_time = current_time
         return success
 
+    def _pick_starting_node(self) -> bool:
+        """
+        Find and pick the optimal starting node.
+        Optimal = can expand to the most nodes without ever having to flip any edges.
+        """
+        return False
 
-    def _pick_optimal_starting_node(self) -> bool:
+    def _make_move(self) -> bool:
+        """
+        Make a move based on the current game state and difficulty level.
+        Returns True if a move was made, False if no move was possible.
+        """
+        return False
+
+    def _count_expandable_nodes(self, start_node_id: int) -> int:
+        """
+        Count how many unowned nodes can be reached from the starting node
+        without ever having to flip any edges.
+        """
+        if not self.game_engine or not self.game_engine.state:
+            return 0
+
+        visited = set()
+        queue = [start_node_id]
+        expandable_count = 0
+
+        while queue:
+            current_node_id = queue.pop(0)
+            if current_node_id in visited:
+                continue
+
+            visited.add(current_node_id)
+            current_node = self.game_engine.state.nodes.get(current_node_id)
+            if not current_node:
+                continue
+
+            # Check all edges from this node
+            for edge_id in current_node.attached_edge_ids:
+                edge = self.game_engine.state.edges.get(edge_id)
+                if not edge:
+                    continue
+
+                # Check if this edge goes FROM the current node (no flipping needed)
+                if edge.source_node_id == current_node_id:
+                    target_node_id = edge.target_node_id
+                    target_node = self.game_engine.state.nodes.get(target_node_id)
+
+                    # If target is unowned, we can expand to it
+                    if target_node and target_node.owner is None:
+                        if target_node_id not in visited:
+                            queue.append(target_node_id)
+                            expandable_count += 1
+
+        return expandable_count
+
+    def _calculate_bridge_cost(self, from_node, to_node) -> int:
+        """Delegate bridge cost calculation to the game engine for consistency."""
+        if not self.game_engine:
+            return 0
+        return self.game_engine.calculate_bridge_cost(from_node, to_node)
+
+
+class Bot1(BotTemplate):
+
+    def _pick_starting_node(self) -> bool:
         """
         Find and pick the optimal starting node.
         Optimal = can expand to the most nodes without ever having to flip any edges.
@@ -103,47 +164,6 @@ class BotPlayer:
                 best_node_id = node_id
 
         return best_node_id
-
-    def _count_expandable_nodes(self, start_node_id: int) -> int:
-        """
-        Count how many unowned nodes can be reached from the starting node
-        without ever having to flip any edges.
-        """
-        if not self.game_engine or not self.game_engine.state:
-            return 0
-
-        visited = set()
-        queue = [start_node_id]
-        expandable_count = 0
-
-        while queue:
-            current_node_id = queue.pop(0)
-            if current_node_id in visited:
-                continue
-
-            visited.add(current_node_id)
-            current_node = self.game_engine.state.nodes.get(current_node_id)
-            if not current_node:
-                continue
-
-            # Check all edges from this node
-            for edge_id in current_node.attached_edge_ids:
-                edge = self.game_engine.state.edges.get(edge_id)
-                if not edge:
-                    continue
-
-                # Check if this edge goes FROM the current node (no flipping needed)
-                if edge.source_node_id == current_node_id:
-                    target_node_id = edge.target_node_id
-                    target_node = self.game_engine.state.nodes.get(target_node_id)
-
-                    # If target is unowned, we can expand to it
-                    if target_node and target_node.owner is None:
-                        if target_node_id not in visited:
-                            queue.append(target_node_id)
-                            expandable_count += 1
-
-        return expandable_count
 
     async def _make_move(self) -> bool:
         """
@@ -252,12 +272,6 @@ class BotPlayer:
                     return True
 
         return False
-
-    def _calculate_bridge_cost(self, from_node, to_node) -> int:
-        """Delegate bridge cost calculation to the game engine for consistency."""
-        if not self.game_engine:
-            return 0
-        return self.game_engine.calculate_bridge_cost(from_node, to_node)
 
     def _count_downstream_reach(self, start_node_id: int, include_enemy: bool = True, max_depth: int = 16) -> int:
         """Count how many nodes are reachable following edge directions from a start node.
@@ -659,3 +673,419 @@ class BotPlayer:
         return False
 
 
+
+
+class Bot2(Bot1):
+
+    def __init__(self, player_id: int = 2, color: str = "#66bb6a", difficulty: str = "hard"):
+        super().__init__(player_id=player_id, color=color, difficulty=difficulty)
+        # Slightly slower targeting to prioritize structural fixes first
+        self.target_cooldown = 3.5
+        # Stronger reserve to avoid overspending while reconnecting
+        self.bridge_gold_reserve = 14.0
+
+    # ---------- Improved Start Selection ----------
+    def _find_optimal_starting_node(self) -> Optional[int]:
+        """
+        Choose start by combining natural expansion potential with distance from board center.
+        We prefer nodes farther from center (safer roots near map edge) while keeping strong expansion.
+        score = expansion_count * (1 + distance_norm * center_bias)
+        """
+        if not self.game_engine or not self.game_engine.state:
+            return None
+
+        center_x, center_y, max_dist = self._compute_board_center()
+        if max_dist <= 0.0:
+            max_dist = 1.0
+
+        best_node_id: Optional[int] = None
+        best_score: float = -1.0
+
+        # Bias controls how much distance-from-center matters relative to expansion
+        center_bias = 1.0
+
+        for node_id, node in self.game_engine.state.nodes.items():
+            if node.owner is not None:
+                continue
+
+            expansion = self._count_expandable_nodes(node_id)
+            # Distance from center, normalized by half-diagonal
+            dx = node.x - center_x
+            dy = node.y - center_y
+            dist = math.hypot(dx, dy)
+            distance_norm = min(1.0, max(0.0, dist / max_dist))
+
+            score = float(expansion) * (1.0 + distance_norm * center_bias)
+            if score > best_score:
+                best_score = score
+                best_node_id = node_id
+
+        return best_node_id
+
+    # ---------- Move Strategy Overrides ----------
+    async def _make_move(self) -> bool:
+        """
+        Bot2 priorities:
+        1) Reconnect dead-end owned branches back into active rivers (within-island allowed)
+        2) Prefer cheap, high-yield single-edge reversals over bridges
+        3) Focus energy on a single high-value target (inherited targeting)
+        4) Offensive bridges to weak, high-reach enemy targets
+        5) Neutral bridges almost exclusively for new islands (not same-island expansion)
+        """
+        # 1) Reconnect branches first
+        if await self._try_reconnect_branches():
+            return True
+
+        # 2) Prefer edge reversals early with broadened conditions
+        if await self._try_edge_reversal_for_expansion_bot2():
+            return True
+
+        # 3) Targeting to concentrate pressure
+        if self._try_target_best_node():
+            return True
+
+        # 4) Offensive bridge (to enemy)
+        if await self._try_offensive_bridge_building():
+            return True
+
+        # 5) Neutral bridge for new islands only
+        if await self._try_bridge_building_new_islands_only():
+            return True
+
+        return False
+
+    # ---------- Reconnection Logic ----------
+    async def _try_reconnect_branches(self) -> bool:
+        """Find owned dead-end branches and connect them to active rivers or attack if not viable."""
+        if not self.game_engine or not self.game_engine.state:
+            return False
+
+        current_time = time.time()
+        if current_time - self.last_bridge_time < self.bridge_cooldown:
+            return False
+
+        state = self.game_engine.state
+        available_gold = state.player_gold.get(self.player_id, 0)
+        if available_gold <= self.bridge_gold_reserve:
+            return False
+
+        dead_end_nodes = self._find_dead_end_owned_nodes()
+        if not dead_end_nodes:
+            return False
+
+        reasonable_cost = self._estimate_reasonable_bridge_cost()
+
+        # Try to reconnect each dead-end to an active owned node first
+        for leaf in dead_end_nodes:
+            reconnect_target, reconnect_cost = self._find_best_reconnect_bridge(leaf, cost_ceiling=reasonable_cost)
+            if reconnect_target is not None and reconnect_cost is not None:
+                current_gold = state.player_gold.get(self.player_id, 0)
+                if current_gold >= reconnect_cost and current_gold - reconnect_cost >= self.bridge_gold_reserve:
+                    success, new_edge, actual_cost, error_msg = self.game_engine.handle_build_bridge(
+                        self.bot_token, leaf.id, reconnect_target.id, reconnect_cost
+                    )
+                    if success and new_edge:
+                        # Turn it on to immediately route flow
+                        if not new_edge.on:
+                            self.game_engine.handle_edge_click(self.bot_token, new_edge.id)
+                        self.last_bridge_time = current_time
+                        return True
+
+        # If no cheap reconnection, use the dead-end as an attack spearhead
+        for leaf in dead_end_nodes:
+            enemy_target, attack_cost = self._find_best_enemy_attack_from_source(leaf, cost_ceiling=reasonable_cost)
+            if enemy_target is not None and attack_cost is not None:
+                current_gold = state.player_gold.get(self.player_id, 0)
+                if current_gold >= attack_cost and current_gold - attack_cost >= self.bridge_gold_reserve:
+                    success, new_edge, actual_cost, error_msg = self.game_engine.handle_build_bridge(
+                        self.bot_token, leaf.id, enemy_target.id, attack_cost
+                    )
+                    if success and new_edge:
+                        self.last_bridge_time = current_time
+                        return True
+
+        return False
+
+    def _find_dead_end_owned_nodes(self) -> List[object]:
+        """Identify owned nodes that currently pool with no downstream to neutral/enemy.
+        Prefer nodes with some capacity (juice/intake) and zero outward edges.
+        """
+        if not self.game_engine or not self.game_engine.state:
+            return []
+        state = self.game_engine.state
+        dead_ends: List[object] = []
+        for node in state.nodes.values():
+            if node.owner != self.player_id:
+                continue
+            # No directed outgoing edges
+            out_edges = 0
+            for eid in node.attached_edge_ids:
+                e = state.edges.get(eid)
+                if e and e.source_node_id == node.id:
+                    out_edges += 1
+
+            # Lacks any path to a non-owned node
+            if out_edges == 0 and not self._has_path_to_non_owned(node.id, max_depth=20):
+                # Ensure capacity so reconnecting is useful
+                if self._source_has_flow_capacity(node):
+                    dead_ends.append(node)
+        return dead_ends
+
+    def _has_path_to_non_owned(self, start_node_id: int, max_depth: int = 20) -> bool:
+        if not self.game_engine or not self.game_engine.state:
+            return False
+        state = self.game_engine.state
+        visited: Set[int] = set([start_node_id])
+        queue: deque[Tuple[int, int]] = deque([(start_node_id, 0)])
+        while queue:
+            node_id, depth = queue.popleft()
+            if depth >= max_depth:
+                continue
+            node = state.nodes.get(node_id)
+            if not node:
+                continue
+            for eid in node.attached_edge_ids:
+                e = state.edges.get(eid)
+                if not e or e.source_node_id != node_id:
+                    continue
+                nxt_id = e.target_node_id
+                if nxt_id in visited:
+                    continue
+                nxt = state.nodes.get(nxt_id)
+                if not nxt:
+                    continue
+                if nxt.owner is None or nxt.owner != self.player_id:
+                    return True
+                visited.add(nxt_id)
+                queue.append((nxt_id, depth + 1))
+        return False
+
+    def _find_best_reconnect_bridge(self, leaf_node, cost_ceiling: float) -> Tuple[Optional[object], Optional[float]]:
+        """Pick cheapest owned target that has a path to non-owned, avoiding self.
+        Returns (target_node, cost).
+        """
+        if not self.game_engine or not self.game_engine.state:
+            return (None, None)
+        state = self.game_engine.state
+        best: Tuple[Optional[object], Optional[float]] = (None, None)
+        for candidate in state.nodes.values():
+            if candidate.id == leaf_node.id:
+                continue
+            if candidate.owner != self.player_id:
+                continue
+            # Prefer targets that actually lead somewhere
+            if not self._has_path_to_non_owned(candidate.id, max_depth=20):
+                continue
+            # Skip if edge already exists
+            if self._edge_exists_between_nodes(leaf_node.id, candidate.id):
+                continue
+            cost = float(self._calculate_bridge_cost(leaf_node, candidate))
+            if cost > cost_ceiling:
+                continue
+            if best[1] is None or cost < best[1]:
+                best = (candidate, cost)
+        return best
+
+    def _find_best_enemy_attack_from_source(self, source_node, cost_ceiling: float) -> Tuple[Optional[object], Optional[float]]:
+        """From a given source, select an enemy node to attack using a composite value/cost heuristic."""
+        if not self.game_engine or not self.game_engine.state:
+            return (None, None)
+        state = self.game_engine.state
+        candidates: List[Tuple[float, object, float]] = []  # (-score, node, cost)
+        for node in state.nodes.values():
+            if node.owner is None or node.owner == self.player_id:
+                continue
+            # Value estimate like Bot1
+            out_edges = 0
+            for eid in node.attached_edge_ids:
+                e = state.edges.get(eid)
+                if e and e.source_node_id == node.id:
+                    out_edges += 1
+            if out_edges == 0:
+                continue
+            inflow = max(0.0, node.cur_intake)
+            pressure = out_edges / (1.0 + inflow)
+            if pressure < 0.4:
+                continue
+            reach = self._count_downstream_reach(node.id, include_enemy=True)
+            value = reach * 0.6 + pressure * 3.0
+
+            if self._edge_exists_between_nodes(source_node.id, node.id):
+                continue
+            cost = float(self._calculate_bridge_cost(source_node, node))
+            if cost > cost_ceiling:
+                continue
+            candidates.append((-value / max(1.0, cost), node, cost))
+
+        if not candidates:
+            return (None, None)
+        candidates.sort()
+        _, best_node, best_cost = candidates[0]
+        return (best_node, best_cost)
+
+    # ---------- Edge Reversal Tweaks ----------
+    async def _try_edge_reversal_for_expansion_bot2(self) -> bool:
+        """Broadened reversal: allow single-step neutral captures even for small branches.
+        Strongly prefer reversal when cost-effective compared to typical bridge costs.
+        """
+        if not self.game_engine or not self.game_engine.state:
+            return False
+        state = self.game_engine.state
+
+        reasonable_cost = self._estimate_reasonable_bridge_cost()
+        candidates: List[Tuple[float, int]] = []  # (negative score, edge_id)
+        for edge in state.edges.values():
+            src = state.nodes.get(edge.source_node_id)
+            tgt = state.nodes.get(edge.target_node_id)
+            if not src or not tgt:
+                continue
+
+            # If edge points from neutral into our owned node, reversing lets us flow outward
+            if tgt.owner == self.player_id and src.owner is None:
+                expansion = self._count_expandable_nodes(src.id)
+                # Allow even small expansions; we'll filter by cost
+                if expansion <= 0:
+                    continue
+                cost = float(self._calculate_bridge_cost(src, tgt))
+                if state.player_gold.get(self.player_id, 0) < cost:
+                    continue
+                # Encourage reversal when clearly cheaper than typical bridge
+                if cost > reasonable_cost * 0.9:
+                    # Still allow but downweight
+                    score = (expansion / max(1.0, cost)) * 0.6
+                else:
+                    score = expansion / max(1.0, cost)
+                candidates.append((-score, edge.id))
+
+        if not candidates:
+            return False
+        candidates.sort()
+        _, best_edge_id = candidates[0]
+        e = state.edges.get(best_edge_id)
+        if not e:
+            return False
+        from_node = state.nodes.get(e.source_node_id)
+        to_node = state.nodes.get(e.target_node_id)
+        if not from_node or not to_node:
+            return False
+        cost = float(self._calculate_bridge_cost(from_node, to_node))
+        if state.player_gold.get(self.player_id, 0) < cost:
+            return False
+        success = self.game_engine.handle_reverse_edge(self.bot_token, e.id, cost)
+        return bool(success)
+
+    # ---------- Neutral Bridge Policy: New Islands Only ----------
+    async def _try_bridge_building_new_islands_only(self) -> bool:
+        """Only build neutral bridges to nodes on different undirected islands; skip same-island expansion."""
+        if not self.game_engine or not self.game_engine.state:
+            return False
+
+        current_time = time.time()
+        if current_time - self.last_bridge_time < self.bridge_cooldown:
+            return False
+
+        state = self.game_engine.state
+        available_gold = state.player_gold.get(self.player_id, 0)
+        if available_gold <= self.bridge_gold_reserve:
+            return False
+
+        reachable_without_bridges = self._compute_reachable_nodes(include_enemy=False)
+        reasonable_cost = self._estimate_reasonable_bridge_cost()
+
+        candidates: List[Tuple[float, int, float, int, int]] = []
+        for owned_node_id, owned_node in state.nodes.items():
+            if owned_node.owner != self.player_id:
+                continue
+            if not self._source_has_flow_capacity(owned_node):
+                continue
+            for target_node_id, target_node in state.nodes.items():
+                if target_node.owner is not None:
+                    continue
+                if target_node_id == owned_node_id:
+                    continue
+                if self._edge_exists_between_nodes(owned_node_id, target_node_id):
+                    continue
+                # Skip if already reachable by directed flow
+                if target_node_id in reachable_without_bridges:
+                    continue
+                # Require different undirected island to prioritize true new-land grabs
+                if self._is_same_island(owned_node_id, target_node_id):
+                    continue
+
+                cost = float(self._calculate_bridge_cost(owned_node, target_node))
+                if cost > reasonable_cost:
+                    continue
+                current_gold = state.player_gold.get(self.player_id, 0)
+                if current_gold < cost or current_gold - cost < self.bridge_gold_reserve:
+                    continue
+                expansion_score = self._count_expandable_nodes(target_node_id)
+                if expansion_score <= 0:
+                    continue
+
+                dx = target_node.x - owned_node.x
+                dy = target_node.y - owned_node.y
+                distance = math.hypot(dx, dy)
+                candidates.append((cost, -float(expansion_score), distance, owned_node_id, target_node_id))
+
+        if not candidates:
+            return False
+
+        candidates.sort()
+        for cost, _, _, owned_node_id, target_node_id in candidates:
+            current_gold = state.player_gold.get(self.player_id, 0)
+            if current_gold < cost or current_gold - cost < self.bridge_gold_reserve:
+                continue
+            success, new_edge, actual_cost, error_msg = self.game_engine.handle_build_bridge(
+                self.bot_token, owned_node_id, target_node_id, cost
+            )
+            if success and new_edge:
+                if not new_edge.on:
+                    self.game_engine.handle_edge_click(self.bot_token, new_edge.id)
+                self.last_bridge_time = current_time
+                return True
+
+        return False
+
+    # ---------- Graph Helpers ----------
+    def _compute_board_center(self) -> Tuple[float, float, float]:
+        """Return (center_x, center_y, max_radius) where max_radius is half of bbox diagonal."""
+        if not self.game_engine or not self.game_engine.state or not self.game_engine.state.nodes:
+            return (0.0, 0.0, 1.0)
+        xs: List[float] = []
+        ys: List[float] = []
+        for n in self.game_engine.state.nodes.values():
+            xs.append(float(n.x))
+            ys.append(float(n.y))
+        min_x, max_x = min(xs), max(xs)
+        min_y, max_y = min(ys), max(ys)
+        center_x = (min_x + max_x) / 2.0
+        center_y = (min_y + max_y) / 2.0
+        half_w = (max_x - min_x) / 2.0
+        half_h = (max_y - min_y) / 2.0
+        max_radius = math.hypot(half_w, half_h)
+        return (center_x, center_y, max_radius if max_radius > 0.0 else 1.0)
+
+    def _is_same_island(self, node_id_a: int, node_id_b: int) -> bool:
+        """Undirected connectivity via existing edges indicates same island."""
+        if not self.game_engine or not self.game_engine.state:
+            return True
+        state = self.game_engine.state
+        visited: Set[int] = set([node_id_a])
+        queue: deque[int] = deque([node_id_a])
+        while queue:
+            nid = queue.popleft()
+            if nid == node_id_b:
+                return True
+            node = state.nodes.get(nid)
+            if not node:
+                continue
+            for eid in node.attached_edge_ids:
+                e = state.edges.get(eid)
+                if not e:
+                    continue
+                # Traverse undirected: both directions
+                for nxt_id in (e.source_node_id, e.target_node_id):
+                    if nxt_id not in visited:
+                        visited.add(nxt_id)
+                        queue.append(nxt_id)
+        return False
