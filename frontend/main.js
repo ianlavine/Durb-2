@@ -109,7 +109,12 @@
 
   let sceneRef = null;
   let quitButton = null;
+  let rematchButton = null;
+  let postgameNotice = null;
   let lobbyBackButton = null;
+  let currentPostgameGroupId = null;
+  let opponentHasLeft = false;
+  let iHaveRematched = false;
   
   // Sound system
   let soundEnabled = true; // persisted in localStorage
@@ -688,7 +693,8 @@ function hideReverseCostDisplay() {
     document.body.appendChild(quitBtn);
     quitBtn.addEventListener('click', () => {
       const token = localStorage.getItem('token');
-      if (!gameEnded && !myEliminated && ws && ws.readyState === WebSocket.OPEN) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      if (!gameEnded && !myEliminated) {
         ws.send(JSON.stringify({ type: 'quitGame', token }));
         myEliminated = true;
         updateQuitButtonLabel();
@@ -698,16 +704,72 @@ function hideReverseCostDisplay() {
         }
         return;
       }
-
-      if (gameEnded || myEliminated) {
-        returnToMenu();
+      // Postgame: leaving rematch flow
+      if (currentPostgameGroupId && !opponentHasLeft) {
+        ws.send(JSON.stringify({ type: 'postgameQuit', groupId: currentPostgameGroupId, token }));
       }
+    }
+
+    if (gameEnded || myEliminated) {
+      returnToMenu();
+    }
     });
     quitButton = quitBtn;
+
+    // Rematch UI elements (created once)
+    rematchButton = document.createElement('button');
+    rematchButton.textContent = 'Rematch';
+    Object.assign(rematchButton.style, {
+      position: 'absolute', left: '10px', top: '56px', zIndex: 10,
+      padding: '10px 18px', borderRadius: '10px', border: 'none',
+      background: '#7ee49c', color: '#0a2f18', cursor: 'pointer',
+      boxShadow: '0 6px 18px rgba(0,0,0,0.35)', display: 'none',
+      transition: 'transform 120ms ease, background 160ms ease, color 160ms ease, box-shadow 160ms ease'
+    });
+    rematchButton.addEventListener('mouseenter', () => {
+      if (rematchButton.dataset.state !== 'selected') rematchButton.style.transform = 'scale(1.03)';
+    });
+    rematchButton.addEventListener('mouseleave', () => {
+      rematchButton.style.transform = 'scale(1.0)';
+    });
+    document.body.appendChild(rematchButton);
+    rematchButton.addEventListener('click', () => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      if (!currentPostgameGroupId) return;
+      if (iHaveRematched) return;
+      const token = localStorage.getItem('token');
+      ws.send(JSON.stringify({ type: 'postgameRematch', groupId: currentPostgameGroupId, token }));
+      iHaveRematched = true;
+      rematchButton.dataset.state = 'selected';
+      rematchButton.style.background = '#3a8f56';
+      rematchButton.style.color = '#cfe8d6';
+      rematchButton.style.boxShadow = '0 2px 10px rgba(0,0,0,0.4) inset';
+      rematchButton.style.transform = 'scale(0.98)';
+    });
+
+    postgameNotice = document.createElement('div');
+    postgameNotice.textContent = '';
+    Object.assign(postgameNotice.style, {
+      position: 'absolute', left: '10px', top: '58px', zIndex: 10,
+      padding: '8px 10px', borderRadius: '8px', color: '#b22222',
+      background: 'rgba(0,0,0,0.0)', display: 'none', font: '16px/1.2 monospace'
+    });
+    document.body.appendChild(postgameNotice);
     // Toggle quit button visibility based on menu
     const observer = new MutationObserver(() => {
       const menuVisible = !menu.classList.contains('hidden');
       quitBtn.style.display = menuVisible ? 'none' : 'block';
+      // Rematch UI only visible when not in menu and after game ends
+      const showRematchUI = !menuVisible && gameEnded && !!currentPostgameGroupId && !opponentHasLeft;
+      rematchButton.style.display = showRematchUI ? 'block' : 'none';
+      postgameNotice.style.display = (!menuVisible && opponentHasLeft) ? 'block' : 'none';
+      // Ensure spacing alignment with quit
+      rematchButton.style.left = quitBtn.style.left;
+      try {
+        const quitTop = parseInt(quitBtn.style.top.replace('px','') || '10', 10);
+        rematchButton.style.top = (quitTop + 46) + 'px';
+        postgameNotice.style.top = (quitTop + 48) + 'px';
+      } catch (e) {}
     });
     observer.observe(menu, { attributes: true, attributeFilter: ['class'] });
     // Also hide win/lose overlay when menu is visible (keep settings panel state)
@@ -1044,10 +1106,29 @@ function hideReverseCostDisplay() {
       else if (msg.type === 'destroyError') handleDestroyError(msg);
       else if (msg.type === 'nodeCaptured') handleNodeCaptured(msg);
       else if (msg.type === 'lobbyTimeout') handleLobbyTimeout();
+      else if (msg.type === 'postgame') handlePostgame(msg);
+      else if (msg.type === 'postgameRematchUpdate') handlePostgameRematchUpdate(msg);
+      else if (msg.type === 'postgameOpponentLeft') handlePostgameOpponentLeft();
     };
   }
 
   function handleInit(msg) {
+    // Clear any postgame UI on new init
+    currentPostgameGroupId = null;
+    opponentHasLeft = false;
+    iHaveRematched = false;
+    if (rematchButton) {
+      rematchButton.style.display = 'none';
+      rematchButton.dataset.state = '';
+      rematchButton.style.background = '#7ee49c';
+      rematchButton.style.color = '#0a2f18';
+      rematchButton.style.boxShadow = '0 6px 18px rgba(0,0,0,0.35)';
+      rematchButton.style.transform = 'scale(1.0)';
+    }
+    if (postgameNotice) {
+      postgameNotice.textContent = '';
+      postgameNotice.style.display = 'none';
+    }
     gameEnded = false;
     myEliminated = false;
     updateQuitButtonLabel();
@@ -1067,6 +1148,12 @@ function hideReverseCostDisplay() {
     playerStats.clear();
     eliminatedPlayers.clear();
     playerOrder = [];
+
+    // Clear any lingering node number labels between games
+    nodeJuiceTexts.forEach(text => {
+      if (text) text.destroy();
+    });
+    nodeJuiceTexts.clear();
 
     // Clear any lingering edge flow labels between games
     edgeFlowTexts.forEach(text => {
@@ -1230,6 +1317,43 @@ function hideReverseCostDisplay() {
     }
   }
 
+  function handlePostgame(msg) {
+    currentPostgameGroupId = msg.groupId || null;
+    opponentHasLeft = false;
+    iHaveRematched = false;
+    if (!currentPostgameGroupId) return;
+    const menu = document.getElementById('menu');
+    const menuVisible = menu ? !menu.classList.contains('hidden') : false;
+    if (rematchButton && !menuVisible && gameEnded) {
+      rematchButton.style.display = 'block';
+      rematchButton.dataset.state = '';
+      rematchButton.style.background = '#7ee49c';
+      rematchButton.style.color = '#0a2f18';
+      rematchButton.style.boxShadow = '0 6px 18px rgba(0,0,0,0.35)';
+      rematchButton.style.transform = 'scale(1.0)';
+    }
+    if (postgameNotice) {
+      postgameNotice.textContent = '';
+      postgameNotice.style.display = 'none';
+    }
+  }
+
+  function handlePostgameRematchUpdate(msg) {
+    // Currently we don't need to render counts; could add small ready indicator later
+  }
+
+  function handlePostgameOpponentLeft() {
+    opponentHasLeft = true;
+    if (rematchButton) rematchButton.style.display = 'none';
+    if (postgameNotice) {
+      postgameNotice.textContent = 'Opponent has left';
+      postgameNotice.style.color = '#b22222';
+      const menu = document.getElementById('menu');
+      const menuVisible = menu ? !menu.classList.contains('hidden') : false;
+      postgameNotice.style.display = menuVisible ? 'none' : 'block';
+    }
+  }
+
   function handleLobby(msg) {
     const lobby = document.getElementById('lobby');
     if (lobby) {
@@ -1287,6 +1411,7 @@ function hideReverseCostDisplay() {
     if (buttonContainer) {
       buttonContainer.style.display = 'flex';
     }
+    // Postgame rematch UI is handled via websocket 'postgame' message
     // Don't show menu immediately - wait for user to click Quit button
   }
 
@@ -1789,6 +1914,8 @@ function hideReverseCostDisplay() {
           // Cache last owner to avoid unnecessary color updates
           juiceText._lastOwner = n.owner;
         } else {
+          // Always re-center text to the node's current screen position
+          juiceText.setPosition(nx, ny);
           // Update only when changed to reduce per-frame overhead
           const newTextValue = juiceValue.toString();
           if (juiceText.text !== newTextValue) {

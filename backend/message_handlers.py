@@ -29,6 +29,9 @@ class MessageRouter:
             "toggleAutoExpand": self.handle_toggle_auto_expand,
             "newGame": self.handle_new_game,
             "nodeCaptured": self.handle_node_captured_flush,
+            # Postgame / rematch flow
+            "postgameRematch": self.handle_postgame_rematch,
+            "postgameQuit": self.handle_postgame_quit,
         }
 
     async def route_message(
@@ -821,19 +824,118 @@ class MessageRouter:
         winner_id: int,
         server_context: Dict[str, Any],
     ) -> None:
+        # Announce game over
         payload = json.dumps({"type": "gameOver", "winnerId": winner_id})
         for websocket in list(game_info.get("clients", {}).values()):
             if websocket:
                 await self._send_safe(websocket, payload)
 
-        # Clean up mappings
+        # Establish a postgame group for rematch handling with the same players
+        try:
+            import uuid  # local import to avoid top-level circulars
+            postgame_groups = server_context.setdefault("postgame_groups", {})
+
+            # Gather players (tokens) and their websockets in original join order
+            clients = game_info.get("clients", {})
+            tokens = list(clients.keys())
+            group_id = uuid.uuid4().hex
+            postgame_groups[group_id] = {
+                "tokens": tokens,
+                "clients": dict(clients),  # token -> websocket (may contain None)
+                "speed_level": game_info.get("speed_level", 3),
+                "created_at": time.time(),
+                "rematch_votes": set(),
+            }
+
+            # Notify clients that postgame rematch is available
+            post_payload = json.dumps({"type": "postgame", "groupId": group_id})
+            for websocket in list(clients.values()):
+                if websocket:
+                    await self._send_safe(websocket, post_payload)
+        except Exception:
+            # If anything goes wrong, proceed with normal cleanup
+            pass
+
+        # Clean up game registry but keep ws->token so we can detect postgame disconnects
         token_to_game = server_context.get("token_to_game", {})
-        ws_to_token = server_context.get("ws_to_token", {})
-        for token, websocket in list(game_info.get("clients", {}).items()):
+        for token in list(game_info.get("clients", {}).keys()):
             token_to_game.pop(token, None)
-            if websocket:
-                ws_to_token.pop(websocket, None)
         server_context.get("games", {}).pop(game_id, None)
+
+    async def handle_postgame_rematch(
+        self,
+        websocket: websockets.WebSocketServerProtocol,
+        msg: Dict[str, Any],
+        server_context: Dict[str, Any],
+    ) -> None:
+        group_id = msg.get("groupId")
+        token = msg.get("token")
+        if not group_id or not token:
+            return
+
+        groups: Dict[str, Dict[str, Any]] = server_context.setdefault("postgame_groups", {})
+        group = groups.get(group_id)
+        if not group:
+            return
+
+        if token not in group.get("tokens", []):
+            return
+
+        # Record vote
+        group.setdefault("rematch_votes", set()).add(token)
+
+        # Broadcast readiness update (optional UX)
+        update_payload = json.dumps({
+            "type": "postgameRematchUpdate",
+            "groupId": group_id,
+            "ready": list(group.get("rematch_votes", set())),
+        })
+        for tok, ws in list(group.get("clients", {}).items()):
+            if ws:
+                await self._send_safe(ws, update_payload)
+
+        # If everyone voted, start a new game with the same set of tokens
+        tokens = list(group.get("tokens", []))
+        votes = group.get("rematch_votes", set())
+        if len(tokens) > 0 and len(votes) == len(tokens):
+            # Build players array for _start_friend_game
+            speed_level = int(group.get("speed_level", 3))
+            players = []
+            for t in tokens:
+                players.append({
+                    "token": t,
+                    "websocket": group.get("clients", {}).get(t),
+                    "auto_expand": False,
+                    "speed_level": speed_level,
+                })
+            # Remove group before starting to avoid reentrancy issues
+            groups.pop(group_id, None)
+            await self._start_friend_game(players, len(players), server_context)
+
+    async def handle_postgame_quit(
+        self,
+        websocket: websockets.WebSocketServerProtocol,
+        msg: Dict[str, Any],
+        server_context: Dict[str, Any],
+    ) -> None:
+        group_id = msg.get("groupId")
+        token = msg.get("token")
+        if not group_id or not token:
+            return
+
+        groups: Dict[str, Dict[str, Any]] = server_context.setdefault("postgame_groups", {})
+        group = groups.get(group_id)
+        if not group:
+            return
+
+        # Notify others and dissolve the group
+        notice = json.dumps({"type": "postgameOpponentLeft"})
+        for tok, ws in list(group.get("clients", {}).items()):
+            if tok == token:
+                continue
+            if ws:
+                await self._send_safe(ws, notice)
+        groups.pop(group_id, None)
 
     async def _send_safe(self, websocket: Optional[websockets.WebSocketServerProtocol], payload: str) -> None:
         if not websocket:

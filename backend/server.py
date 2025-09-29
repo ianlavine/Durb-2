@@ -72,6 +72,24 @@ class WebSocketServer:
         if not token:
             return
 
+        # If user was in a postgame rematch group, notify others and dissolve it
+        postgame_groups = self.server_context.setdefault("postgame_groups", {})
+        group_id_to_remove: Optional[str] = None
+        for group_id, group in list(postgame_groups.items()):
+            tokens = group.get("tokens", [])
+            if token in tokens:
+                # Notify others
+                notice = json.dumps({"type": "postgameOpponentLeft"})
+                for tok, ws in list(group.get("clients", {}).items()):
+                    if tok == token:
+                        continue
+                    if ws:
+                        await self.message_router._send_safe(ws, notice)
+                group_id_to_remove = group_id
+                break
+        if group_id_to_remove:
+            postgame_groups.pop(group_id_to_remove, None)
+
         token_to_game = self.server_context.get("token_to_game", {})
         game_id = token_to_game.get(token)
         if not game_id:
