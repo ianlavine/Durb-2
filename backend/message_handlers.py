@@ -8,6 +8,8 @@ import websockets
 from .constants import MAX_FRIEND_PLAYERS, MIN_FRIEND_PLAYERS, PLAYER_COLOR_SCHEMES
 from .game_engine import GameEngine
 from .bot_manager import bot_game_manager
+from .replay import GameReplayRecorder
+from .replay_session import ReplayLoadError, ReplaySession
 
 
 class MessageRouter:
@@ -32,6 +34,10 @@ class MessageRouter:
             # Postgame / rematch flow
             "postgameRematch": self.handle_postgame_rematch,
             "postgameQuit": self.handle_postgame_quit,
+            "requestReplay": self.handle_request_replay,
+            "startReplay": self.handle_start_replay,
+            "stopReplay": self.handle_stop_replay,
+            "setReplaySpeed": self.handle_set_replay_speed,
         }
 
     async def route_message(
@@ -154,6 +160,9 @@ class MessageRouter:
 
         engine.start_game(player_slots, speed_level)
         game_id = uuid.uuid4().hex
+
+        tick_interval = float(server_context.get("tick_interval", 0.1))
+        replay_recorder = GameReplayRecorder(game_id, engine, tick_interval, player_slots, speed_level)
         game_info = {
             "engine": engine,
             "clients": {},
@@ -162,6 +171,7 @@ class MessageRouter:
             "speed_level": speed_level,
             "created_at": time.time(),
             "disconnect_deadlines": {},
+            "replay_recorder": replay_recorder,
         }
 
         games = server_context.setdefault("games", {})
@@ -177,6 +187,22 @@ class MessageRouter:
             ws_to_token[websocket] = token
             game_info["clients"][token] = websocket
             await self._send_init_message(engine, game_info, websocket, token, server_context)
+
+    def _record_game_event(
+        self,
+        game_info: Dict[str, Any],
+        token: str,
+        event_type: str,
+        payload: Optional[Dict[str, Any]],
+    ) -> None:
+        recorder: Optional[GameReplayRecorder] = game_info.get("replay_recorder")
+        engine: Optional[GameEngine] = game_info.get("engine")
+        if not recorder or not engine:
+            return
+        try:
+            recorder.record_event(token=token, event_type=event_type, payload=payload, engine=engine)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            print(f"Replay recording failed for event {event_type}: {exc}")
 
     # ------------------------------------------------------------------
     # Core gameplay handlers
@@ -199,6 +225,14 @@ class MessageRouter:
 
         engine = game_info["engine"]
         success = engine.handle_node_click(token, int(node_id))
+        if success:
+            self._record_game_event(
+                game_info,
+                token,
+                "pickStartingNode",
+                {"nodeId": int(node_id)},
+            )
+
         if success and engine.state and getattr(engine.state, "pending_node_captures", None):
             player_id = engine.get_player_id(token)
             for capture_data in engine.state.pending_node_captures:
@@ -228,7 +262,14 @@ class MessageRouter:
             return
 
         engine = game_info["engine"]
-        engine.handle_edge_click(token, int(edge_id))
+        success = engine.handle_edge_click(token, int(edge_id))
+        if success:
+            payload = {"edgeId": int(edge_id)}
+            if engine.state:
+                edge = engine.state.edges.get(int(edge_id))
+                if edge:
+                    payload["on"] = bool(edge.on)
+            self._record_game_event(game_info, token, "toggleEdge", payload)
 
     async def handle_reverse_edge(
         self,
@@ -278,9 +319,11 @@ class MessageRouter:
         if engine.state and getattr(engine.state, "pending_edge_reversal", None):
             actual_cost = engine.state.pending_edge_reversal.get("cost", cost)
 
+        edge_after = None
         if engine.state:
             edge = engine.state.edges.get(int(edge_id))
             if edge:
+                edge_after = edge
                 # Send edge state update to all players (without cost indicator for others)
                 edge_update_message = {
                     "type": "edgeReversed",
@@ -309,6 +352,12 @@ class MessageRouter:
 
             if hasattr(engine.state, "pending_edge_reversal"):
                 engine.state.pending_edge_reversal = None
+
+        payload = {"edgeId": int(edge_id), "cost": actual_cost}
+        if edge_after:
+            payload["source"] = edge_after.source_node_id
+            payload["target"] = edge_after.target_node_id
+        self._record_game_event(game_info, token, "reverseEdge", payload)
 
     async def handle_build_bridge(
         self,
@@ -369,6 +418,15 @@ class MessageRouter:
                 
                 await self._send_safe(client_websocket, json.dumps(message_to_send))
 
+        event_payload = {
+            "fromNodeId": int(from_node_id),
+            "toNodeId": int(to_node_id),
+            "cost": actual_cost,
+        }
+        if new_edge:
+            event_payload["edgeId"] = new_edge.id
+        self._record_game_event(game_info, token, "buildBridge", event_payload)
+
     async def handle_redirect_energy(
         self,
         websocket: websockets.WebSocketServerProtocol,
@@ -405,6 +463,14 @@ class MessageRouter:
                 )
             for update in updates:
                 await self._broadcast_to_game(game_info, update)
+
+        if success:
+            self._record_game_event(
+                game_info,
+                token,
+                "redirectEnergy",
+                {"targetNodeId": int(target_node_id)},
+            )
 
     async def handle_local_targeting(
         self,
@@ -446,6 +512,14 @@ class MessageRouter:
             for update in updates:
                 await self._broadcast_to_game(game_info, update)
 
+        if success:
+            self._record_game_event(
+                game_info,
+                token,
+                "localTargeting",
+                {"targetNodeId": int(target_node_id)},
+            )
+
     async def handle_destroy_node(
         self,
         websocket: websockets.WebSocketServerProtocol,
@@ -474,6 +548,13 @@ class MessageRouter:
         message = {"type": "nodeDestroyed", "nodeId": int(node_id)}
         await self._send_safe(websocket, json.dumps(message))
 
+        self._record_game_event(
+            game_info,
+            token,
+            "destroyNode",
+            {"nodeId": int(node_id)},
+        )
+
     async def handle_quit_game(
         self,
         websocket: websockets.WebSocketServerProtocol,
@@ -489,6 +570,8 @@ class MessageRouter:
             return
 
         engine = game_info["engine"]
+
+        self._record_game_event(game_info, token, "quitGame", None)
         winner_id = engine.handle_quit_game(token)
         if winner_id is not None:
             await self._announce_winner(game_id, game_info, winner_id, server_context)
@@ -516,7 +599,18 @@ class MessageRouter:
             return
 
         engine = game_info["engine"]
-        engine.handle_toggle_auto_expand(token)
+        success = engine.handle_toggle_auto_expand(token)
+        if success:
+            enabled = False
+            player_id = engine.get_player_id(token)
+            if engine.state and player_id is not None:
+                enabled = bool(engine.state.player_auto_expand.get(player_id, False))
+            self._record_game_event(
+                game_info,
+                token,
+                "toggleAutoExpand",
+                {"enabled": enabled},
+            )
 
     # ------------------------------------------------------------------
     # Utility handlers
@@ -835,6 +929,15 @@ class MessageRouter:
             import uuid  # local import to avoid top-level circulars
             postgame_groups = server_context.setdefault("postgame_groups", {})
 
+            engine: Optional[GameEngine] = game_info.get("engine")
+            replay_bundle: Optional[Dict[str, Any]] = None
+            recorder: Optional[GameReplayRecorder] = game_info.get("replay_recorder")
+            if engine and recorder:
+                try:
+                    replay_bundle = recorder.build_package(engine, winner_id)
+                except Exception as exc:
+                    print(f"Failed to finalize replay for game {game_id}: {exc}")
+
             # Gather players (tokens) and their websockets in original join order
             clients = game_info.get("clients", {})
             tokens = list(clients.keys())
@@ -845,6 +948,7 @@ class MessageRouter:
                 "speed_level": game_info.get("speed_level", 3),
                 "created_at": time.time(),
                 "rematch_votes": set(),
+                "replay_data": replay_bundle,
             }
 
             # Notify clients that postgame rematch is available
@@ -928,14 +1032,141 @@ class MessageRouter:
         if not group:
             return
 
-        # Notify others and dissolve the group
+        clients = group.setdefault("clients", {})
+        tokens = group.setdefault("tokens", [])
+
+        # Notify remaining participants that an opponent has left
         notice = json.dumps({"type": "postgameOpponentLeft"})
-        for tok, ws in list(group.get("clients", {}).items()):
+        for tok, ws in list(clients.items()):
             if tok == token:
                 continue
             if ws:
                 await self._send_safe(ws, notice)
-        groups.pop(group_id, None)
+
+        clients.pop(token, None)
+        if token in tokens:
+            tokens.remove(token)
+
+        if not tokens:
+            groups.pop(group_id, None)
+
+    async def handle_request_replay(
+        self,
+        websocket: websockets.WebSocketServerProtocol,
+        msg: Dict[str, Any],
+        server_context: Dict[str, Any],
+    ) -> None:
+        group_id = msg.get("groupId")
+        token = msg.get("token")
+        if not group_id or not token:
+            return
+
+        groups: Dict[str, Dict[str, Any]] = server_context.setdefault("postgame_groups", {})
+        group = groups.get(group_id)
+        if not group or token not in group.get("tokens", []):
+            await self._send_safe(
+                websocket,
+                json.dumps({"type": "replayError", "message": "Replay unavailable"}),
+            )
+            return
+
+        replay_bundle = group.get("replay_data")
+        if not replay_bundle:
+            await self._send_safe(
+                websocket,
+                json.dumps({"type": "replayError", "message": "Replay not ready"}),
+            )
+            return
+
+        response = json.dumps(
+            {
+                "type": "replayData",
+                "filename": replay_bundle.get("filename"),
+                "replay": replay_bundle.get("replay"),
+            }
+        )
+        await self._send_safe(websocket, response)
+
+    async def handle_start_replay(
+        self,
+        websocket: websockets.WebSocketServerProtocol,
+        msg: Dict[str, Any],
+        server_context: Dict[str, Any],
+    ) -> None:
+        replay_payload = msg.get("replay")
+        if not isinstance(replay_payload, dict):
+            await self._send_safe(
+                websocket,
+                json.dumps({"type": "replayError", "message": "Invalid replay data", "replay": True}),
+            )
+            return
+
+        sessions: Dict[websockets.WebSocketServerProtocol, ReplaySession] = server_context.setdefault(
+            "replay_sessions", {}
+        )
+
+        existing = sessions.pop(websocket, None)
+        if existing:
+            await existing.stop()
+
+        tick_interval = float(server_context.get("tick_interval", 0.1))
+
+        def _on_complete() -> None:
+            stored = server_context.get("replay_sessions", {})
+            if stored.get(websocket) is session:
+                stored.pop(websocket, None)
+
+        try:
+            session = ReplaySession(
+                websocket=websocket,
+                replay=replay_payload,
+                message_router=self,
+                tick_interval_default=tick_interval,
+                on_complete=_on_complete,
+            )
+        except ReplayLoadError as exc:
+            await self._send_safe(
+                websocket,
+                json.dumps({"type": "replayError", "message": str(exc), "replay": True}),
+            )
+            return
+
+        sessions[websocket] = session
+        session.start()
+        await self._send_safe(websocket, json.dumps({"type": "replayStarting", "replay": True}))
+
+    async def handle_stop_replay(
+        self,
+        websocket: websockets.WebSocketServerProtocol,
+        msg: Dict[str, Any],
+        server_context: Dict[str, Any],
+    ) -> None:
+        sessions: Dict[websockets.WebSocketServerProtocol, ReplaySession] = server_context.setdefault(
+            "replay_sessions", {}
+        )
+        session = sessions.pop(websocket, None)
+        if session:
+            await session.stop()
+        await self._send_safe(websocket, json.dumps({"type": "replayStopped", "replay": True}))
+
+    async def handle_set_replay_speed(
+        self,
+        websocket: websockets.WebSocketServerProtocol,
+        msg: Dict[str, Any],
+        server_context: Dict[str, Any],
+    ) -> None:
+        multiplier = msg.get("multiplier")
+        try:
+            multiplier_val = float(multiplier)
+        except (TypeError, ValueError):
+            multiplier_val = 1.0
+
+        sessions: Dict[websockets.WebSocketServerProtocol, ReplaySession] = server_context.setdefault(
+            "replay_sessions", {}
+        )
+        session = sessions.get(websocket)
+        if session:
+            session.set_speed(multiplier_val)
 
     async def _send_safe(self, websocket: Optional[websockets.WebSocketServerProtocol], payload: str) -> None:
         if not websocket:

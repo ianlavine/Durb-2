@@ -52,6 +52,9 @@ class GraphState:
         
         # Game speed level (1-5, default 3 for new 1x speed)
         self.speed_level: int = 3
+
+        # Replay helpers
+        self.tick_count: int = 0
         
 
     def add_player(self, player: Player) -> None:
@@ -524,6 +527,9 @@ class GraphState:
                 self._auto_expand_from_node(nid, new_owner)
 
         self.enforce_eliminated_edges_off()
+
+        # Advance replay tick counter
+        self.tick_count += 1
 
     def process_pending_auto_expands(self) -> None:
         """Run any auto-expand operations that were deferred during the picking phase."""

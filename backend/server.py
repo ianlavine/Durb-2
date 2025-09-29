@@ -56,9 +56,14 @@ class WebSocketServer:
         """Handle client disconnection."""
         # Remove from general clients
         self.clients.discard(websocket)
-        
+
         ws_to_token = self.server_context.get("ws_to_token", {})
         token = ws_to_token.pop(websocket, None)
+
+        replay_sessions = self.server_context.get("replay_sessions", {})
+        replay_session = replay_sessions.pop(websocket, None)
+        if replay_session:
+            await replay_session.stop()
 
         # Remove from all lobby queues
         for queue in self.server_context.get("lobbies", {}).values():
