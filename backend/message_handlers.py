@@ -146,17 +146,20 @@ class MessageRouter:
         color_pool = PLAYER_COLOR_SCHEMES[:player_count]
 
         player_slots = []
+        auto_expand_state: Dict[str, bool] = {}
         for idx, player in enumerate(players, start=1):
             color_info = color_pool[idx - 1]
+            auto_expand = bool(player.get("auto_expand", False))
             player_slots.append(
                 {
                     "player_id": idx,
                     "token": player["token"],
                     "color": color_info["color"],
                     "secondary_colors": color_info["secondary"],
-                    "auto_expand": bool(player.get("auto_expand", False)),
+                    "auto_expand": auto_expand,
                 }
             )
+            auto_expand_state[player["token"]] = auto_expand
 
         engine.start_game(player_slots, speed_level)
         game_id = uuid.uuid4().hex
@@ -172,6 +175,7 @@ class MessageRouter:
             "created_at": time.time(),
             "disconnect_deadlines": {},
             "replay_recorder": replay_recorder,
+            "auto_expand_state": auto_expand_state,
         }
 
         games = server_context.setdefault("games", {})
@@ -605,6 +609,7 @@ class MessageRouter:
             player_id = engine.get_player_id(token)
             if engine.state and player_id is not None:
                 enabled = bool(engine.state.player_auto_expand.get(player_id, False))
+            game_info.setdefault("auto_expand_state", {})[token] = enabled
             self._record_game_event(
                 game_info,
                 token,
@@ -941,6 +946,14 @@ class MessageRouter:
             # Gather players (tokens) and their websockets in original join order
             clients = game_info.get("clients", {})
             tokens = list(clients.keys())
+
+            auto_expand_map: Dict[str, bool] = dict(game_info.get("auto_expand_state", {}))
+            if not auto_expand_map and engine and engine.state:
+                for player_id, enabled in getattr(engine.state, "player_auto_expand", {}).items():
+                    token = engine.player_id_to_token.get(player_id)
+                    if token:
+                        auto_expand_map[token] = bool(enabled)
+
             group_id = uuid.uuid4().hex
             postgame_groups[group_id] = {
                 "tokens": tokens,
@@ -949,6 +962,7 @@ class MessageRouter:
                 "created_at": time.time(),
                 "rematch_votes": set(),
                 "replay_data": replay_bundle,
+                "auto_expand": auto_expand_map,
             }
 
             # Notify clients that postgame rematch is available
@@ -1009,7 +1023,7 @@ class MessageRouter:
                 players.append({
                     "token": t,
                     "websocket": group.get("clients", {}).get(t),
-                    "auto_expand": False,
+                    "auto_expand": bool(group.get("auto_expand", {}).get(t, False)),
                     "speed_level": speed_level,
                 })
             # Remove group before starting to avoid reentrancy issues
@@ -1034,6 +1048,7 @@ class MessageRouter:
 
         clients = group.setdefault("clients", {})
         tokens = group.setdefault("tokens", [])
+        auto_expand_map = group.setdefault("auto_expand", {})
 
         # Notify remaining participants that an opponent has left
         notice = json.dumps({"type": "postgameOpponentLeft"})
@@ -1046,6 +1061,7 @@ class MessageRouter:
         clients.pop(token, None)
         if token in tokens:
             tokens.remove(token)
+        auto_expand_map.pop(token, None)
 
         if not tokens:
             groups.pop(group_id, None)

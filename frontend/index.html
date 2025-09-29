@@ -330,20 +330,44 @@
       }
 
       .replay-uploader {
-        position: absolute;
-        bottom: 38px;
-        right: 38px;
-        width: 260px;
+        position: fixed;
+        top: 24px;
+        right: 32px;
+        width: 240px;
         display: flex;
         flex-direction: column;
-        gap: 10px;
-        padding: 14px 18px;
-        border-radius: 14px;
+        border-radius: 12px;
         border: 1px solid rgba(255,255,255,0.12);
         background: rgba(18,18,18,0.85);
-        box-shadow: 0 18px 48px rgba(0,0,0,0.4);
-        align-items: stretch;
+        box-shadow: 0 14px 38px rgba(0,0,0,0.35);
         backdrop-filter: blur(6px);
+        overflow: hidden;
+        z-index: 40;
+        pointer-events: auto;
+      }
+
+      .replay-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 14px;
+        cursor: pointer;
+        font-family: monospace;
+        font-size: 15px;
+        color: #f4f4f4;
+        user-select: none;
+        background: rgba(255,255,255,0.06);
+      }
+
+      .replay-header:hover {
+        background: rgba(255,255,255,0.12);
+      }
+
+      .replay-body {
+        display: none;
+        flex-direction: column;
+        gap: 10px;
+        padding: 12px 14px 16px;
       }
 
       .replay-file-button {
@@ -397,14 +421,6 @@
         filter: brightness(1.08);
       }
 
-      .replay-status {
-        min-height: 20px;
-        font-family: monospace;
-        font-size: 14px;
-        color: #bbbbbb;
-        text-align: center;
-      }
-
     </style>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.0/dist/phaser.js"></script>
   </head>
@@ -423,16 +439,20 @@
         </div>
         <button id="playBtn">PLAY FRIENDS</button>
         <button id="playBotBtn">PLAY BOT</button>
-        <div class="replay-uploader">
-          <span class="selector-label" style="align-self: flex-start;">Replay Upload</span>
-          <label class="replay-file-button">
-            <input type="file" id="replayFileInput" accept="application/json" />
-            <span id="replayFileLabel">Choose replay file…</span>
-          </label>
-          <button id="replayWatchBtn" disabled>WATCH REPLAY</button>
-          <div id="replayStatus" class="replay-status"></div>
+        <div class="replay-uploader" id="replayPanel">
+          <div class="replay-header" id="replayHeader">
+            <span>Replay Upload</span>
+            <span id="replayToggleIcon">▼</span>
+          </div>
+          <div class="replay-body" id="replayBody">
+            <label class="replay-file-button">
+              <input type="file" id="replayFileInput" accept="application/json" />
+              <span id="replayFileLabel">Choose replay file…</span>
+            </label>
+            <button id="replayWatchBtn" disabled>WATCH REPLAY</button>
+          </div>
         </div>
-        
+
       </div>
       <div id="lobby">Joining lobby...</div>
     </div>

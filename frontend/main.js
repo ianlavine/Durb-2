@@ -122,7 +122,6 @@
   let replayStartPending = false;
   let replaySessionActive = false;
   let pendingReplayPayload = null;
-  let replayStatusEl = null;
   let replayWatchBtnEl = null;
   let replayFileLabelEl = null;
   let replayFileInputEl = null;
@@ -130,6 +129,10 @@
   let replaySpeedInput = null;
   let replaySpeedValue = 1;
   let replaySpeedLabel = null;
+  let replayPanelEl = null;
+  let replayBodyEl = null;
+  let replayHeaderEl = null;
+  let replayToggleIconEl = null;
 
   // Sound system
   let soundEnabled = true; // persisted in localStorage
@@ -263,25 +266,24 @@
   // Target spacing between hammer hits in seconds (consistent regardless of bridge size)
   const BRIDGE_HIT_SPACING_SEC = 0.25;
 
-  function ensureReplayElements() {
-    if (!replayStatusEl) replayStatusEl = document.getElementById('replayStatus');
+  function setReplayStatus() {}
+
+    function ensureReplayElements() {
     if (!replayWatchBtnEl) replayWatchBtnEl = document.getElementById('replayWatchBtn');
     if (!replayFileLabelEl) replayFileLabelEl = document.getElementById('replayFileLabel');
     if (!replayFileInputEl) replayFileInputEl = document.getElementById('replayFileInput');
+    if (!replayPanelEl) replayPanelEl = document.getElementById('replayPanel');
+    if (!replayBodyEl) replayBodyEl = document.getElementById('replayBody');
+    if (!replayHeaderEl) replayHeaderEl = document.getElementById('replayHeader');
+    if (!replayToggleIconEl) replayToggleIconEl = document.getElementById('replayToggleIcon');
+    if (replayHeaderEl && !replayHeaderEl.dataset.toggleBound) {
+      replayHeaderEl.addEventListener('click', () => toggleReplayPanel());
+      replayHeaderEl.dataset.toggleBound = 'true';
+    }
   }
 
-  function setReplayStatus(text, tone = 'info') {
-    ensureReplayElements();
-    if (!replayStatusEl) return;
-    replayStatusEl.textContent = text || '';
-    const toneColors = {
-      info: '#bbbbbb',
-      success: '#7ee49c',
-      error: '#ff7aa9',
-      warn: '#ffd479',
-    };
-    replayStatusEl.style.color = toneColors[tone] || toneColors.info;
-  }
+
+
 
   function setReplayControlsDisabled(disabled) {
     ensureReplayElements();
@@ -303,9 +305,18 @@
   function clearReplaySelection() {
     ensureReplayElements();
     pendingReplayPayload = null;
+    toggleReplayPanel(false);
     if (replayFileInputEl) replayFileInputEl.value = '';
     if (replayFileLabelEl) replayFileLabelEl.textContent = 'Choose replay file…';
     if (replayWatchBtnEl) replayWatchBtnEl.disabled = true;
+  }
+
+  function toggleReplayPanel(forceExpand) {
+    ensureReplayElements();
+    if (!replayBodyEl || !replayToggleIconEl) return;
+    const expand = forceExpand !== undefined ? forceExpand : (replayBodyEl.style.display !== 'flex');
+    replayBodyEl.style.display = expand ? 'flex' : 'none';
+    replayToggleIconEl.textContent = expand ? '▲' : '▼';
   }
 
   function ensureReplaySpeedElements() {
@@ -407,8 +418,8 @@
 
   async function handleReplayFileSelect(event) {
     ensureReplayElements();
+    toggleReplayPanel(true);
     if (isReplayActive()) {
-      setReplayStatus('Stop the current replay before loading a new file.', 'warn');
       if (replayFileInputEl) replayFileInputEl.value = '';
       return;
     }
@@ -430,40 +441,33 @@
       pendingReplayPayload = parsed;
       if (replayFileLabelEl) replayFileLabelEl.textContent = file.name;
       if (replayWatchBtnEl) replayWatchBtnEl.disabled = false;
-      setReplayStatus('Replay ready. Press WATCH REPLAY to begin.', 'info');
     } catch (err) {
       console.error('Failed to read replay file', err);
       clearReplaySelection();
-      setReplayStatus('Could not read replay file.', 'error');
     }
   }
 
   function startReplayFromSelection() {
     ensureReplayElements();
     if (!ws || ws.readyState !== WebSocket.OPEN) {
-      setReplayStatus('Not connected to the server.', 'error');
       return;
     }
     if (!pendingReplayPayload) {
-      setReplayStatus('Choose a replay file first.', 'warn');
       return;
     }
     if (isReplayActive()) {
-      setReplayStatus('Replay already starting.', 'info');
       return;
     }
 
     const menuEl = document.getElementById('menu');
     const inMenu = menuEl ? !menuEl.classList.contains('hidden') : true;
     if (!inMenu) {
-      setReplayStatus('Return to the main menu before starting a replay.', 'warn');
       return;
     }
 
     replayStartPending = true;
     replaySessionActive = false;
     setReplayControlsDisabled(true);
-    setReplayStatus('Uploading replay to server...', 'info');
 
     try {
       ws.send(JSON.stringify({ type: 'startReplay', replay: pendingReplayPayload }));
@@ -471,7 +475,6 @@
       console.error('Failed to send replay to server', err);
       replayStartPending = false;
       setReplayControlsDisabled(false);
-      setReplayStatus('Failed to contact server.', 'error');
     }
   }
 
@@ -515,6 +518,9 @@
         replayStartPending = true;
         setReplayStatus('Preparing replay...', 'info');
         updateReplaySpeedUI();
+        return;
+      case 'replayData':
+        handleReplayDownload(msg);
         return;
       case 'replayStopped':
         replayMode = false;
@@ -1025,6 +1031,10 @@ function hideReverseCostDisplay() {
     }
     if (replayWatchBtnEl) {
       replayWatchBtnEl.addEventListener('click', startReplayFromSelection);
+    }
+    if (replayHeaderEl && !replayHeaderEl.dataset.toggleBound) {
+      replayHeaderEl.addEventListener('click', () => toggleReplayPanel());
+      replayHeaderEl.dataset.toggleBound = 'true';
     }
     ensureReplaySpeedElements();
     replaySpeedValue = 1;
@@ -1598,6 +1608,8 @@ function hideReverseCostDisplay() {
     gameEnded = false;
     myEliminated = false;
     updateQuitButtonLabel();
+    currentTargetNodeId = null;
+    currentTargetSetTime = null;
 
     if (typeof msg.gameDuration === 'number' && Number.isFinite(msg.gameDuration) && msg.gameDuration > 0) {
       gameDuration = msg.gameDuration;
