@@ -68,6 +68,8 @@
   let progressMarkerLeft = null;
   let progressMarkerRight = null;
   let progressSegments = new Map();
+  let progressNameContainer = null;
+  let progressNameSegments = new Map();
   let winThreshold = 40; // default, will be updated from backend
   let totalNodes = 60; // default, will be updated from backend
 
@@ -115,6 +117,14 @@
   let reviewDropdownButton = null;
   let postgameNotice = null;
   let lobbyBackButton = null;
+  let guestNameInputEl = null;
+  let guestNameConfirmBtn = null;
+  let menuGuestNameConfirmed = false;
+  const GUEST_NAME_KEY = 'guestName';
+  let savedGuestName = sanitizeGuestName(localStorage.getItem(GUEST_NAME_KEY) || '');
+  menuGuestNameConfirmed = savedGuestName.length > 0;
+  let playFriendsBtn = null;
+  let playBotBtnEl = null;
   let currentPostgameGroupId = null;
   let opponentHasLeft = false;
   let iHaveRematched = false;
@@ -124,10 +134,13 @@
   let replayStartPending = false;
   let replaySessionActive = false;
   let pendingReplayPayload = null;
+  let activeReplayPayload = null;
   let replayWatchBtnEl = null;
   let replayFileLabelEl = null;
   let replayFileInputEl = null;
   let replaySpeedContainer = null;
+  let replayControlsWrapper = null;
+  let replayRestartButton = null;
   let replaySpeedInput = null;
   let replaySpeedValue = 1;
   let replaySpeedLabel = null;
@@ -136,6 +149,7 @@
   let replayHeaderEl = null;
   let replayToggleIconEl = null;
   let pendingReplayIntent = null; // 'download' | 'review'
+  let pendingReplayRestart = null;
   let reviewReplayActive = false; // true when the active replay came from postgame review
   let reviewReplayDownloadButton = null;
   let reviewReplayLastData = null;
@@ -275,6 +289,15 @@
 
   function setReplayStatus() {}
 
+  function cloneReplayPayload(payload) {
+    if (!payload || typeof payload !== 'object') return null;
+    try {
+      return JSON.parse(JSON.stringify(payload));
+    } catch (_) {
+      return payload;
+    }
+  }
+
     function ensureReplayElements() {
     if (!replayWatchBtnEl) replayWatchBtnEl = document.getElementById('replayWatchBtn');
     if (!replayFileLabelEl) replayFileLabelEl = document.getElementById('replayFileLabel');
@@ -307,6 +330,7 @@
     if (replayWatchBtnEl) {
       replayWatchBtnEl.disabled = disable || !pendingReplayPayload;
     }
+    updateReplayRestartButtonState();
   }
 
   function clearReplaySelection() {
@@ -327,14 +351,37 @@
   }
 
   function ensureReplaySpeedElements() {
-    if (replaySpeedContainer) return;
+    if (replayControlsWrapper) return;
 
-    replaySpeedContainer = document.createElement('div');
-    Object.assign(replaySpeedContainer.style, {
+    replayControlsWrapper = document.createElement('div');
+    Object.assign(replayControlsWrapper.style, {
       position: 'absolute',
       right: '24px',
       bottom: '24px',
       display: 'none',
+      flexDirection: 'row',
+      alignItems: 'flex-end',
+      gap: '12px',
+      zIndex: 15,
+    });
+
+    replayRestartButton = document.createElement('button');
+    replayRestartButton.type = 'button';
+    replayRestartButton.id = 'replayRestartButton';
+    replayRestartButton.className = 'replay-restart-button';
+    replayRestartButton.textContent = '↻';
+    replayRestartButton.setAttribute('aria-label', 'Restart Replay');
+    replayRestartButton.title = 'Restart Replay';
+    replayRestartButton.disabled = true;
+    replayRestartButton.addEventListener('click', handleReplayRestartClick);
+    replayRestartButton.addEventListener('animationend', () => {
+      replayRestartButton.classList.remove('replay-restart-button--spin');
+    });
+    replayControlsWrapper.appendChild(replayRestartButton);
+
+    replaySpeedContainer = document.createElement('div');
+    Object.assign(replaySpeedContainer.style, {
+      display: 'flex',
       flexDirection: 'column',
       gap: '6px',
       padding: '12px 14px',
@@ -342,7 +389,6 @@
       background: 'rgba(17, 17, 17, 0.85)',
       border: '1px solid rgba(255,255,255,0.15)',
       boxShadow: '0 10px 30px rgba(0,0,0,0.4)',
-      zIndex: 15,
       minWidth: '160px',
       backdropFilter: 'blur(6px)',
     });
@@ -388,8 +434,10 @@
       }
     });
 
-    document.body.appendChild(replaySpeedContainer);
+    replayControlsWrapper.appendChild(replaySpeedContainer);
+    document.body.appendChild(replayControlsWrapper);
     updateReplaySpeedLabel();
+    updateReplayRestartButtonState();
   }
 
   function updateReplaySpeedLabel() {
@@ -398,15 +446,25 @@
     replaySpeedLabel.textContent = `${clamped.toFixed(2)}x`;
   }
 
+  function updateReplayRestartButtonState() {
+    ensureReplaySpeedElements();
+    if (!replayRestartButton) return;
+    const hasPayload = !!activeReplayPayload;
+    const disabled = !hasPayload || replayStartPending || !!pendingReplayRestart;
+    replayRestartButton.disabled = disabled;
+    replayRestartButton.setAttribute('aria-disabled', disabled ? 'true' : 'false');
+  }
+
   function updateReplaySpeedUI() {
     ensureReplaySpeedElements();
     const menuVisible = !document.getElementById('menu')?.classList.contains('hidden');
-    if (!replaySpeedContainer) return;
+    if (!replayControlsWrapper) return;
     if (replayMode && !menuVisible) {
-      replaySpeedContainer.style.display = 'flex';
+      replayControlsWrapper.style.display = 'flex';
     } else {
-      replaySpeedContainer.style.display = 'none';
+      replayControlsWrapper.style.display = 'none';
     }
+    updateReplayRestartButtonState();
   }
 
   function isReplayActive() {
@@ -421,6 +479,35 @@
     } catch (_) {
       // Ignore network errors; reconnection handler will reset state.
     }
+  }
+
+  function handleReplayRestartClick() {
+    if (!replayRestartButton || replayRestartButton.disabled) return;
+    if (!activeReplayPayload) {
+      updateReplayRestartButtonState();
+      return;
+    }
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      setReplayStatus('Cannot restart replay while disconnected.', 'warn');
+      return;
+    }
+
+    replayRestartButton.classList.remove('replay-restart-button--spin');
+    void replayRestartButton.offsetWidth; // restart animation
+    replayRestartButton.classList.add('replay-restart-button--spin');
+
+    const intent = reviewReplayActive ? 'review' : null;
+    const payload = cloneReplayPayload(activeReplayPayload) || activeReplayPayload;
+
+    pendingReplayRestart = null;
+    if (isReplayActive()) {
+      pendingReplayRestart = { payload, intent };
+      updateReplayRestartButtonState();
+      stopReplaySession();
+      return;
+    }
+
+    startReplayFromPayload(payload, intent, true);
   }
 
   async function handleReplayFileSelect(event) {
@@ -472,33 +559,26 @@
       return;
     }
 
-    replayStartPending = true;
-    replaySessionActive = false;
-    setReplayControlsDisabled(true);
-
-    try {
-      ws.send(JSON.stringify({ type: 'startReplay', replay: pendingReplayPayload }));
-    } catch (err) {
-      console.error('Failed to send replay to server', err);
-      replayStartPending = false;
-      setReplayControlsDisabled(false);
-    }
+    pendingReplayRestart = null;
+    startReplayFromPayload(pendingReplayPayload, null, true);
   }
 
-  function startReplayFromPayload(replayPayload, intent) {
+  function startReplayFromPayload(replayPayload, intent, skipStop) {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       return false;
     }
     if (!replayPayload || typeof replayPayload !== 'object') {
       return false;
     }
-    if (isReplayActive()) {
+    if (!skipStop && isReplayActive()) {
       stopReplaySession();
     }
 
+    pendingReplayRestart = null;
     replayStartPending = true;
     replaySessionActive = false;
     reviewReplayActive = intent === 'review';
+    activeReplayPayload = cloneReplayPayload(replayPayload) || replayPayload;
     setReplayControlsDisabled(true);
     ensureReplaySpeedElements();
     replaySpeedValue = 1;
@@ -506,6 +586,7 @@
     updateReplaySpeedLabel();
     updateReplaySpeedUI();
     updateReviewReplayDownloadButton();
+    updateReplayRestartButtonState();
 
     try {
       ws.send(JSON.stringify({ type: 'startReplay', replay: replayPayload }));
@@ -516,6 +597,7 @@
       reviewReplayActive = false;
       setReplayControlsDisabled(false);
       updateReplaySpeedUI();
+      updateReplayRestartButtonState();
       return false;
     }
   }
@@ -537,6 +619,9 @@
     reviewReplayLastData = null;
     reviewReplayLastFilename = null;
     updateReviewReplayDownloadButton();
+    pendingReplayRestart = null;
+    activeReplayPayload = null;
+    updateReplayRestartButtonState();
   }
 
   function handleReplayInit(msg) {
@@ -557,6 +642,7 @@
     updateQuitButtonLabel();
     if (replayMode) updateReplaySpeedUI();
     updateReviewReplayDownloadButton();
+    updateReplayRestartButtonState();
   }
 
   function handleReplayMessage(msg) {
@@ -565,11 +651,25 @@
         replayStartPending = true;
         setReplayStatus('Preparing replay...', 'info');
         updateReplaySpeedUI();
+        updateReplayRestartButtonState();
         return;
       case 'replayData':
         handleReplayDownload(msg);
         return;
       case 'replayStopped':
+        {
+          const restartRequest = pendingReplayRestart;
+          pendingReplayRestart = null;
+          if (restartRequest) {
+            replayMode = false;
+            replayStartPending = false;
+            replaySessionActive = false;
+            setReplayControlsDisabled(true);
+            setReplayStatus('Restarting replay...', 'info');
+            updateReplaySpeedUI();
+            startReplayFromPayload(restartRequest.payload, restartRequest.intent, true);
+            return;
+          }
         replayMode = false;
         replayStartPending = false;
         replaySessionActive = false;
@@ -582,6 +682,9 @@
         reviewReplayLastData = null;
         reviewReplayLastFilename = null;
         updateReviewReplayDownloadButton();
+        activeReplayPayload = null;
+        updateReplayRestartButtonState();
+        }
         return;
       case 'replayComplete':
         replaySessionActive = false;
@@ -589,6 +692,7 @@
         updateReplaySpeedUI();
         updateQuitButtonLabel();
         updateReviewReplayDownloadButton();
+        updateReplayRestartButtonState();
         return;
       case 'replayError':
         handleReplayPlaybackError(msg);
@@ -1011,10 +1115,33 @@ function hideReverseCostDisplay() {
       });
       soundBtn.addEventListener('pointerdown', ensureAudio, { once: false });
     }
-    const playBtn = document.getElementById('playBtn');
-    const playBotBtn = document.getElementById('playBotBtn');
+    playFriendsBtn = document.getElementById('playBtn');
+    playBotBtnEl = document.getElementById('playBotBtn');
     const buttonContainer = document.querySelector('.button-container');
     const playerCountButtons = document.querySelectorAll('.player-count-option');
+    guestNameInputEl = document.getElementById('guestNameInput');
+    guestNameConfirmBtn = document.getElementById('guestNameConfirm');
+    if (guestNameInputEl) {
+      savedGuestName = sanitizeGuestName(savedGuestName);
+      guestNameInputEl.value = savedGuestName;
+      menuGuestNameConfirmed = savedGuestName.length > 0;
+      guestNameInputEl.addEventListener('input', handleGuestNameInput);
+      guestNameInputEl.addEventListener('keydown', (evt) => {
+        if (evt.key === 'Enter') {
+          evt.preventDefault();
+          confirmGuestName();
+        }
+      });
+    } else {
+      savedGuestName = '';
+      menuGuestNameConfirmed = false;
+    }
+    if (guestNameConfirmBtn) {
+      guestNameConfirmBtn.addEventListener('click', () => {
+        confirmGuestName();
+      });
+    }
+    updateGuestNameUI();
 
     if (playerCountButtons && playerCountButtons.length) {
       playerCountButtons.forEach((btn) => {
@@ -1027,17 +1154,23 @@ function hideReverseCostDisplay() {
       });
     }
     
-    if (playBtn) {
-      playBtn.addEventListener('click', () => {
+    if (playFriendsBtn) {
+      playFriendsBtn.addEventListener('click', () => {
+        if (!menuGuestNameConfirmed || !savedGuestName) {
+          if (guestNameInputEl) {
+            guestNameInputEl.classList.add('invalid');
+            guestNameInputEl.focus();
+          }
+          return;
+        }
         if (isReplayActive()) {
           setReplayStatus('Stop the current replay before joining a lobby.', 'warn');
           return;
         }
         if (ws && ws.readyState === WebSocket.OPEN) {
-          document.getElementById('lobby').style.display = 'block';
+          showLobby();
           // Show selected player count immediately
-          const lobbyEl = document.getElementById('lobby');
-          if (lobbyEl) lobbyEl.textContent = `Waiting for players to join... (${selectedPlayerCount}-player game)`;
+          setLobbyStatus(`Waiting for players to join... (${selectedPlayerCount}-player game)`);
           // Hide both buttons when entering lobby
           if (buttonContainer) {
             buttonContainer.style.display = 'none';
@@ -1048,22 +1181,30 @@ function hideReverseCostDisplay() {
             type: 'joinLobby',
             token: localStorage.getItem('token') || null,
             autoExpand: persistentAutoExpand,
-            playerCount: selectedPlayerCount
+            playerCount: selectedPlayerCount,
+            guestName: savedGuestName,
           }));
         }
       });
     }
-    
-    if (playBotBtn) {
-      playBotBtn.addEventListener('click', () => {
+
+    if (playBotBtnEl) {
+      playBotBtnEl.addEventListener('click', () => {
+        if (!menuGuestNameConfirmed || !savedGuestName) {
+          if (guestNameInputEl) {
+            guestNameInputEl.classList.add('invalid');
+            guestNameInputEl.focus();
+          }
+          return;
+        }
         if (isReplayActive()) {
           setReplayStatus('Stop the current replay before starting a bot match.', 'warn');
           return;
         }
         if (ws && ws.readyState === WebSocket.OPEN) {
           console.log('Starting hard bot game');
-          document.getElementById('lobby').style.display = 'block';
-          document.getElementById('lobby').textContent = 'Starting hard bot game...';
+          showLobby();
+          setLobbyStatus('Starting hard bot game...');
           // Hide buttons when starting bot game
           if (buttonContainer) {
             buttonContainer.style.display = 'none';
@@ -1071,7 +1212,8 @@ function hideReverseCostDisplay() {
           ws.send(JSON.stringify({
             type: 'startBotGame',
             difficulty: 'hard',
-            autoExpand: persistentAutoExpand
+            autoExpand: persistentAutoExpand,
+            guestName: savedGuestName,
           }));
         }
       });
@@ -1442,8 +1584,10 @@ function hideReverseCostDisplay() {
     progressBarInner = document.getElementById('progressBarInner');
     progressMarkerLeft = document.getElementById('progressMarkerLeft');
     progressMarkerRight = document.getElementById('progressMarkerRight');
+    progressNameContainer = document.getElementById('progressBarNames');
     if (progressMarkerLeft) progressMarkerLeft.style.display = 'none';
     if (progressMarkerRight) progressMarkerRight.style.display = 'none';
+    if (progressNameContainer) progressNameContainer.style.display = 'none';
     
     // Initialize timer display
     timerDisplay = document.getElementById('timerDisplay');
@@ -1798,6 +1942,8 @@ function hideReverseCostDisplay() {
     playerOrder = [];
     hoveredNodeId = null;
     hoveredEdgeId = null;
+    progressNameSegments.clear();
+    if (progressNameContainer) progressNameContainer.innerHTML = '';
 
     // Clear any lingering node number labels between games
     nodeJuiceTexts.forEach(text => {
@@ -1848,6 +1994,7 @@ function hideReverseCostDisplay() {
         let id;
         let color;
         let secondaryColors = [];
+        let displayName = '';
 
         if (Array.isArray(info)) {
           const [pid, col] = info;
@@ -1857,12 +2004,14 @@ function hideReverseCostDisplay() {
           id = Number(info.id);
           color = info.color;
           if (Array.isArray(info.secondaryColors)) secondaryColors = info.secondaryColors;
+          if (typeof info.name === 'string') displayName = info.name;
         }
 
         if (!Number.isFinite(id)) return;
         players.set(id, {
           color: color || '#ffffff',
           secondaryColors,
+          name: displayName,
         });
         playerStats.set(id, { nodes: 0, gold: 0 });
         playerOrder.push(id);
@@ -2144,17 +2293,18 @@ function hideReverseCostDisplay() {
     reviewReplayLastData = null;
     reviewReplayLastFilename = null;
     updateReviewReplayDownloadButton();
+    pendingReplayRestart = null;
+    activeReplayPayload = null;
+    updateReplayRestartButtonState();
   }
 
   function handleLobby(msg) {
-    const lobby = document.getElementById('lobby');
-    if (lobby) {
-      if (msg.status === 'waiting') {
-        const count = Number.isFinite(msg.playerCount) ? msg.playerCount : selectedPlayerCount;
-        lobby.textContent = `Waiting for players to join... (${count}-player game)`;
-      } else {
-        lobby.textContent = 'Starting...';
-      }
+    showLobby();
+    const count = Number.isFinite(msg.playerCount) ? msg.playerCount : selectedPlayerCount;
+    if (msg.status === 'waiting') {
+      setLobbyStatus(`Waiting for players to join... (${count}-player game)`);
+    } else {
+      setLobbyStatus('Starting...');
     }
     if (msg.token) localStorage.setItem('token', msg.token);
     // Hide the PLAY button while waiting
@@ -2166,15 +2316,12 @@ function hideReverseCostDisplay() {
 
   function handleLobbyTimeout() {
     returnToMenu();
-    const lobby = document.getElementById('lobby');
-    if (lobby) {
-      lobby.textContent = 'Lobby timed out. Try again.';
-      lobby.style.display = 'block';
-      setTimeout(() => {
-        lobby.textContent = '';
-        lobby.style.display = 'none';
-      }, 3000);
-    }
+    showLobby();
+    setLobbyStatus('Lobby timed out. Try again.');
+    setTimeout(() => {
+      setLobbyStatus('');
+      hideLobby();
+    }, 3000);
   }
 
   function handleGameOver(msg) {
@@ -2199,13 +2346,9 @@ function hideReverseCostDisplay() {
     redrawStatic();
     // Ensure menu elements are ready for return
     const menu = document.getElementById('menu');
-    const lobby = document.getElementById('lobby');
     const buttonContainer = document.querySelector('.button-container');
 
-    if (lobby) {
-      lobby.textContent = '';
-      lobby.style.display = 'none';
-    }
+    hideLobby();
     if (buttonContainer) {
       buttonContainer.style.display = 'flex';
     }
@@ -3400,6 +3543,78 @@ function hideReverseCostDisplay() {
     quitButton.textContent = (gameEnded || myEliminated) ? 'Quit' : 'Forfeit';
   }
 
+  function sanitizeGuestName(raw) {
+    if (raw == null) return '';
+    let text = String(raw);
+    text = text.replace(/[\u0000-\u001f\u007f]/g, '');
+    text = text.replace(/\s+/g, ' ');
+    text = text.trim();
+    if (text.length > 24) text = text.slice(0, 24);
+    return text;
+  }
+
+  function showLobby() {
+    const lobby = document.getElementById('lobby');
+    if (lobby) lobby.style.display = 'block';
+  }
+
+  function hideLobby() {
+    const lobby = document.getElementById('lobby');
+    if (lobby) lobby.style.display = 'none';
+  }
+
+  function setLobbyStatus(message) {
+    const lobby = document.getElementById('lobby');
+    if (lobby) lobby.textContent = message || '';
+  }
+
+  function updateGuestNameUI(options = {}) {
+    if (!guestNameInputEl || !guestNameConfirmBtn) return;
+    const trimmed = sanitizeGuestName(guestNameInputEl.value);
+    const hasValue = trimmed.length > 0;
+    const matchesSaved = hasValue && trimmed === savedGuestName && savedGuestName.length > 0;
+
+    if (options.forceInvalid && !hasValue) {
+      guestNameInputEl.classList.add('invalid');
+    } else if (menuGuestNameConfirmed) {
+      guestNameInputEl.classList.remove('invalid');
+    } else if (!hasValue) {
+      guestNameInputEl.classList.remove('invalid');
+    }
+
+    guestNameConfirmBtn.disabled = !hasValue;
+    guestNameConfirmBtn.classList.toggle('confirmed', menuGuestNameConfirmed && matchesSaved);
+
+    setPlayButtonsEnabled(menuGuestNameConfirmed && savedGuestName.length > 0);
+  }
+
+  function handleGuestNameInput() {
+    menuGuestNameConfirmed = false;
+    if (guestNameInputEl) guestNameInputEl.classList.remove('invalid');
+    updateGuestNameUI();
+  }
+
+  function confirmGuestName() {
+    if (!guestNameInputEl) return;
+    const trimmed = sanitizeGuestName(guestNameInputEl.value);
+    if (!trimmed) {
+      updateGuestNameUI({ forceInvalid: true });
+      return;
+    }
+
+    guestNameInputEl.value = trimmed;
+    savedGuestName = trimmed;
+    menuGuestNameConfirmed = true;
+    guestNameInputEl.classList.remove('invalid');
+    localStorage.setItem(GUEST_NAME_KEY, trimmed);
+    updateGuestNameUI();
+  }
+
+  function setPlayButtonsEnabled(enabled) {
+    if (playFriendsBtn) playFriendsBtn.disabled = !enabled;
+    if (playBotBtnEl) playBotBtnEl.disabled = !enabled;
+  }
+
   function ensurePlayerStats(id) {
     if (!playerStats.has(id)) {
       playerStats.set(id, { nodes: 0, gold: 0 });
@@ -3409,6 +3624,9 @@ function hideReverseCostDisplay() {
 
   function updateProgressBar() {
     if (!progressBarInner) return;
+    if (!progressNameContainer) {
+      progressNameContainer = document.getElementById('progressBarNames');
+    }
 
     const orderedIds = playerOrder.length ? playerOrder : Array.from(players.keys()).sort((a, b) => a - b);
     const activeIds = orderedIds.filter((id) => players.has(id) && !eliminatedPlayers.has(id));
@@ -3419,15 +3637,24 @@ function hideReverseCostDisplay() {
       if (progressBar) progressBar.style.display = 'none';
       if (progressMarkerLeft) progressMarkerLeft.style.display = 'none';
       if (progressMarkerRight) progressMarkerRight.style.display = 'none';
+      progressNameSegments.clear();
+      if (progressNameContainer) {
+        progressNameContainer.innerHTML = '';
+        progressNameContainer.style.display = 'none';
+      }
       return;
     }
 
     if (progressBar) progressBar.style.display = 'block';
+    if (progressNameContainer) progressNameContainer.style.display = 'flex';
 
     const denominator = Math.max(totalNodes, 1);
     const seen = new Set();
 
     progressBarInner.style.justifyContent = activeIds.length === 2 ? 'space-between' : 'flex-start';
+    if (progressNameContainer) {
+      progressNameContainer.style.justifyContent = progressBarInner.style.justifyContent;
+    }
 
     activeIds.forEach((id, index) => {
       const info = players.get(id);
@@ -3459,6 +3686,22 @@ function hideReverseCostDisplay() {
       if (labelEl) {
         labelEl.textContent = `$${formatCost(stats.gold || 0)}`;
       }
+
+      let nameCell = progressNameSegments.get(id);
+      if (!nameCell && progressNameContainer) {
+        nameCell = document.createElement('div');
+        nameCell.className = 'progressNameCell';
+        progressNameSegments.set(id, nameCell);
+        progressNameContainer.appendChild(nameCell);
+      }
+      if (nameCell) {
+        const displayName = info.name || `Player ${id}`;
+        nameCell.textContent = displayName;
+        nameCell.style.order = index;
+        nameCell.style.flex = `0 0 ${Math.max(percent, 0)}%`;
+        nameCell.style.color = primary || '#ffffff';
+        nameCell.dataset.playerId = String(id);
+      }
     });
 
     progressSegments.forEach((segment, id) => {
@@ -3467,6 +3710,11 @@ function hideReverseCostDisplay() {
           progressBarInner.removeChild(segment);
         }
         progressSegments.delete(id);
+        const nameCell = progressNameSegments.get(id);
+        if (nameCell && nameCell.parentElement === progressNameContainer) {
+          progressNameContainer.removeChild(nameCell);
+        }
+        progressNameSegments.delete(id);
       }
     });
 
@@ -3499,14 +3747,12 @@ function hideReverseCostDisplay() {
     updateReplaySpeedUI();
 
     const menu = document.getElementById('menu');
-    const lobby = document.getElementById('lobby');
     const homeButtons = document.querySelector('.button-container');
     const playBtnEl = document.getElementById('playBtn');
 
-    if (lobby) {
-      lobby.textContent = '';
-      lobby.style.display = 'none';
-    }
+    hideLobby();
+    setLobbyStatus('');
+    updateGuestNameUI();
     if (menu) menu.classList.remove('hidden');
     if (homeButtons) homeButtons.style.display = 'flex';
     if (playBtnEl) playBtnEl.style.display = 'block';
@@ -3518,6 +3764,11 @@ function hideReverseCostDisplay() {
     if (overlayMsg) overlayMsg.style.display = 'none';
     if (goldDisplay) goldDisplay.style.display = 'none';
     if (progressBar) progressBar.style.display = 'none';
+    if (progressNameContainer) {
+      progressNameContainer.style.display = 'none';
+      progressNameContainer.innerHTML = '';
+    }
+    progressNameSegments.clear();
     if (progressMarkerLeft) progressMarkerLeft.style.display = 'none';
     if (progressMarkerRight) progressMarkerRight.style.display = 'none';
     hideTimerDisplay();

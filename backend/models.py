@@ -9,6 +9,7 @@ class Player:
     id: int
     color: str  # hex color string like "#ffcc00"
     secondary_colors: List[str] = field(default_factory=list)
+    name: str = ""
 
 
 @dataclass

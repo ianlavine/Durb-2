@@ -7,12 +7,86 @@
     <style>
       html, body { margin: 0; padding: 0; background: #111; height: 100vh; min-height: 100vh; }
       #game { width: 100%; height: 100%; overflow: hidden; }
-      #menu { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: #111; flex-direction: column; gap: 48px; padding-top: 0; top: -25vh; height: calc(100vh + 25vh); }
+      #menu { position: absolute; inset: 0; display: flex; align-items: center; justify-content: flex-start; background: #111; flex-direction: column; gap: 48px; padding-top: 160px; height: 100vh; }
       #menu.hidden { display: none; }
       #title { font-size: 120px; font-weight: bold; color: white; font-family: Arial, sans-serif; text-shadow: 0 4px 16px rgba(0,0,0,0.8); margin-bottom: 32px; }
       #playBtn, #playBotBtn { font-size: 64px; padding: 24px 64px; border-radius: 12px; border: none; background: #00cc66; color: #111; cursor: pointer; box-shadow: 0 8px 24px rgba(0,0,0,0.4); margin: 12px; }
       #playBotBtn { background: #ff6600; }
-      #lobby { display: none; color: #ddd; font: 20px/1.4 monospace; }
+      #playBtn:disabled, #playBotBtn:disabled {
+        cursor: not-allowed;
+        filter: grayscale(0.8) brightness(0.7);
+        opacity: 0.55;
+        box-shadow: none;
+      }
+      #lobby {
+        display: none;
+        color: #ddd;
+        font: 20px/1.4 monospace;
+        text-align: center;
+      }
+      .menu-guest-name {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        width: 100%;
+        max-width: 520px;
+      }
+      .menu-guest-name-input {
+        flex: 1 1 auto;
+        min-width: 0;
+        padding: 12px 16px;
+        border-radius: 12px;
+        border: 2px solid #cfcfcf;
+        background: rgba(15, 15, 15, 0.85);
+        color: #f3f3f3;
+        font-size: 20px;
+        font-family: "Fira Code", "Source Code Pro", monospace;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      }
+      .menu-guest-name-input::placeholder {
+        color: #8b8b8b;
+      }
+      .menu-guest-name-input:focus {
+        outline: none;
+        border-color: #f0f0f0;
+        box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.12);
+      }
+      .menu-guest-name-input.invalid {
+        border-color: #ff6b6b;
+        box-shadow: 0 0 0 3px rgba(255, 107, 107, 0.25);
+      }
+      .menu-guest-name-confirm {
+        width: 56px;
+        height: 56px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        border: none;
+        background: linear-gradient(135deg, #d9d9d9, #f6f6f6);
+        color: #3a3a3a;
+        font-size: 32px;
+        cursor: pointer;
+        box-shadow: 0 10px 22px rgba(0,0,0,0.35);
+        transition: transform 0.12s ease, filter 0.16s ease, background 0.25s ease;
+      }
+      .menu-guest-name-confirm:hover:not(:disabled) {
+        filter: brightness(1.05);
+        transform: translateY(-2px);
+      }
+      .menu-guest-name-confirm:active:not(:disabled) {
+        transform: scale(0.92);
+      }
+      .menu-guest-name-confirm:disabled {
+        opacity: 0.45;
+        cursor: default;
+        box-shadow: none;
+        filter: grayscale(0.6);
+      }
+      .menu-guest-name-confirm.confirmed {
+        background: linear-gradient(135deg, #ffffff, #dcdcdc);
+        color: #1a1a1a;
+      }
       #playBtn:hover, #playBotBtn:hover { filter: brightness(1.1); }
       .button-container { display: flex; flex-direction: column; align-items: center; gap: 12px; }
       
@@ -69,7 +143,31 @@
         z-index: 11; 
         display: none; 
       }
-      
+      #progressBarNames {
+        position: absolute;
+        top: 60px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 80%;
+        max-width: 800px;
+        display: none;
+        align-items: stretch;
+        justify-content: stretch;
+        pointer-events: none;
+        font-family: "Fira Code", "Source Code Pro", monospace;
+        color: #f5f5f5;
+      }
+      .progressNameCell {
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+        padding-top: 6px;
+        font-size: 18px;
+        min-width: 60px;
+        max-width: 100%;
+        box-sizing: border-box;
+      }
+
       /* Timer display */
       #timerDisplay { 
         position: absolute; 
@@ -168,7 +266,50 @@
         outline: 2px solid #ffffff88;
         outline-offset: 2px;
       }
-      
+
+      .replay-restart-button {
+        width: 64px;
+        height: 64px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0;
+        padding: 0;
+        border: none;
+        background: transparent;
+        color: #aaaaaa;
+        font-family: system-ui, sans-serif;
+        font-size: 42px;
+        line-height: 0;
+        cursor: pointer;
+        text-shadow: 0 2px 6px rgba(0,0,0,0.6);
+        transition: filter 0.15s ease;
+        transform-origin: center;
+        -webkit-appearance: none;
+        appearance: none;
+        user-select: none;
+        touch-action: manipulation;
+      }
+      .replay-restart-button:hover {
+        filter: brightness(1.2);
+      }
+      .replay-restart-button:active {
+        filter: brightness(1.35);
+      }
+      .replay-restart-button:disabled {
+        opacity: 0.45;
+        cursor: default;
+        filter: none;
+        pointer-events: none;
+      }
+      .replay-restart-button--spin {
+        animation: replayRestartSpin 0.35s ease;
+      }
+      @keyframes replayRestartSpin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+
       
       .toggle-container {
         display: flex;
@@ -439,6 +580,10 @@
         </div>
         <button id="playBtn">PLAY FRIENDS</button>
         <button id="playBotBtn">PLAY BOT</button>
+        <div class="menu-guest-name" id="menuGuestNameRow">
+          <input id="guestNameInput" class="menu-guest-name-input" type="text" maxlength="24" autocomplete="off" spellcheck="false" placeholder="Choose guest name" />
+          <button id="guestNameConfirm" class="menu-guest-name-confirm" title="Confirm guest name" aria-label="Confirm guest name">✔</button>
+        </div>
         <div class="replay-uploader" id="replayPanel">
           <div class="replay-header" id="replayHeader">
             <span>Replay Upload</span>
@@ -463,6 +608,7 @@
       <div class="progressMarker" id="progressMarkerLeft"></div>
       <div class="progressMarker" id="progressMarkerRight"></div>
     </div>
+    <div id="progressBarNames"></div>
     
     <!-- Timer display -->
     <div id="timerDisplay">7:00</div>

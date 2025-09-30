@@ -136,16 +136,18 @@ def build_engine_from_replay(
             color = entry.get("color", "#ffffff")
             secondary_colors = list(entry.get("secondaryColors", entry.get("secondary_colors", [])))
             auto_expand = bool(entry.get("autoExpand", entry.get("auto_expand", False)))
+            name = str(entry.get("name") or entry.get("guestName") or "")
         else:
             player_id = _coerce_int(entry)
             color = "#ffffff"
             secondary_colors = []
             auto_expand = False
+            name = ""
 
         if player_id <= 0:
             raise ReplayLoadError("Replay includes invalid player id")
 
-        player = Player(id=player_id, color=color, secondary_colors=secondary_colors)
+        player = Player(id=player_id, color=color, secondary_colors=secondary_colors, name=name)
         state.add_player(player)
         state.player_auto_expand[player_id] = auto_expand
         state.player_gold[player_id] = starting_gold_value
@@ -156,6 +158,7 @@ def build_engine_from_replay(
         engine.player_meta[player_id] = {
             "color": color,
             "secondary_colors": secondary_colors,
+            "guest_name": name,
         }
 
     # Ensure gold map exists for all players even if replay recorded different constants

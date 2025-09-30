@@ -12,6 +12,23 @@ from .replay import GameReplayRecorder
 from .replay_session import ReplayLoadError, ReplaySession
 
 
+def _clean_guest_name(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value)
+    # Strip non-printable characters
+    text = "".join(ch for ch in text if ch.isprintable())
+    text = text.strip()
+    if not text:
+        return ""
+    # Collapse consecutive whitespace to single spaces
+    text = " ".join(text.split())
+    max_length = 24
+    if len(text) > max_length:
+        text = text[:max_length]
+    return text
+
+
 class MessageRouter:
     """Routes websocket messages to the appropriate handlers."""
 
@@ -79,6 +96,7 @@ class MessageRouter:
         speed_level = int(msg.get("speedLevel", 3))
         speed_level = max(1, min(5, speed_level))
         token = msg.get("token") or uuid.uuid4().hex
+        guest_name = _clean_guest_name(msg.get("guestName"))
 
         lobbies: Dict[int, List[Dict[str, Any]]] = server_context.setdefault("lobbies", {})
         lobby_queue = lobbies.setdefault(player_count, [])
@@ -93,6 +111,7 @@ class MessageRouter:
                 "auto_expand": auto_expand,
                 "speed_level": speed_level,
                 "joined_at": time.time(),
+                "guest_name": guest_name,
             }
         )
 
@@ -105,9 +124,19 @@ class MessageRouter:
                     "status": "waiting",
                     "token": token,
                     "playerCount": player_count,
+                    "guestName": guest_name,
                 }
             )
         )
+
+        # Start a game when enough players have queued for this lobby size
+        filtered_queue: List[Dict[str, Any]] = []
+        for entry in lobby_queue:
+            ws = entry.get("websocket")
+            if ws is None or getattr(ws, "closed", False):
+                continue
+            filtered_queue.append(entry)
+        lobby_queue[:] = filtered_queue
 
         if len(lobby_queue) >= player_count:
             players = [lobby_queue.pop(0) for _ in range(player_count)]
@@ -145,11 +174,15 @@ class MessageRouter:
         engine = GameEngine()
         color_pool = PLAYER_COLOR_SCHEMES[:player_count]
 
-        player_slots = []
+        player_slots: List[Dict[str, Any]] = []
         auto_expand_state: Dict[str, bool] = {}
+        guest_names: Dict[str, str] = {}
         for idx, player in enumerate(players, start=1):
             color_info = color_pool[idx - 1]
             auto_expand = bool(player.get("auto_expand", False))
+            guest_name = _clean_guest_name(player.get("guest_name"))
+            if not guest_name:
+                guest_name = f"Guest {idx}"
             player_slots.append(
                 {
                     "player_id": idx,
@@ -157,9 +190,11 @@ class MessageRouter:
                     "color": color_info["color"],
                     "secondary_colors": color_info["secondary"],
                     "auto_expand": auto_expand,
+                    "guest_name": guest_name,
                 }
             )
             auto_expand_state[player["token"]] = auto_expand
+            guest_names[player["token"]] = guest_name
 
         engine.start_game(player_slots, speed_level)
         game_id = uuid.uuid4().hex
@@ -176,6 +211,7 @@ class MessageRouter:
             "disconnect_deadlines": {},
             "replay_recorder": replay_recorder,
             "auto_expand_state": auto_expand_state,
+            "guest_names": guest_names,
         }
 
         games = server_context.setdefault("games", {})
@@ -954,6 +990,17 @@ class MessageRouter:
                     if token:
                         auto_expand_map[token] = bool(enabled)
 
+            guest_name_map: Dict[str, str] = {}
+            raw_guest_names = game_info.get("guest_names", {})
+            if isinstance(raw_guest_names, dict):
+                guest_name_map = {str(tok): str(name) for tok, name in raw_guest_names.items()}
+
+            if not guest_name_map and engine:
+                for player_id, meta in getattr(engine, "player_meta", {}).items():
+                    token = engine.player_id_to_token.get(player_id)
+                    if token:
+                        guest_name_map[token] = str(meta.get("guest_name", ""))
+
             group_id = uuid.uuid4().hex
             postgame_groups[group_id] = {
                 "tokens": tokens,
@@ -963,6 +1010,7 @@ class MessageRouter:
                 "rematch_votes": set(),
                 "replay_data": replay_bundle,
                 "auto_expand": auto_expand_map,
+                "guest_names": guest_name_map,
             }
 
             # Notify clients that postgame rematch is available
@@ -1025,6 +1073,7 @@ class MessageRouter:
                     "websocket": group.get("clients", {}).get(t),
                     "auto_expand": bool(group.get("auto_expand", {}).get(t, False)),
                     "speed_level": speed_level,
+                    "guest_name": group.get("guest_names", {}).get(t),
                 })
             # Remove group before starting to avoid reentrancy issues
             groups.pop(group_id, None)

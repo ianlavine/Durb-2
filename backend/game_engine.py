@@ -58,8 +58,9 @@ class GameEngine:
             color = slot.get("color", "#ffffff")
             secondary_colors = list(slot.get("secondary_colors", []))
             auto_expand = bool(slot.get("auto_expand", False))
+            guest_name = str(slot.get("guest_name", "") or "").strip()
 
-            player = Player(id=player_id, color=color, secondary_colors=secondary_colors)
+            player = Player(id=player_id, color=color, secondary_colors=secondary_colors, name=guest_name)
             self.state.add_player(player)
 
             self.token_to_player_id[token] = player_id
@@ -67,6 +68,7 @@ class GameEngine:
             self.player_meta[player_id] = {
                 "color": color,
                 "secondary_colors": secondary_colors,
+                "guest_name": guest_name,
             }
             self.state.player_auto_expand[player_id] = auto_expand
 

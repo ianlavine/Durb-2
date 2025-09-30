@@ -58,6 +58,7 @@ class GameReplayRecorder:
                     "color": slot.get("color"),
                     "secondaryColors": list(slot.get("secondary_colors", [])),
                     "autoExpand": bool(slot.get("auto_expand", False)),
+                    "name": str(slot.get("guest_name", "") or ""),
                 }
             )
 

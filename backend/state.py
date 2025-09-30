@@ -224,6 +224,7 @@ class GraphState:
                 "color": p.color,
                 "secondaryColors": list(getattr(p, "secondary_colors", [])),
                 "eliminated": pid in self.eliminated_players,
+                "name": getattr(p, "name", ""),
             }
             for pid, p in self.players.items()
         ]
