@@ -1,7 +1,7 @@
 import json
 import random
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .constants import (
     GOLD_REWARD_FOR_ENEMY_CAPTURE,
@@ -11,6 +11,7 @@ from .constants import (
     NODE_MAX_JUICE,
     NODE_MIN_JUICE,
     PASSIVE_GOLD_PER_SECOND,
+    POP_NODE_REWARD,
     PRODUCTION_RATE_PER_NODE,
     RESERVE_TRANSFER_RATIO,
     STARTING_GOLD,
@@ -52,6 +53,9 @@ class GraphState:
         
         # Game speed level (1-5, default 3 for new 1x speed)
         self.speed_level: int = 3
+
+        # Game mode (e.g., 'passive', 'pop')
+        self.mode: str = "passive"
 
         # Replay helpers
         self.tick_count: int = 0
@@ -200,6 +204,43 @@ class GraphState:
 
         return None
 
+    def remove_node_and_edges(self, node_id: int) -> Optional[Dict[str, Any]]:
+        """Remove a node and all connected edges, returning snapshot details for messaging."""
+        node = self.nodes.get(node_id)
+        if not node:
+            return None
+
+        snapshot: Dict[str, Any] = {
+            "id": node.id,
+            "x": node.x,
+            "y": node.y,
+            "owner": node.owner,
+            "juice": node.juice,
+        }
+
+        edges_to_remove = list(node.attached_edge_ids)
+        for edge_id in edges_to_remove:
+            edge = self.edges.pop(edge_id, None)
+            if not edge:
+                continue
+            source_node = self.nodes.get(edge.source_node_id)
+            target_node = self.nodes.get(edge.target_node_id)
+            if source_node and edge_id in source_node.attached_edge_ids:
+                source_node.attached_edge_ids.remove(edge_id)
+            if target_node and edge_id in target_node.attached_edge_ids:
+                target_node.attached_edge_ids.remove(edge_id)
+
+        for pending_nodes in self.pending_auto_expand_nodes.values():
+            if pending_nodes and node_id in pending_nodes:
+                pending_nodes.discard(node_id)
+
+        self.nodes.pop(node_id, None)
+
+        return {
+            "node": snapshot,
+            "removedEdges": edges_to_remove,
+        }
+
     def to_init_message(self, screen: Dict[str, int], tick_interval: float, current_time: float = 0.0) -> Dict:
         nodes_arr = [
             [nid, round(n.x, 3), round(n.y, 3), round(n.juice, 3), (n.owner if n.owner is not None else None)]
@@ -246,7 +287,7 @@ class GraphState:
             "nodes": nodes_arr,
             "edges": edges_arr,
             "players": players_arr,
-            "settings": {"nodeMaxJuice": NODE_MAX_JUICE},
+            "settings": {"nodeMaxJuice": NODE_MAX_JUICE, "popReward": POP_NODE_REWARD},
             "phase": self.phase,
             "gold": gold_arr,
             "picked": picked_arr,
@@ -256,6 +297,7 @@ class GraphState:
             "eliminatedPlayers": sorted(self.eliminated_players),
             "gameDuration": self.game_duration,
             "timerRemaining": timer_remaining,
+            "mode": self.mode,
         }
 
     def to_tick_message(self, current_time: float = 0.0) -> Dict:
@@ -303,6 +345,8 @@ class GraphState:
             "recentEliminations": recent_eliminations,
             "gameDuration": self.game_duration,
             "timerRemaining": timer_remaining,
+            "mode": self.mode,
+            "popReward": POP_NODE_REWARD,
         }
 
     def _update_edge_flowing_status(self) -> None:
@@ -374,7 +418,12 @@ class GraphState:
         self._update_edge_flowing_status()
 
         # Passive gold income for active players ($1 every 3 seconds)
-        if not self.game_ended and PASSIVE_GOLD_PER_SECOND > 0.0 and tick_interval_seconds > 0.0:
+        if (
+            self.mode == "passive"
+            and not self.game_ended
+            and PASSIVE_GOLD_PER_SECOND > 0.0
+            and tick_interval_seconds > 0.0
+        ):
             passive_income = PASSIVE_GOLD_PER_SECOND * tick_interval_seconds
             if passive_income > 0.0:
                 for player_id in self.players.keys():

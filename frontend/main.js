@@ -99,12 +99,19 @@
   
   // Node juice display system
   let nodeJuiceTexts = new Map(); // nodeId -> text object
-  
+  let popReadyLabels = new Map(); // nodeId -> text object for pop-ready hint
+
   // Targeting visual indicator system
   let currentTargetNodeId = null; // The node currently being targeted (for visual indicator)
   let currentTargetSetTime = null; // Animation time when target was last set
   
   let selectedPlayerCount = 2;
+  let selectedMode = 'passive';
+  let gameMode = 'passive';
+  let popReward = 10;
+  let modeButtons = [];
+  const MODE_LABELS = { passive: 'Passive', pop: 'Pop' };
+  const POP_READY_TOLERANCE = 0.01;
 
   // Money transparency system
   let moneyIndicators = []; // Array of {x, y, text, color, startTime, duration}
@@ -256,6 +263,14 @@
       { freq: 780, type: 'sine', attack: 0.005, decay: 0.12, volume: 0.14, delay: 0.00 },
       { freq: 1170, type: 'sine', attack: 0.005, decay: 0.12, volume: 0.11, delay: 0.05 },
     ]);
+  }
+  function playPopBurst() {
+    // Bright pop with airy shimmer
+    playToneSequence([
+      { freq: 1180, type: 'triangle', attack: 0.004, decay: 0.09, volume: 0.16, delay: 0.00 },
+      { freq: 760, type: 'sine', attack: 0.004, decay: 0.12, volume: 0.13, delay: 0.03 },
+    ]);
+    playNoiseBurst({ duration: 0.12, volume: 0.22, filterType: 'bandpass', filterFreq: 1650, q: 2.8, attack: 0.002, decay: 0.14 });
   }
   function playLoseNodeWarning() {
     // Intentionally silent for now; keeping function for future use
@@ -783,7 +798,7 @@
   function calculateNodeRadius(node, baseScale) {
     const juiceVal = Math.max(0, node.size ?? node.juice ?? 0);
     const minRadius = node.owner === null ? 0.2 : 0.3;
-    const radius = Math.max(minRadius, 0.22 * Math.sqrt(juiceVal));
+    const radius = Math.max(minRadius, 0.1 * Math.pow(juiceVal, 0.65));
     return radius * baseScale;
   }
 
@@ -881,6 +896,53 @@
     return rounded.toString();
   }
 
+  function normalizeMode(value) {
+    if (typeof value !== 'string') return 'passive';
+    const lowered = value.trim().toLowerCase();
+    return Object.prototype.hasOwnProperty.call(MODE_LABELS, lowered) ? lowered : 'passive';
+  }
+
+  function formatModeText(mode) {
+    return MODE_LABELS[normalizeMode(mode)] || MODE_LABELS.passive;
+  }
+
+  function updateModeButtonsUI() {
+    if (!modeButtons || !modeButtons.length) return;
+    modeButtons.forEach((btn) => {
+      const btnMode = normalizeMode(btn.getAttribute('data-mode'));
+      if (btnMode === selectedMode) btn.classList.add('active');
+      else btn.classList.remove('active');
+    });
+  }
+
+  function updatePlayBotAvailability(baseEnabled = true) {
+    if (!playBotBtnEl) return;
+    const modeAllowsBot = selectedMode === 'passive';
+    const enabled = Boolean(baseEnabled && modeAllowsBot);
+    playBotBtnEl.disabled = !enabled;
+    playBotBtnEl.title = modeAllowsBot ? '' : 'Bots are only available in Passive mode';
+  }
+
+  function setSelectedMode(nextMode, options = {}) {
+    const normalized = normalizeMode(nextMode);
+    if (!options.force && selectedMode === normalized) {
+      updateModeButtonsUI();
+      updatePlayBotAvailability(menuGuestNameConfirmed && savedGuestName.length > 0);
+      return selectedMode;
+    }
+    selectedMode = normalized;
+    updateModeButtonsUI();
+    updatePlayBotAvailability(menuGuestNameConfirmed && savedGuestName.length > 0);
+    const infoPanel = document.getElementById('modeInfoPanel');
+    const infoButton = document.getElementById('modeInfoButton');
+    if (infoPanel && infoButton) {
+      infoPanel.style.display = 'none';
+      infoPanel.setAttribute('aria-hidden', 'true');
+      infoButton.setAttribute('aria-expanded', 'false');
+    }
+    return selectedMode;
+  }
+
 // Replace the whole function with this Phaser version:
 function updateBridgeCostDisplay(fromNode, toNode) {
   if (!sceneRef || !fromNode || !toNode) return;
@@ -974,7 +1036,7 @@ function hideReverseCostDisplay() {
 
   // Money indicator functions
   // Create an animated text indicator that rises & fades out
-  function createMoneyIndicator(x, y, text, color, duration = 2000) {
+  function createMoneyIndicator(x, y, text, color, duration = 2000, options = {}) {
     const indicator = {
       x,
       y,
@@ -982,10 +1044,12 @@ function hideReverseCostDisplay() {
       color,
       startTime: Date.now(),
       duration,
-      textObj: null
+      textObj: null,
+      floatDistance: Number.isFinite(options.floatDistance) ? options.floatDistance : 30,
+      worldOffset: Number.isFinite(options.worldOffset) ? options.worldOffset : 0
     };
 
-    const [sx, sy] = worldToScreen(x, y);
+    const [sx, sy] = worldToScreen(x, y + indicator.worldOffset);
     if (sceneRef) {
       indicator.textObj = sceneRef.add.text(sx, sy, text, {
         fontFamily: 'monospace',
@@ -1019,8 +1083,8 @@ function hideReverseCostDisplay() {
 
       // Rise & fade
       const alpha = 1 - progress;
-      const offsetY = progress * 30;
-      const [sx, sy] = worldToScreen(indicator.x, indicator.y - offsetY);
+      const offsetY = progress * (indicator.floatDistance ?? 30);
+      const [sx, sy] = worldToScreen(indicator.x, indicator.y + indicator.worldOffset - offsetY);
 
       if (indicator.textObj) {
         indicator.textObj.setPosition(sx, sy);
@@ -1119,6 +1183,7 @@ function hideReverseCostDisplay() {
     playBotBtnEl = document.getElementById('playBotBtn');
     const buttonContainer = document.querySelector('.button-container');
     const playerCountButtons = document.querySelectorAll('.player-count-option');
+    modeButtons = Array.from(document.querySelectorAll('.mode-option'));
     guestNameInputEl = document.getElementById('guestNameInput');
     guestNameConfirmBtn = document.getElementById('guestNameConfirm');
     if (guestNameInputEl) {
@@ -1153,6 +1218,48 @@ function hideReverseCostDisplay() {
         });
       });
     }
+
+    if (modeButtons && modeButtons.length) {
+      modeButtons.forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const nextMode = btn.getAttribute('data-mode');
+          setSelectedMode(nextMode);
+        });
+      });
+      setSelectedMode(selectedMode, { force: true });
+    }
+
+    const modeInfoButton = document.getElementById('modeInfoButton');
+    const modeInfoPanel = document.getElementById('modeInfoPanel');
+    if (modeInfoButton && modeInfoPanel && !modeInfoButton.dataset.bound) {
+      modeInfoButton.dataset.bound = 'true';
+      const hideModePanel = () => {
+        modeInfoPanel.style.display = 'none';
+        modeInfoPanel.setAttribute('aria-hidden', 'true');
+        modeInfoButton.setAttribute('aria-expanded', 'false');
+      };
+
+      modeInfoButton.addEventListener('click', (event) => {
+        event.stopPropagation();
+        const isVisible = modeInfoPanel.style.display === 'block';
+        if (isVisible) {
+          hideModePanel();
+        } else {
+          modeInfoPanel.style.display = 'block';
+          modeInfoPanel.setAttribute('aria-hidden', 'false');
+          modeInfoButton.setAttribute('aria-expanded', 'true');
+        }
+      });
+
+      modeInfoPanel.addEventListener('click', (event) => {
+        event.stopPropagation();
+      });
+
+      document.addEventListener('click', () => hideModePanel());
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') hideModePanel();
+      });
+    }
     
     if (playFriendsBtn) {
       playFriendsBtn.addEventListener('click', () => {
@@ -1170,7 +1277,7 @@ function hideReverseCostDisplay() {
         if (ws && ws.readyState === WebSocket.OPEN) {
           showLobby();
           // Show selected player count immediately
-          setLobbyStatus(`Waiting for players to join... (${selectedPlayerCount}-player game)`);
+          setLobbyStatus(`Waiting for players to join... (${selectedPlayerCount}-player ${formatModeText(selectedMode)} game)`);
           // Hide both buttons when entering lobby
           if (buttonContainer) {
             buttonContainer.style.display = 'none';
@@ -1183,6 +1290,7 @@ function hideReverseCostDisplay() {
             autoExpand: persistentAutoExpand,
             playerCount: selectedPlayerCount,
             guestName: savedGuestName,
+            mode: selectedMode,
           }));
         }
       });
@@ -1199,6 +1307,10 @@ function hideReverseCostDisplay() {
         }
         if (isReplayActive()) {
           setReplayStatus('Stop the current replay before starting a bot match.', 'warn');
+          return;
+        }
+        if (selectedMode !== 'passive') {
+          showErrorMessage('Bots are only available in Passive mode', 'error');
           return;
         }
         if (ws && ws.readyState === WebSocket.OPEN) {
@@ -1857,7 +1969,9 @@ function hideReverseCostDisplay() {
       else if (msg.type === 'bridgeError') handleBridgeError(msg);
       else if (msg.type === 'reverseEdgeError') handleReverseEdgeError(msg);
       else if (msg.type === 'nodeDestroyed') handleNodeDestroyed(msg);
+      else if (msg.type === 'nodePopped') handleNodePopped(msg);
       else if (msg.type === 'destroyError') handleDestroyError(msg);
+      else if (msg.type === 'popError') handlePopError(msg);
       else if (msg.type === 'nodeCaptured') handleNodeCaptured(msg);
       else if (msg.type === 'lobbyTimeout') handleLobbyTimeout();
       else if (msg.type === 'postgame') handlePostgame(msg);
@@ -1950,6 +2064,18 @@ function hideReverseCostDisplay() {
       if (text) text.destroy();
     });
     nodeJuiceTexts.clear();
+
+    popReadyLabels.forEach(label => {
+      if (label) label.destroy();
+    });
+    popReadyLabels.clear();
+
+    gameMode = normalizeMode(msg.mode || 'passive');
+    if (msg.settings && Number.isFinite(msg.settings.popReward)) {
+      popReward = Number(msg.settings.popReward);
+    } else {
+      popReward = 10;
+    }
 
     // Clear any lingering edge flow labels between games
     edgeFlowTexts.forEach(text => {
@@ -2301,10 +2427,13 @@ function hideReverseCostDisplay() {
   function handleLobby(msg) {
     showLobby();
     const count = Number.isFinite(msg.playerCount) ? msg.playerCount : selectedPlayerCount;
+    const mode = normalizeMode(msg.mode || selectedMode);
+    setSelectedMode(mode, { force: true });
+    const modeLabel = formatModeText(mode);
     if (msg.status === 'waiting') {
-      setLobbyStatus(`Waiting for players to join... (${count}-player game)`);
+      setLobbyStatus(`Waiting for players to join... (${count}-player ${modeLabel} game)`);
     } else {
-      setLobbyStatus('Starting...');
+      setLobbyStatus(`Starting ${count}-player ${modeLabel} game...`);
     }
     if (msg.token) localStorage.setItem('token', msg.token);
     // Hide the PLAY button while waiting
@@ -2357,6 +2486,13 @@ function hideReverseCostDisplay() {
   }
 
   function handleTick(msg) {
+    if (typeof msg.mode === 'string') {
+      gameMode = normalizeMode(msg.mode);
+    }
+    if (Number.isFinite(msg.popReward)) {
+      popReward = Number(msg.popReward);
+    }
+
     if (Array.isArray(msg.nodes)) {
       msg.nodes.forEach(([id, size, owner]) => {
         const node = nodes.get(id);
@@ -2653,13 +2789,125 @@ function hideReverseCostDisplay() {
     showErrorMessage(mapped, variant);
   }
 
-  function handleNodeDestroyed(msg) {
-    // Remove the destroyed node from the frontend
-    if (msg.nodeId) {
-      nodes.delete(msg.nodeId);
-      redrawStatic();
+  function cleanupNodeVisuals(nodeId) {
+    const juiceText = nodeJuiceTexts.get(nodeId);
+    if (juiceText) {
+      juiceText.destroy();
+      nodeJuiceTexts.delete(nodeId);
     }
-    
+    const popLabel = popReadyLabels.get(nodeId);
+    if (popLabel) {
+      popLabel.destroy();
+      popReadyLabels.delete(nodeId);
+    }
+  }
+
+  function removeEdges(edgeIds) {
+    if (!Array.isArray(edgeIds)) return;
+    edgeIds.forEach((edgeId) => {
+      if (!edges.has(edgeId)) return;
+      const label = edgeFlowTexts.get(edgeId);
+      if (label) {
+        label.destroy();
+        edgeFlowTexts.delete(edgeId);
+      }
+      edges.delete(edgeId);
+    });
+  }
+
+  function fallbackRemoveEdgesForNode(nodeId) {
+    const edgeIds = [];
+    edges.forEach((edge, edgeId) => {
+      if (edge.source === nodeId || edge.target === nodeId) {
+        edgeIds.push(edgeId);
+      }
+    });
+    removeEdges(edgeIds);
+  }
+
+  function spawnPopBurst(nodeSnapshot) {
+    if (!sceneRef || !nodeSnapshot) return;
+    const [sx, sy] = worldToScreen(nodeSnapshot.x, nodeSnapshot.y);
+
+    const inner = sceneRef.add.circle(sx, sy, 6, 0xfff4aa, 0.55)
+      .setOrigin(0.5, 0.5)
+      .setDepth(1250);
+    const ring = sceneRef.add.circle(sx, sy, 10)
+      .setStrokeStyle(3, 0xffd36f, 0.95)
+      .setFillStyle(0xffd36f, 0)
+      .setDepth(1249);
+
+    sceneRef.tweens.add({
+      targets: inner,
+      scale: { from: 0.4, to: 1.7 },
+      alpha: { from: 0.65, to: 0 },
+      duration: 220,
+      ease: 'Cubic.easeOut',
+      onComplete: () => inner.destroy(),
+    });
+
+    sceneRef.tweens.add({
+      targets: ring,
+      scale: { from: 0.6, to: 2.4 },
+      alpha: { from: 0.9, to: 0 },
+      duration: 260,
+      ease: 'Cubic.easeOut',
+      onComplete: () => ring.destroy(),
+    });
+  }
+
+  function isNodePopReady(node) {
+    if (!node) return false;
+    if (gameMode !== 'pop') return false;
+    if (node.owner !== myPlayerId) return false;
+    const size = Number(node.size ?? 0);
+    return size >= (nodeMaxJuice - POP_READY_TOLERANCE);
+  }
+
+  function attemptPopNode(nodeId) {
+    const node = nodes.get(nodeId);
+    if (!isNodePopReady(node)) return false;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    if (phase !== 'playing') return false;
+    const token = localStorage.getItem('token');
+    ws.send(JSON.stringify({ type: 'popNode', nodeId, token }));
+    return true;
+  }
+
+  function handleNodeDestroyed(msg) {
+    const nodeId = Number(msg.nodeId);
+    if (!Number.isFinite(nodeId)) return;
+
+    const nodeSnapshot = msg.nodeSnapshot || nodes.get(nodeId);
+
+    if (nodes.has(nodeId)) {
+      nodes.delete(nodeId);
+    }
+    cleanupNodeVisuals(nodeId);
+
+    if (Array.isArray(msg.removedEdges)) {
+      removeEdges(msg.removedEdges.map(Number));
+    } else {
+      fallbackRemoveEdgesForNode(nodeId);
+    }
+
+    if (msg.playerId === myPlayerId && Number.isFinite(msg.cost) && msg.cost > 0 && nodeSnapshot) {
+      const scale = view ? Math.min(view.scaleX, view.scaleY) : 1;
+      const radiusPx = calculateNodeRadius(nodeSnapshot, scale || 1);
+      const radiusWorld = (scale && scale > 0) ? radiusPx / scale : 0;
+      const worldOffset = persistentNumbers ? -(radiusWorld + 0.6) : 0;
+      createMoneyIndicator(
+        nodeSnapshot.x,
+        nodeSnapshot.y,
+        `-$${formatCost(msg.cost)}`,
+        0xcd853f,
+        1800,
+        { worldOffset, floatDistance: 26 }
+      );
+    }
+
+    redrawStatic();
+
     // Reset destroy mode on successful node destruction
     if (activeAbility === 'destroy') {
       activeAbility = null;
@@ -2667,9 +2915,52 @@ function hideReverseCostDisplay() {
     }
   }
 
+  function handleNodePopped(msg) {
+    const nodeId = Number(msg.nodeId);
+    if (!Number.isFinite(nodeId)) return;
+
+    const nodeSnapshot = msg.nodeSnapshot || nodes.get(nodeId);
+
+    if (nodes.has(nodeId)) {
+      nodes.delete(nodeId);
+    }
+    cleanupNodeVisuals(nodeId);
+
+    if (Array.isArray(msg.removedEdges)) {
+      removeEdges(msg.removedEdges.map(Number));
+    } else {
+      fallbackRemoveEdgesForNode(nodeId);
+    }
+
+    if (msg.playerId === myPlayerId && Number.isFinite(msg.reward) && msg.reward > 0 && nodeSnapshot) {
+      const scale = view ? Math.min(view.scaleX, view.scaleY) : 1;
+      const radiusPx = calculateNodeRadius(nodeSnapshot, scale || 1);
+      const radiusWorld = (scale && scale > 0) ? radiusPx / scale : 0;
+      const worldOffset = persistentNumbers ? -(radiusWorld + 0.6) : 0;
+      createMoneyIndicator(
+        nodeSnapshot.x,
+        nodeSnapshot.y,
+        `+$${formatCost(msg.reward)}`,
+        0xffd700,
+        2000,
+        { worldOffset, floatDistance: 28 }
+      );
+      playCaptureDing();
+    }
+
+    spawnPopBurst(nodeSnapshot);
+    playPopBurst();
+
+    redrawStatic();
+  }
+
   function handleDestroyError(msg) {
     // Show error message to the player
     showErrorMessage(msg.message || "Can't destroy this node!");
+  }
+
+  function handlePopError(msg) {
+    showErrorMessage(msg.message || 'Cannot pop this node right now');
   }
 
   function handleNodeCaptured(msg) {
@@ -2776,6 +3067,9 @@ function hideReverseCostDisplay() {
       // Hide toggles grid when menu is visible
       const togglesGrid = document.getElementById('inGameToggles');
       if (togglesGrid) togglesGrid.style.display = 'none';
+      popReadyLabels.forEach(label => {
+        if (label) label.setVisible(false);
+      });
       return; // Do not draw game under menu
     }
     
@@ -2887,7 +3181,52 @@ function hideReverseCostDisplay() {
         graphicsNodes.lineStyle(4, 0x000000, 1);
         graphicsNodes.strokeCircle(nx, ny, r + 2);
       }
-      
+
+      if (gameMode === 'pop' && isNodePopReady(n) && phase === 'playing') {
+        const highlightRadius = Math.max(1, r);
+        graphicsNodes.fillStyle(0xffffff, 0.16);
+        graphicsNodes.fillCircle(nx, ny, highlightRadius);
+
+        const sheenRadius = highlightRadius * 0.75;
+        graphicsNodes.fillStyle(0xffffff, 0.35);
+        graphicsNodes.fillCircle(nx, ny - highlightRadius * 0.35, sheenRadius);
+
+        graphicsNodes.fillStyle(0xffffff, 0.18);
+        graphicsNodes.fillCircle(nx + highlightRadius * 0.25, ny - highlightRadius * 0.2, highlightRadius * 0.28);
+
+        const labelText = `$${formatCost(popReward)}`;
+        let hint = popReadyLabels.get(id);
+        const hintY = ny - (highlightRadius + 18);
+        if (!hint) {
+          hint = sceneRef.add.text(nx, hintY, labelText, {
+            font: '16px monospace',
+            color: '#ffd700',
+            stroke: '#000000',
+            strokeThickness: 4,
+            align: 'center',
+          });
+          hint.setOrigin(0.5, 0.5);
+          hint.setDepth(1200);
+          popReadyLabels.set(id, hint);
+        } else {
+          if (hint.text !== labelText) hint.setText(labelText);
+          hint.setColor('#ffd700');
+          hint.setStroke('#000000', 4);
+          hint.setPosition(nx, hintY);
+        }
+        if (hint && !hint.visible) hint.setVisible(true);
+
+        if (hoveredNodeId === id) {
+          graphicsNodes.lineStyle(4, 0xffeb8a, 0.95);
+          graphicsNodes.strokeCircle(nx, ny, highlightRadius + 6);
+          graphicsNodes.lineStyle(2, 0xffc04d, 0.9);
+          graphicsNodes.strokeCircle(nx, ny, highlightRadius + 11);
+        }
+      } else {
+        const hint = popReadyLabels.get(id);
+        if (hint && hint.visible) hint.setVisible(false);
+      }
+
       // Hover effect: player's color border when eligible for starting node pick
       if (hoveredNodeId === id && !myPicked && (n.owner == null)) {
         const myColor = ownerToColor(myPlayerId);
@@ -3293,7 +3632,11 @@ function hideReverseCostDisplay() {
       ws.send(JSON.stringify({ type: 'clickNode', nodeId: nodeId, token }));
       return; // Return after handling starting node pick
     }
-    
+
+    if (nodeId != null && attemptPopNode(nodeId)) {
+      return;
+    }
+
     // Handle all other clicks (node flow targeting, edge clicks, etc.)
     if (ws && ws.readyState === WebSocket.OPEN) {
       const token = localStorage.getItem('token');
@@ -3612,7 +3955,7 @@ function hideReverseCostDisplay() {
 
   function setPlayButtonsEnabled(enabled) {
     if (playFriendsBtn) playFriendsBtn.disabled = !enabled;
-    if (playBotBtnEl) playBotBtnEl.disabled = !enabled;
+    updatePlayBotAvailability(enabled);
   }
 
   function ensurePlayerStats(id) {

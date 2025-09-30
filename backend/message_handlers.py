@@ -5,7 +5,13 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import websockets
 
-from .constants import MAX_FRIEND_PLAYERS, MIN_FRIEND_PLAYERS, PLAYER_COLOR_SCHEMES
+from .constants import (
+    DEFAULT_GAME_MODE,
+    GAME_MODES,
+    MAX_FRIEND_PLAYERS,
+    MIN_FRIEND_PLAYERS,
+    PLAYER_COLOR_SCHEMES,
+)
 from .game_engine import GameEngine
 from .bot_manager import bot_game_manager
 from .replay import GameReplayRecorder
@@ -44,6 +50,7 @@ class MessageRouter:
             "redirectEnergy": self.handle_redirect_energy,
             "localTargeting": self.handle_local_targeting,
             "destroyNode": self.handle_destroy_node,
+            "popNode": self.handle_pop_node,
             "quitGame": self.handle_quit_game,
             "toggleAutoExpand": self.handle_toggle_auto_expand,
             "newGame": self.handle_new_game,
@@ -97,12 +104,18 @@ class MessageRouter:
         speed_level = max(1, min(5, speed_level))
         token = msg.get("token") or uuid.uuid4().hex
         guest_name = _clean_guest_name(msg.get("guestName"))
+        requested_mode = str(msg.get("mode") or DEFAULT_GAME_MODE).strip().lower()
+        game_modes = set(GAME_MODES)
+        mode = requested_mode if requested_mode in game_modes else DEFAULT_GAME_MODE
 
-        lobbies: Dict[int, List[Dict[str, Any]]] = server_context.setdefault("lobbies", {})
-        lobby_queue = lobbies.setdefault(player_count, [])
+        lobbies: Dict[int, Dict[str, List[Dict[str, Any]]]] = server_context.setdefault("lobbies", {})
+        lobby_modes = lobbies.setdefault(player_count, {m: [] for m in GAME_MODES})
 
-        # Remove any stale entries for this websocket
-        lobby_queue[:] = [entry for entry in lobby_queue if entry.get("websocket") is not websocket]
+        for mode_map in lobbies.values():
+            for queue in mode_map.values():
+                queue[:] = [entry for entry in queue if entry.get("websocket") is not websocket]
+
+        lobby_queue = lobby_modes.setdefault(mode, [])
 
         lobby_queue.append(
             {
@@ -112,6 +125,7 @@ class MessageRouter:
                 "speed_level": speed_level,
                 "joined_at": time.time(),
                 "guest_name": guest_name,
+                "mode": mode,
             }
         )
 
@@ -125,6 +139,7 @@ class MessageRouter:
                     "token": token,
                     "playerCount": player_count,
                     "guestName": guest_name,
+                    "mode": mode,
                 }
             )
         )
@@ -140,7 +155,7 @@ class MessageRouter:
 
         if len(lobby_queue) >= player_count:
             players = [lobby_queue.pop(0) for _ in range(player_count)]
-            await self._start_friend_game(players, player_count, server_context)
+            await self._start_friend_game(players, player_count, mode, server_context)
 
     async def handle_leave_lobby(
         self,
@@ -150,11 +165,12 @@ class MessageRouter:
     ) -> None:
         """Explicitly remove a client from any lobby queues, similar to disconnect behavior."""
         # Remove this websocket from all lobby queues
-        lobbies: Dict[int, List[Dict[str, Any]]] = server_context.setdefault("lobbies", {})
-        for queue in lobbies.values():
-            if not queue:
-                continue
-            queue[:] = [entry for entry in queue if entry.get("websocket") is not websocket]
+        lobbies: Dict[int, Dict[str, List[Dict[str, Any]]]] = server_context.setdefault("lobbies", {})
+        for mode_map in lobbies.values():
+            for queue in mode_map.values():
+                if not queue:
+                    continue
+                queue[:] = [entry for entry in queue if entry.get("websocket") is not websocket]
 
         # Mirror disconnect behavior by clearing the ws->token mapping
         ws_to_token = server_context.setdefault("ws_to_token", {})
@@ -167,12 +183,15 @@ class MessageRouter:
         self,
         players: List[Dict[str, Any]],
         player_count: int,
+        mode: str,
         server_context: Dict[str, Any],
     ) -> None:
         speed_level = int(players[0].get("speed_level", 3))
         speed_level = max(1, min(5, speed_level))
         engine = GameEngine()
         color_pool = PLAYER_COLOR_SCHEMES[:player_count]
+
+        sanitized_mode = mode if mode in GAME_MODES else DEFAULT_GAME_MODE
 
         player_slots: List[Dict[str, Any]] = []
         auto_expand_state: Dict[str, bool] = {}
@@ -196,7 +215,7 @@ class MessageRouter:
             auto_expand_state[player["token"]] = auto_expand
             guest_names[player["token"]] = guest_name
 
-        engine.start_game(player_slots, speed_level)
+        engine.start_game(player_slots, speed_level, mode=sanitized_mode)
         game_id = uuid.uuid4().hex
 
         tick_interval = float(server_context.get("tick_interval", 0.1))
@@ -212,6 +231,7 @@ class MessageRouter:
             "replay_recorder": replay_recorder,
             "auto_expand_state": auto_expand_state,
             "guest_names": guest_names,
+            "mode": sanitized_mode,
         }
 
         games = server_context.setdefault("games", {})
@@ -577,7 +597,7 @@ class MessageRouter:
             return
 
         engine = game_info["engine"]
-        success, error_msg = engine.handle_destroy_node(token, int(node_id), cost)
+        success, error_msg, removal_info = engine.handle_destroy_node(token, int(node_id), cost)
         if not success:
             await self._send_safe(
                 websocket,
@@ -585,14 +605,79 @@ class MessageRouter:
             )
             return
 
-        message = {"type": "nodeDestroyed", "nodeId": int(node_id)}
-        await self._send_safe(websocket, json.dumps(message))
+        player_id = engine.get_player_id(token)
+        removal_payload: Dict[str, Any] = {
+            "type": "nodeDestroyed",
+            "nodeId": int(node_id),
+            "playerId": player_id,
+            "removedEdges": removal_info.get("removedEdges", []) if removal_info else [],
+            "reason": "destroy",
+            "cost": cost,
+        }
+        if removal_info and removal_info.get("node"):
+            removal_payload["nodeSnapshot"] = removal_info.get("node")
+
+        await self._broadcast_to_game(game_info, removal_payload)
 
         self._record_game_event(
             game_info,
             token,
             "destroyNode",
-            {"nodeId": int(node_id)},
+            {
+                "nodeId": int(node_id),
+                "removedEdges": removal_info.get("removedEdges", []) if removal_info else [],
+                "cost": cost,
+            },
+        )
+
+    async def handle_pop_node(
+        self,
+        websocket: websockets.WebSocketServerProtocol,
+        msg: Dict[str, Any],
+        server_context: Dict[str, Any],
+    ) -> None:
+        token = msg.get("token")
+        node_id = msg.get("nodeId")
+        if token is None or node_id is None:
+            return
+
+        game_info = self._get_game_info(token, server_context)
+        if not game_info:
+            return
+
+        engine = game_info["engine"]
+        success, error_msg, removal_info = engine.handle_pop_node(token, int(node_id))
+        if not success:
+            await self._send_safe(
+                websocket,
+                json.dumps({"type": "popError", "message": error_msg or "Failed to pop node"}),
+            )
+            return
+
+        player_id = engine.get_player_id(token)
+        reward = removal_info.get("reward") if removal_info else None
+        removal_payload: Dict[str, Any] = {
+            "type": "nodePopped",
+            "nodeId": int(node_id),
+            "playerId": player_id,
+            "removedEdges": removal_info.get("removedEdges", []) if removal_info else [],
+        }
+        if reward is not None:
+            removal_payload["reward"] = reward
+        if removal_info and removal_info.get("node"):
+            removal_payload["nodeSnapshot"] = removal_info.get("node")
+
+        await self._broadcast_to_game(game_info, removal_payload)
+
+        self._record_game_event(
+            game_info,
+            token,
+            "popNode",
+            {
+                "nodeId": int(node_id),
+                "removedEdges": removal_info.get("removedEdges", []) if removal_info else [],
+                "reward": removal_info.get("reward") if removal_info else None,
+            },
         )
 
     async def handle_quit_game(
@@ -871,7 +956,7 @@ class MessageRouter:
             node_id = msg.get("nodeId")
             cost = float(msg.get("cost", 3.0))
             if node_id is not None:
-                success, error_msg = bot_game_engine.handle_destroy_node(token, int(node_id), cost)
+                success, error_msg, _ = bot_game_engine.handle_destroy_node(token, int(node_id), cost)
                 if not success:
                     await self._send_safe(
                         websocket,
@@ -879,6 +964,12 @@ class MessageRouter:
                     )
                 else:
                     await self._send_safe(websocket, json.dumps({"type": "nodeDestroyed", "nodeId": int(node_id)}))
+
+        elif msg_type == "popNode":
+            await self._send_safe(
+                websocket,
+                json.dumps({"type": "popError", "message": "Pop mode unavailable in bot matches"}),
+            )
 
         elif msg_type == "quitGame":
             winner_id = bot_game_engine.handle_quit_game(token)
@@ -1011,6 +1102,7 @@ class MessageRouter:
                 "replay_data": replay_bundle,
                 "auto_expand": auto_expand_map,
                 "guest_names": guest_name_map,
+                "mode": game_info.get("mode", DEFAULT_GAME_MODE),
             }
 
             # Notify clients that postgame rematch is available
@@ -1066,6 +1158,7 @@ class MessageRouter:
         if len(tokens) > 0 and len(votes) == len(tokens):
             # Build players array for _start_friend_game
             speed_level = int(group.get("speed_level", 3))
+            mode = str(group.get("mode", DEFAULT_GAME_MODE))
             players = []
             for t in tokens:
                 players.append({
@@ -1074,10 +1167,11 @@ class MessageRouter:
                     "auto_expand": bool(group.get("auto_expand", {}).get(t, False)),
                     "speed_level": speed_level,
                     "guest_name": group.get("guest_names", {}).get(t),
+                    "mode": mode,
                 })
             # Remove group before starting to avoid reentrancy issues
             groups.pop(group_id, None)
-            await self._start_friend_game(players, len(players), server_context)
+            await self._start_friend_game(players, len(players), mode, server_context)
 
     async def handle_postgame_quit(
         self,

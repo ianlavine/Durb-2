@@ -1,4 +1,4 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 PLAYER_COLOR_SCHEMES: List[Dict[str, Any]] = [
     {"color": "#FF6B6B", "secondary": ["#FFC6C7", "#C44D58"]},
@@ -10,11 +10,16 @@ PLAYER_COLOR_SCHEMES: List[Dict[str, Any]] = [
 MIN_FRIEND_PLAYERS = 2
 MAX_FRIEND_PLAYERS = 4
 
+# Game modes
+GAME_MODES: Tuple[str, ...] = ("passive", "pop")
+DEFAULT_GAME_MODE: str = GAME_MODES[0]
+POP_NODE_REWARD: float = 10.0
+
 
 # Gameplay flow tuning
 EDGE_TOGGLE_PROBABILITY: float = 0.0
 NODE_MIN_JUICE: float = 0.0
-NODE_MAX_JUICE: float = 600.0
+NODE_MAX_JUICE: float = 500.0
 PRODUCTION_RATE_PER_NODE: float = 1.5
 MAX_TRANSFER_RATIO: float = 0.95
 INTAKE_TRANSFER_RATIO: float = 0.75

@@ -5,11 +5,13 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from .constants import (
+    DEFAULT_GAME_MODE,
     GOLD_REWARD_FOR_ENEMY_CAPTURE,
     GOLD_REWARD_FOR_NEUTRAL_CAPTURE,
     NODE_MAX_JUICE,
     NODE_MIN_JUICE,
     PASSIVE_GOLD_PER_SECOND,
+    POP_NODE_REWARD,
     PRODUCTION_RATE_PER_NODE,
     STARTING_GOLD,
 )
@@ -159,6 +161,7 @@ class GameReplayRecorder:
             "STARTING_GOLD": STARTING_GOLD,
             "GOLD_REWARD_FOR_NEUTRAL_CAPTURE": GOLD_REWARD_FOR_NEUTRAL_CAPTURE,
             "GOLD_REWARD_FOR_ENEMY_CAPTURE": GOLD_REWARD_FOR_ENEMY_CAPTURE,
+            "POP_NODE_REWARD": POP_NODE_REWARD,
         }
 
         starting_nodes_payload = [
@@ -187,6 +190,7 @@ class GameReplayRecorder:
             "startingNodes": starting_nodes_payload,
             "winnerId": winner_id,
             "durationTicks": duration_ticks,
+            "mode": getattr(engine.state, "mode", DEFAULT_GAME_MODE),
         }
 
         if self._events:
