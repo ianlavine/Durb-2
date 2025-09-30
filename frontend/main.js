@@ -110,7 +110,9 @@
   let sceneRef = null;
   let quitButton = null;
   let rematchButton = null;
+  let saveReplayWrapper = null;
   let saveReplayButton = null;
+  let reviewDropdownButton = null;
   let postgameNotice = null;
   let lobbyBackButton = null;
   let currentPostgameGroupId = null;
@@ -133,6 +135,11 @@
   let replayBodyEl = null;
   let replayHeaderEl = null;
   let replayToggleIconEl = null;
+  let pendingReplayIntent = null; // 'download' | 'review'
+  let reviewReplayActive = false; // true when the active replay came from postgame review
+  let reviewReplayDownloadButton = null;
+  let reviewReplayLastData = null;
+  let reviewReplayLastFilename = null;
 
   // Sound system
   let soundEnabled = true; // persisted in localStorage
@@ -478,6 +485,41 @@
     }
   }
 
+  function startReplayFromPayload(replayPayload, intent) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+    if (!replayPayload || typeof replayPayload !== 'object') {
+      return false;
+    }
+    if (isReplayActive()) {
+      stopReplaySession();
+    }
+
+    replayStartPending = true;
+    replaySessionActive = false;
+    reviewReplayActive = intent === 'review';
+    setReplayControlsDisabled(true);
+    ensureReplaySpeedElements();
+    replaySpeedValue = 1;
+    if (replaySpeedInput) replaySpeedInput.value = '1';
+    updateReplaySpeedLabel();
+    updateReplaySpeedUI();
+    updateReviewReplayDownloadButton();
+
+    try {
+      ws.send(JSON.stringify({ type: 'startReplay', replay: replayPayload }));
+      return true;
+    } catch (err) {
+      console.error('Failed to start replay from payload', err);
+      replayStartPending = false;
+      reviewReplayActive = false;
+      setReplayControlsDisabled(false);
+      updateReplaySpeedUI();
+      return false;
+    }
+  }
+
   function handleReplayPlaybackError(msg) {
     const message = msg && typeof msg.message === 'string' ? msg.message : 'Replay failed.';
     if (isReplayActive()) {
@@ -491,6 +533,10 @@
     setReplayStatus(message, 'error');
     clearReplaySelection();
     returnToMenu();
+    reviewReplayActive = false;
+    reviewReplayLastData = null;
+    reviewReplayLastFilename = null;
+    updateReviewReplayDownloadButton();
   }
 
   function handleReplayInit(msg) {
@@ -510,6 +556,7 @@
     handleInit(msg);
     updateQuitButtonLabel();
     if (replayMode) updateReplaySpeedUI();
+    updateReviewReplayDownloadButton();
   }
 
   function handleReplayMessage(msg) {
@@ -531,12 +578,17 @@
         updateQuitButtonLabel();
         returnToMenu();
         updateReplaySpeedUI();
+        reviewReplayActive = false;
+        reviewReplayLastData = null;
+        reviewReplayLastFilename = null;
+        updateReviewReplayDownloadButton();
         return;
       case 'replayComplete':
         replaySessionActive = false;
         setReplayStatus('Replay complete. Use Quit to return to menu.', 'success');
         updateReplaySpeedUI();
         updateQuitButtonLabel();
+        updateReviewReplayDownloadButton();
         return;
       case 'replayError':
         handleReplayPlaybackError(msg);
@@ -1085,6 +1137,44 @@ function hideReverseCostDisplay() {
     });
     quitButton = quitBtn;
 
+    reviewReplayDownloadButton = document.createElement('button');
+    reviewReplayDownloadButton.textContent = 'Download';
+    reviewReplayDownloadButton.dataset.clicked = '';
+    Object.assign(reviewReplayDownloadButton.style, {
+      position: 'absolute', left: '10px', top: '56px', zIndex: 10,
+      padding: '10px 18px', borderRadius: '10px', border: 'none',
+      background: '#f3eaff', color: '#251638', cursor: 'pointer',
+      boxShadow: '0 4px 12px rgba(0,0,0,0.25)', display: 'none',
+      transition: 'transform 120ms ease, background 160ms ease, color 160ms ease, box-shadow 160ms ease'
+    });
+    reviewReplayDownloadButton.addEventListener('mouseenter', () => {
+      if (reviewReplayDownloadButton.dataset.clicked === 'true') return;
+      reviewReplayDownloadButton.style.transform = 'scale(1.03)';
+      reviewReplayDownloadButton.style.background = '#ffffff';
+    });
+    reviewReplayDownloadButton.addEventListener('mouseleave', () => {
+      if (reviewReplayDownloadButton.dataset.clicked === 'true') return;
+      reviewReplayDownloadButton.style.transform = 'scale(1.0)';
+      reviewReplayDownloadButton.style.background = '#f3eaff';
+    });
+    reviewReplayDownloadButton.addEventListener('click', () => {
+      if (!reviewReplayActive || !reviewReplayLastData) {
+        handleReplayError({ message: 'Replay unavailable.' });
+        return;
+      }
+      const saved = saveReplayToDisk(reviewReplayLastData, reviewReplayLastFilename);
+      if (!saved) {
+        handleReplayError({ message: 'Could not save replay.' });
+        return;
+      }
+      reviewReplayDownloadButton.dataset.clicked = 'true';
+      reviewReplayDownloadButton.style.background = '#d8c6ff';
+      reviewReplayDownloadButton.style.color = '#2c1242';
+      reviewReplayDownloadButton.style.boxShadow = '0 2px 8px rgba(0,0,0,0.35) inset';
+      reviewReplayDownloadButton.style.transform = 'scale(0.98)';
+    });
+    document.body.appendChild(reviewReplayDownloadButton);
+
     // Rematch UI elements (created once)
     rematchButton = document.createElement('button');
     rematchButton.textContent = 'Rematch';
@@ -1117,15 +1207,20 @@ function hideReverseCostDisplay() {
       rematchButton.style.transform = 'scale(0.98)';
     });
 
+    saveReplayWrapper = document.createElement('div');
+    Object.assign(saveReplayWrapper.style, {
+      position: 'absolute', left: '10px', top: '102px', zIndex: 10,
+      display: 'none', width: 'auto',
+    });
+
     saveReplayButton = document.createElement('button');
-    saveReplayButton.textContent = 'Download';
+    saveReplayButton.textContent = 'Review';
     saveReplayButton.dataset.clicked = '';
     Object.assign(saveReplayButton.style, {
-      position: 'absolute', left: '10px', top: '102px', zIndex: 10,
       padding: '10px 18px', borderRadius: '10px', border: 'none',
       background: '#ff7ac7', color: '#3a123f', cursor: 'pointer',
-      boxShadow: '0 6px 18px rgba(0,0,0,0.35)', display: 'none',
-      transition: 'transform 120ms ease, background 160ms ease, color 160ms ease, box-shadow 160ms ease'
+      boxShadow: '0 6px 18px rgba(0,0,0,0.35)', display: 'block',
+      width: '100%', transition: 'transform 120ms ease, background 160ms ease, color 160ms ease, box-shadow 160ms ease'
     });
     saveReplayButton.addEventListener('mouseenter', () => {
       if (saveReplayButton.dataset.clicked === 'true') return;
@@ -1140,17 +1235,84 @@ function hideReverseCostDisplay() {
     saveReplayButton.addEventListener('click', () => {
       if (isReplayActive()) return;
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      const groupId = currentPostgameGroupId;
+      if (!groupId) return;
+      const token = localStorage.getItem('token');
+      if (!token) return;
+
+      pendingReplayIntent = 'review';
+      reviewReplayActive = false;
+      reviewReplayLastData = null;
+      reviewReplayLastFilename = null;
+      if (reviewDropdownButton) reviewDropdownButton.style.display = 'none';
+
+      try {
+        ws.send(JSON.stringify({ type: 'requestReplay', groupId, token }));
+      } catch (err) {
+        console.error('Failed to request replay for review', err);
+        pendingReplayIntent = null;
+        return;
+      }
+
+      if (rematchButton) rematchButton.style.display = 'none';
+      if (saveReplayWrapper) saveReplayWrapper.style.display = 'none';
+      if (postgameNotice) {
+        postgameNotice.textContent = '';
+        postgameNotice.style.display = 'none';
+      }
+      opponentHasLeft = true;
+      currentPostgameGroupId = null;
+
+      try {
+        ws.send(JSON.stringify({ type: 'postgameQuit', groupId, token }));
+      } catch (err) {
+        console.error('Failed to notify postgame quit after review', err);
+      }
+    });
+
+    reviewDropdownButton = document.createElement('button');
+    reviewDropdownButton.textContent = 'Download';
+    Object.assign(reviewDropdownButton.style, {
+      marginTop: '8px', borderRadius: '10px', border: 'none',
+      padding: '8px 18px', background: '#f3eaff', color: '#251638',
+      cursor: 'pointer', boxShadow: '0 4px 12px rgba(0,0,0,0.25)',
+      display: 'none', width: '100%', transition: 'background 160ms ease, color 160ms ease, box-shadow 160ms ease'
+    });
+    reviewDropdownButton.addEventListener('mouseenter', () => {
+      reviewDropdownButton.style.background = '#ffffff';
+    });
+    reviewDropdownButton.addEventListener('mouseleave', () => {
+      reviewDropdownButton.style.background = '#f3eaff';
+    });
+    reviewDropdownButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      if (isReplayActive()) return;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
       if (!currentPostgameGroupId) return;
       const token = localStorage.getItem('token');
       if (!token) return;
-      ws.send(JSON.stringify({ type: 'requestReplay', groupId: currentPostgameGroupId, token }));
-      saveReplayButton.dataset.clicked = 'true';
-      saveReplayButton.style.background = '#d8c6ff';
-      saveReplayButton.style.color = '#2c1242';
-      saveReplayButton.style.boxShadow = '0 2px 10px rgba(0,0,0,0.35) inset';
-      saveReplayButton.style.transform = 'scale(0.98)';
+
+      pendingReplayIntent = 'download';
+      try {
+        ws.send(JSON.stringify({ type: 'requestReplay', groupId: currentPostgameGroupId, token }));
+        reviewDropdownButton.style.background = '#e5d7ff';
+        reviewDropdownButton.style.boxShadow = '0 2px 8px rgba(0,0,0,0.25) inset';
+      } catch (err) {
+        console.error('Failed to request replay download', err);
+        pendingReplayIntent = null;
+      }
     });
-    document.body.appendChild(saveReplayButton);
+
+    saveReplayWrapper.addEventListener('mouseenter', () => {
+      if (reviewDropdownButton) reviewDropdownButton.style.display = 'block';
+    });
+    saveReplayWrapper.addEventListener('mouseleave', () => {
+      if (reviewDropdownButton) reviewDropdownButton.style.display = 'none';
+    });
+
+    saveReplayWrapper.appendChild(saveReplayButton);
+    saveReplayWrapper.appendChild(reviewDropdownButton);
+    document.body.appendChild(saveReplayWrapper);
 
     postgameNotice = document.createElement('div');
     postgameNotice.textContent = '';
@@ -1169,9 +1331,9 @@ function hideReverseCostDisplay() {
       const showRematchUI = !menuVisible && gameEnded && hasGroup && !opponentHasLeft;
       const showSaveReplay = !menuVisible && gameEnded && hasGroup;
       rematchButton.style.display = showRematchUI ? 'block' : 'none';
-      if (saveReplayButton) {
-        saveReplayButton.style.display = showSaveReplay ? 'block' : 'none';
-        saveReplayButton.style.left = quitBtn.style.left;
+      if (saveReplayWrapper) {
+        saveReplayWrapper.style.display = showSaveReplay ? 'block' : 'none';
+        saveReplayWrapper.style.left = quitBtn.style.left;
       }
       postgameNotice.style.display = (!menuVisible && opponentHasLeft) ? 'block' : 'none';
       // Ensure spacing alignment with quit
@@ -1180,11 +1342,11 @@ function hideReverseCostDisplay() {
         const quitTop = parseInt(quitBtn.style.top.replace('px','') || '10', 10);
         const rematchTop = quitTop + 46;
         rematchButton.style.top = rematchTop + 'px';
-        if (saveReplayButton) {
-          saveReplayButton.style.top = (rematchTop + 46) + 'px';
+        if (saveReplayWrapper) {
+          saveReplayWrapper.style.top = (rematchTop + 46) + 'px';
         }
         let noticeTop = rematchTop;
-        const saveShown = saveReplayButton && saveReplayButton.style.display !== 'none';
+        const saveShown = saveReplayWrapper && saveReplayWrapper.style.display !== 'none';
         if (opponentHasLeft) {
           // Align the notice with where the rematch button would have been.
           noticeTop = rematchTop;
@@ -1197,6 +1359,7 @@ function hideReverseCostDisplay() {
         postgameNotice.style.top = noticeTop + 'px';
       } catch (e) {}
       updateReplaySpeedUI();
+      updateReviewReplayDownloadButton();
     });
     observer.observe(menu, { attributes: true, attributeFilter: ['class'] });
     // Also hide win/lose overlay when menu is visible (keep settings panel state)
@@ -1593,13 +1756,20 @@ function hideReverseCostDisplay() {
       rematchButton.style.boxShadow = '0 6px 18px rgba(0,0,0,0.35)';
       rematchButton.style.transform = 'scale(1.0)';
     }
+    if (saveReplayWrapper) saveReplayWrapper.style.display = 'none';
     if (saveReplayButton) {
-      saveReplayButton.style.display = 'none';
       saveReplayButton.dataset.clicked = '';
       saveReplayButton.style.background = '#ff7ac7';
       saveReplayButton.style.color = '#3a123f';
       saveReplayButton.style.boxShadow = '0 6px 18px rgba(0,0,0,0.35)';
       saveReplayButton.style.transform = 'scale(1.0)';
+    }
+    if (!msg.replay) {
+      reviewReplayActive = false;
+      reviewReplayLastData = null;
+      reviewReplayLastFilename = null;
+      resetReviewReplayDownloadButton();
+      updateReviewReplayDownloadButton();
     }
     if (postgameNotice) {
       postgameNotice.textContent = '';
@@ -1817,8 +1987,11 @@ function hideReverseCostDisplay() {
       rematchButton.style.boxShadow = '0 6px 18px rgba(0,0,0,0.35)';
       rematchButton.style.transform = 'scale(1.0)';
     }
-    if (saveReplayButton && !menuVisible && gameEnded && !replayMode) {
-      saveReplayButton.style.display = 'block';
+    if (saveReplayWrapper && !menuVisible && gameEnded && !replayMode) {
+      saveReplayWrapper.style.display = 'block';
+      if (reviewDropdownButton) reviewDropdownButton.style.display = 'none';
+    }
+    if (saveReplayButton) {
       saveReplayButton.dataset.clicked = '';
       saveReplayButton.style.background = '#ff7ac7';
       saveReplayButton.style.color = '#3a123f';
@@ -1839,8 +2012,9 @@ function hideReverseCostDisplay() {
     if (replayMode) return;
     opponentHasLeft = true;
     if (rematchButton) rematchButton.style.display = 'none';
-    if (saveReplayButton && currentPostgameGroupId) {
-      saveReplayButton.style.display = 'block';
+    if (saveReplayWrapper && currentPostgameGroupId) {
+      saveReplayWrapper.style.display = 'block';
+      if (reviewDropdownButton) reviewDropdownButton.style.display = 'none';
     }
     if (postgameNotice) {
       postgameNotice.textContent = 'Opponent has left';
@@ -1854,17 +2028,16 @@ function hideReverseCostDisplay() {
     }
   }
 
-  function handleReplayDownload(msg) {
-    if (!msg || !msg.replay) return;
+  function saveReplayToDisk(replayData, filenameHint) {
     try {
-      const filename = (typeof msg.filename === 'string' && msg.filename.trim())
-        ? msg.filename.trim()
+      const filename = (typeof filenameHint === 'string' && filenameHint.trim())
+        ? filenameHint.trim()
         : (() => {
             const today = new Date();
             const iso = today.toISOString().slice(0, 10).replace(/-/g, '');
             return `durb-replay-${iso}.json`;
           })();
-      const jsonString = JSON.stringify(msg.replay, null, 2);
+      const jsonString = JSON.stringify(replayData, null, 2);
       const blob = new Blob([jsonString], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -1874,27 +2047,91 @@ function hideReverseCostDisplay() {
       link.click();
       document.body.removeChild(link);
       setTimeout(() => URL.revokeObjectURL(url), 0);
-      if (saveReplayButton) {
-        saveReplayButton.dataset.clicked = 'true';
-        saveReplayButton.style.background = '#d8c6ff';
-        saveReplayButton.style.color = '#2c1242';
-        saveReplayButton.style.boxShadow = '0 2px 10px rgba(0,0,0,0.35) inset';
-        saveReplayButton.style.transform = 'scale(0.98)';
-      }
+      return true;
     } catch (err) {
       console.error('Failed to save replay', err);
+      return false;
+    }
+  }
+
+  function resetReviewReplayDownloadButton() {
+    if (!reviewReplayDownloadButton) return;
+    reviewReplayDownloadButton.dataset.clicked = '';
+    reviewReplayDownloadButton.style.background = '#f3eaff';
+    reviewReplayDownloadButton.style.color = '#251638';
+    reviewReplayDownloadButton.style.boxShadow = '0 4px 12px rgba(0,0,0,0.25)';
+    reviewReplayDownloadButton.style.transform = 'scale(1.0)';
+  }
+
+  function updateReviewReplayDownloadButton() {
+    if (!reviewReplayDownloadButton) return;
+    const shouldShow = reviewReplayActive && replayMode;
+    if (shouldShow) {
+      reviewReplayDownloadButton.style.display = 'block';
+      const left = quitButton && quitButton.style && quitButton.style.left ? quitButton.style.left : '10px';
+      reviewReplayDownloadButton.style.left = left;
+      const quitTopRaw = quitButton && quitButton.style ? quitButton.style.top : '';
+      const quitTop = quitTopRaw ? parseInt(quitTopRaw.replace('px', ''), 10) : 10;
+      reviewReplayDownloadButton.style.top = `${quitTop + 46}px`;
+    } else {
+      if (reviewReplayDownloadButton.style.display !== 'none') {
+        resetReviewReplayDownloadButton();
+      }
+      reviewReplayDownloadButton.style.display = 'none';
+    }
+  }
+
+  function handleReplayDownload(msg) {
+    if (!msg || !msg.replay) return;
+    const intent = pendingReplayIntent;
+    pendingReplayIntent = null;
+
+    if (intent === 'review') {
+      reviewReplayLastData = msg.replay;
+      reviewReplayLastFilename = typeof msg.filename === 'string' ? msg.filename : null;
+      resetReviewReplayDownloadButton();
+      updateReviewReplayDownloadButton();
+      if (!startReplayFromPayload(msg.replay, 'review')) {
+        reviewReplayActive = false;
+        updateReviewReplayDownloadButton();
+      }
+      return;
+    }
+
+    const saved = saveReplayToDisk(msg.replay, msg.filename);
+    if (!saved) {
       handleReplayError({ message: 'Could not save replay.' });
+      return;
+    }
+    if (intent === 'download') {
+      if (reviewDropdownButton) {
+        reviewDropdownButton.style.background = '#d8c6ff';
+        reviewDropdownButton.style.color = '#2c1242';
+        reviewDropdownButton.style.boxShadow = '0 2px 8px rgba(0,0,0,0.35) inset';
+      }
+    } else if (saveReplayButton) {
+      saveReplayButton.dataset.clicked = 'true';
+      saveReplayButton.style.background = '#d8c6ff';
+      saveReplayButton.style.color = '#2c1242';
+      saveReplayButton.style.boxShadow = '0 2px 10px rgba(0,0,0,0.35) inset';
+      saveReplayButton.style.transform = 'scale(0.98)';
     }
   }
 
   function handleReplayError(msg) {
     const message = msg && typeof msg.message === 'string' ? msg.message : 'Replay unavailable';
+    pendingReplayIntent = null;
     if (postgameNotice) {
       postgameNotice.textContent = message;
       postgameNotice.style.color = '#b22222';
       const menu = document.getElementById('menu');
       const menuVisible = menu ? !menu.classList.contains('hidden') : false;
       postgameNotice.style.display = menuVisible ? 'none' : 'block';
+    }
+    if (reviewDropdownButton) {
+      reviewDropdownButton.style.background = '#f3eaff';
+      reviewDropdownButton.style.color = '#251638';
+      reviewDropdownButton.style.boxShadow = '0 4px 12px rgba(0,0,0,0.25)';
     }
     if (saveReplayButton) {
       saveReplayButton.dataset.clicked = '';
@@ -1903,6 +2140,10 @@ function hideReverseCostDisplay() {
       saveReplayButton.style.boxShadow = '0 6px 18px rgba(0,0,0,0.35)';
       saveReplayButton.style.transform = 'scale(1.0)';
     }
+    reviewReplayActive = false;
+    reviewReplayLastData = null;
+    reviewReplayLastFilename = null;
+    updateReviewReplayDownloadButton();
   }
 
   function handleLobby(msg) {
@@ -3272,7 +3513,8 @@ function hideReverseCostDisplay() {
     if (lobbyBackButton) lobbyBackButton.style.display = 'none';
 
     if (quitButton) quitButton.style.display = 'none';
-    if (saveReplayButton) saveReplayButton.style.display = 'none';
+    if (saveReplayWrapper) saveReplayWrapper.style.display = 'none';
+    if (reviewDropdownButton) reviewDropdownButton.style.display = 'none';
     if (overlayMsg) overlayMsg.style.display = 'none';
     if (goldDisplay) goldDisplay.style.display = 'none';
     if (progressBar) progressBar.style.display = 'none';
@@ -3286,6 +3528,11 @@ function hideReverseCostDisplay() {
     updateHomeNumbersToggle();
     updateHomeEdgeFlowToggle();
     updateHomeTargetingToggle();
+
+    reviewReplayActive = false;
+    reviewReplayLastData = null;
+    reviewReplayLastFilename = null;
+    updateReviewReplayDownloadButton();
 
     // Clean up juice text objects
     nodeJuiceTexts.forEach(text => {
