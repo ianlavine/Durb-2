@@ -457,14 +457,34 @@
         transform: translateX(28px);
       }
 
-      .player-count-selector {
+      .selection-row {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        align-items: flex-start;
+        gap: 20px;
+        width: 100%;
+        max-width: 640px;
+        margin-bottom: 12px;
+      }
+
+      .player-count-selector,
+      .mode-selector {
+        position: relative;
+        flex: 1 1 240px;
+        max-width: 300px;
         display: flex;
         flex-direction: column;
         align-items: center;
         gap: 8px;
-        margin-bottom: 6px;
-        width: 100%;
-        max-width: 640px;
+        text-align: center;
+      }
+
+      @media (max-width: 640px) {
+        .player-count-selector,
+        .mode-selector {
+          flex: 1 1 220px;
+        }
       }
 
       .selector-label {
@@ -474,12 +494,50 @@
         letter-spacing: 1px;
       }
 
-      .player-count-options {
+      .mode-label-row {
         display: flex;
-        gap: 10px;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
       }
 
-      .player-count-option {
+      .mode-info {
+        width: 26px;
+        height: 26px;
+        border-radius: 50%;
+        border: 1px solid #888888;
+        background: rgba(45,45,45,0.9);
+        color: #f5f5f5;
+        font-size: 15px;
+        font-family: monospace;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+        transition: transform 0.12s ease, background 0.2s ease, color 0.2s ease;
+      }
+
+      .mode-info:hover {
+        transform: translateY(-1px);
+        background: rgba(70,70,70,0.95);
+      }
+
+      .mode-info:focus-visible {
+        outline: 2px solid #ffffff;
+        outline-offset: 2px;
+      }
+
+      .player-count-options,
+      .mode-options {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        justify-content: center;
+      }
+
+      .player-count-option,
+      .mode-option {
         font-size: 28px;
         padding: 10px 18px;
         border-radius: 8px;
@@ -490,23 +548,49 @@
         transition: transform 0.15s ease, border-color 0.15s ease;
       }
 
-      .player-count-option.active {
+      .player-count-option.active,
+      .mode-option.active {
         border-color: #ffff00;
         transform: translateY(-4px);
         color: #ffff00;
       }
 
-      .player-count-option:hover {
+      .player-count-option:hover,
+      .mode-option:hover {
         border-color: #aaaaaa;
+      }
+
+      .mode-info-panel {
+        position: absolute;
+        top: calc(100% + 12px);
+        left: 50%;
+        transform: translateX(-50%);
+        display: none;
+        min-width: 220px;
+        max-width: 300px;
+        padding: 12px 16px;
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.15);
+        background: rgba(20, 20, 30, 0.92);
+        box-shadow: 0 10px 24px rgba(0,0,0,0.45);
+        color: #f2f2f2;
+        font-family: "Fira Code", "Source Code Pro", monospace;
+        font-size: 15px;
+        line-height: 1.4;
+        text-align: left;
+        z-index: 30;
+      }
+
+      .mode-info-panel p {
+        margin: 0;
+      }
+
+      .mode-info-panel p + p {
+        margin-top: 8px;
       }
 
 
       #playBtn, #playBotBtn {
-        width: 100%;
-        max-width: 640px;
-      }
-
-      .player-count-selector {
         width: 100%;
         max-width: 640px;
       }
@@ -613,12 +697,28 @@
     <div id="menu">
       <div id="title">DURB 2</div>
       <div class="button-container">
-        <div class="player-count-selector">
-          <span class="selector-label">Players</span>
-          <div class="player-count-options">
-            <button class="player-count-option active" data-count="2">2</button>
-            <button class="player-count-option" data-count="3">3</button>
-            <button class="player-count-option" data-count="4">4</button>
+        <div class="selection-row">
+          <div class="player-count-selector">
+            <span class="selector-label">Players</span>
+            <div class="player-count-options">
+              <button class="player-count-option active" data-count="2">2</button>
+              <button class="player-count-option" data-count="3">3</button>
+              <button class="player-count-option" data-count="4">4</button>
+            </div>
+          </div>
+          <div class="mode-selector">
+            <div class="mode-label-row">
+              <span class="selector-label">Mode</span>
+              <button id="modeInfoButton" class="mode-info" type="button" aria-label="Explain game modes" aria-controls="modeInfoPanel" aria-expanded="false">ⓘ</button>
+            </div>
+            <div class="mode-options">
+              <button class="mode-option active" data-mode="passive">Passive</button>
+              <button class="mode-option" data-mode="pop">Pop</button>
+            </div>
+            <div id="modeInfoPanel" class="mode-info-panel" role="dialog" aria-hidden="true">
+              <p><strong>Passive:</strong> Passively earn $1 every 2 seconds.</p>
+              <p><strong>Pop:</strong> Earn $10 by popping (destroying) your own full nodes.</p>
+            </div>
           </div>
         </div>
         <button id="playBtn">PLAY FRIENDS</button>

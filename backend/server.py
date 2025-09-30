@@ -9,6 +9,7 @@ import websockets
 
 from .message_handlers import MessageRouter
 from .bot_manager import bot_game_manager
+from .constants import GAME_MODES, MIN_FRIEND_PLAYERS, MAX_FRIEND_PLAYERS
 
 
 GRAPH_PATH: Path = Path(__file__).resolve().parent.parent / "graph.json"
@@ -30,10 +31,9 @@ class WebSocketServer:
             "games": {},              # game_id -> {engine, clients, ...}
             "token_to_game": {},      # token -> game_id
             "ws_to_token": {},        # websocket -> token
-            "lobbies": {              # player_count -> waiting entries
-                2: [],
-                3: [],
-                4: [],
+            "lobbies": {
+                count: {mode: [] for mode in GAME_MODES}
+                for count in range(MIN_FRIEND_PLAYERS, MAX_FRIEND_PLAYERS + 1)
             },
             "bot_game_clients": {},   # token -> websocket
         }
@@ -66,8 +66,10 @@ class WebSocketServer:
             await replay_session.stop()
 
         # Remove from all lobby queues
-        for queue in self.server_context.get("lobbies", {}).values():
-            queue[:] = [entry for entry in queue if entry.get("websocket") is not websocket]
+        lobbies = self.server_context.get("lobbies", {})
+        for mode_map in lobbies.values():
+            for queue in mode_map.values():
+                queue[:] = [entry for entry in queue if entry.get("websocket") is not websocket]
 
         # Remove from bot game client mapping if present
         bot_clients = self.server_context.get("bot_game_clients", {})
@@ -246,24 +248,28 @@ class WebSocketServer:
         now = time.time()
         timeout_seconds = 180.0
 
-        for queue in lobbies.values():
-            if not queue:
-                continue
+        for mode_map in lobbies.values():
+            for queue in mode_map.values():
+                if not queue:
+                    continue
 
-            remaining = []
-            for entry in queue:
-                joined_at = entry.get("joined_at", now)
-                websocket = entry.get("websocket")
-                token = entry.get("token")
+                remaining = []
+                for entry in queue:
+                    joined_at = entry.get("joined_at", now)
+                    websocket = entry.get("websocket")
+                    token = entry.get("token")
 
-                if now - joined_at >= timeout_seconds:
-                    if websocket:
-                        await self.message_router._send_safe(websocket, json.dumps({"type": "lobbyTimeout"}))
-                        ws_to_token.pop(websocket, None)
-                else:
-                    remaining.append(entry)
+                    if now - joined_at >= timeout_seconds:
+                        if websocket:
+                            await self.message_router._send_safe(
+                                websocket,
+                                json.dumps({"type": "lobbyTimeout"}),
+                            )
+                            ws_to_token.pop(websocket, None)
+                    else:
+                        remaining.append(entry)
 
-            queue[:] = remaining
+                queue[:] = remaining
 
 
 async def main() -> None:

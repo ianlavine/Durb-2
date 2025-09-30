@@ -8,7 +8,10 @@ from typing import Any, Dict, List, Optional, Tuple
 from .constants import (
     BRIDGE_BASE_COST,
     BRIDGE_COST_PER_UNIT_DISTANCE,
+    DEFAULT_GAME_MODE,
     GOLD_REWARD_FOR_NEUTRAL_CAPTURE,
+    NODE_MAX_JUICE,
+    POP_NODE_REWARD,
 )
 from .graph_generator import graph_generator
 from .models import Edge, Node, Player
@@ -33,7 +36,12 @@ class GameEngine:
         self.player_meta: Dict[int, Dict[str, object]] = {}
         self.game_active: bool = False
 
-    def start_game(self, player_slots: List[Dict[str, Any]], speed_level: int = 3) -> None:
+    def start_game(
+        self,
+        player_slots: List[Dict[str, Any]],
+        speed_level: int = 3,
+        mode: str = "passive",
+    ) -> None:
         """Initialize a new game with the provided player configuration."""
         data = graph_generator.generate_game_data_sync()
         self.state, self.screen = build_state_from_dict(data)
@@ -49,6 +57,7 @@ class GameEngine:
 
         self.state.phase = "picking"
         self.state.speed_level = speed_level
+        self.state.mode = mode
         self.state.eliminated_players.clear()
         self.state.pending_eliminations = []
 
@@ -112,6 +121,7 @@ class GameEngine:
 
         new_state.eliminated_players.clear()
         new_state.pending_eliminations = []
+        new_state.mode = DEFAULT_GAME_MODE
 
         self.state = new_state
         self.screen = screen
@@ -671,7 +681,12 @@ class GameEngine:
         except GameValidationError:
             return False
     
-    def handle_destroy_node(self, token: str, node_id: int, cost: float = 3.0) -> Tuple[bool, Optional[str]]:
+    def handle_destroy_node(
+        self,
+        token: str,
+        node_id: int,
+        cost: float = 3.0,
+    ) -> Tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
         """
         Handle destroying a node owned by the player.
         Returns: (success, error_message)
@@ -688,35 +703,56 @@ class GameEngine:
             # Validate gold
             self.validate_sufficient_gold(player_id, cost)
             
-            # Remove all edges connected to this node
-            edges_to_remove = []
-            for edge_id, edge in self.state.edges.items():
-                if edge.source_node_id == node_id or edge.target_node_id == node_id:
-                    edges_to_remove.append(edge_id)
-            
-            # Remove the edges
-            for edge_id in edges_to_remove:
-                edge = self.state.edges[edge_id]
-                # Remove edge from both connected nodes' attached_edge_ids
-                source_node = self.state.nodes.get(edge.source_node_id)
-                target_node = self.state.nodes.get(edge.target_node_id)
-                if source_node and edge_id in source_node.attached_edge_ids:
-                    source_node.attached_edge_ids.remove(edge_id)
-                if target_node and edge_id in target_node.attached_edge_ids:
-                    target_node.attached_edge_ids.remove(edge_id)
-                # Remove the edge from the edges dictionary
-                del self.state.edges[edge_id]
-            
-            # Remove the node
-            del self.state.nodes[node_id]
-            
+            removal_info = self.state.remove_node_and_edges(node_id)
+            if not removal_info:
+                raise GameValidationError("Invalid node")
+
             # Deduct gold
             self.state.player_gold[player_id] = max(0.0, self.state.player_gold[player_id] - cost)
-            
-            return True, None
+
+            payload = dict(removal_info)
+            payload["playerId"] = player_id
+            return True, None, payload
             
         except GameValidationError as e:
-            return False, str(e)
+            return False, str(e), None
+
+    def handle_pop_node(
+        self,
+        token: str,
+        node_id: int,
+        reward: float = POP_NODE_REWARD,
+    ) -> Tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
+        """Handle popping a full node in Pop mode to gain gold and remove the node."""
+        try:
+            self.validate_game_active()
+            if not self.state or self.state.mode != "pop":
+                raise GameValidationError("Pop action unavailable")
+
+            player_id = self.validate_player(token)
+            self.validate_player_can_act(player_id)
+
+            node = self.validate_node_exists(node_id)
+            self.validate_player_owns_node(node, player_id)
+
+            if node.juice < NODE_MAX_JUICE - 1e-3:
+                raise GameValidationError("Node is not ready to pop")
+
+            removal_info = self.state.remove_node_and_edges(node_id)
+            if not removal_info:
+                raise GameValidationError("Invalid node")
+
+            current_gold = self.state.player_gold.get(player_id, 0.0)
+            reward_amount = max(0.0, reward)
+            self.state.player_gold[player_id] = current_gold + reward_amount
+
+            payload = dict(removal_info)
+            payload["playerId"] = player_id
+            payload["reward"] = reward_amount
+            return True, None, payload
+
+        except GameValidationError as e:
+            return False, str(e), None
     
     def _optimize_energy_flow_to_target(self, player_id: int, target_node_id: int) -> None:
         """
