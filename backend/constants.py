@@ -34,7 +34,7 @@ STARTING_GOLD: float = 0.0
 
 
 # Node sizing
-UNOWNED_NODE_BASE_JUICE: float = 80.0
+UNOWNED_NODE_BASE_JUICE: float = 50.0
 
 
 # Bridge costs
