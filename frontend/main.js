@@ -1889,7 +1889,12 @@ function hideReverseCostDisplay() {
       }
     }
     const anySpinning = updateReverseSpinAnimations();
-    if (hasFlowingEdges || anySpinning || moneyIndicators.length > 0 || (persistentTargeting && currentTargetNodeId !== null)) {
+    
+    // Check if hovering over a poppable node (for burst animation)
+    const hoveringPoppable = hoveredNodeId !== null && gameMode === 'pop' && phase === 'playing' && 
+                             (() => { const n = nodes.get(hoveredNodeId); return n && isNodePopReady(n); })();
+    
+    if (hasFlowingEdges || anySpinning || moneyIndicators.length > 0 || (persistentTargeting && currentTargetNodeId !== null) || hoveringPoppable) {
       redrawStatic();
     }
   }
@@ -3184,25 +3189,55 @@ function hideReverseCostDisplay() {
 
       if (gameMode === 'pop' && isNodePopReady(n) && phase === 'playing') {
         const highlightRadius = Math.max(1, r);
-        graphicsNodes.fillStyle(0xffffff, 0.16);
-        graphicsNodes.fillCircle(nx, ny, highlightRadius);
+        
+        // When hovering and in bridge building mode (right-click), show normal highlights
+        const inBridgeMode = activeAbility === 'bridge1way';
+        const isHovering = hoveredNodeId === id;
+        
+        if (isHovering && !inBridgeMode) {
+          // "Ready to burst" effect: make bubble look more volatile
+          // Add a pulsing outer glow
+          const pulseTime = Date.now() / 300;
+          const pulseAlpha = 0.3 + Math.sin(pulseTime) * 0.15;
+          const pulseSize = highlightRadius + 2 + Math.sin(pulseTime * 1.5) * 1.5;
+          
+          graphicsNodes.fillStyle(0xffd700, pulseAlpha);
+          graphicsNodes.fillCircle(nx, ny, pulseSize);
+          
+          // Add unstable "wobble" highlights around the edge
+          for (let i = 0; i < 8; i++) {
+            const angle = (i / 8) * Math.PI * 2 + pulseTime * 0.5;
+            const offsetDist = highlightRadius * 0.8;
+            const wobbleX = nx + Math.cos(angle) * offsetDist;
+            const wobbleY = ny + Math.sin(angle) * offsetDist;
+            const wobbleSize = highlightRadius * 0.15;
+            graphicsNodes.fillStyle(0xffffff, 0.4 + Math.sin(pulseTime + i) * 0.2);
+            graphicsNodes.fillCircle(wobbleX, wobbleY, wobbleSize);
+          }
+        } else {
+          // Normal bubble sheen effect (not hovering or in bridge mode)
+          graphicsNodes.fillStyle(0xffffff, 0.16);
+          graphicsNodes.fillCircle(nx, ny, highlightRadius);
 
-        const sheenRadius = highlightRadius * 0.75;
-        graphicsNodes.fillStyle(0xffffff, 0.35);
-        graphicsNodes.fillCircle(nx, ny - highlightRadius * 0.35, sheenRadius);
+          const sheenRadius = highlightRadius * 0.75;
+          graphicsNodes.fillStyle(0xffffff, 0.35);
+          graphicsNodes.fillCircle(nx, ny - highlightRadius * 0.35, sheenRadius);
 
-        graphicsNodes.fillStyle(0xffffff, 0.18);
-        graphicsNodes.fillCircle(nx + highlightRadius * 0.25, ny - highlightRadius * 0.2, highlightRadius * 0.28);
+          graphicsNodes.fillStyle(0xffffff, 0.18);
+          graphicsNodes.fillCircle(nx + highlightRadius * 0.25, ny - highlightRadius * 0.2, highlightRadius * 0.28);
+        }
 
+        // Show dollar amount INSIDE the node
         const labelText = `$${formatCost(popReward)}`;
         let hint = popReadyLabels.get(id);
-        const hintY = ny - (highlightRadius + 18);
+        // Position text at the center of the node
+        const hintY = ny;
         if (!hint) {
           hint = sceneRef.add.text(nx, hintY, labelText, {
-            font: '16px monospace',
+            font: '14px monospace',
             color: '#ffd700',
             stroke: '#000000',
-            strokeThickness: 4,
+            strokeThickness: 3,
             align: 'center',
           });
           hint.setOrigin(0.5, 0.5);
@@ -3211,12 +3246,13 @@ function hideReverseCostDisplay() {
         } else {
           if (hint.text !== labelText) hint.setText(labelText);
           hint.setColor('#ffd700');
-          hint.setStroke('#000000', 4);
+          hint.setStroke('#000000', 3);
           hint.setPosition(nx, hintY);
         }
         if (hint && !hint.visible) hint.setVisible(true);
 
-        if (hoveredNodeId === id) {
+        // Only show ring highlight when in bridge building mode (right-click)
+        if (isHovering && inBridgeMode) {
           graphicsNodes.lineStyle(4, 0xffeb8a, 0.95);
           graphicsNodes.strokeCircle(nx, ny, highlightRadius + 6);
           graphicsNodes.lineStyle(2, 0xffc04d, 0.9);

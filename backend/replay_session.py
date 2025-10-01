@@ -22,9 +22,8 @@ class ReplayLoadError(Exception):
 
 @dataclass
 class ReplayEvent:
-    """Normalized replay event with scheduling metadata."""
+    """Normalized replay event ordered by tick and sequence."""
 
-    time_ms: int
     tick_hint: int
     seq: int
     player_id: Optional[int]
@@ -234,16 +233,11 @@ class ReplaySession:
                 continue
             payload = raw.get("payload")
             payload_dict: Dict[str, Any] = payload if isinstance(payload, dict) else {}
-            base_time_ms = raw.get("timeMs")
             tick_hint_val = _coerce_int(raw.get("tick", 0))
-            if base_time_ms is None:
-                base_time_ms = tick_hint_val * self.tick_interval * 1000.0
-            time_ms = int(round(_coerce_float(base_time_ms, 0.0)))
             player_id = _coerce_optional_int(raw.get("playerId"))
 
             events.append(
                 ReplayEvent(
-                    time_ms=time_ms,
                     tick_hint=tick_hint_val,
                     seq=_coerce_int(raw.get("seq", len(events) + 1)),
                     player_id=player_id,
@@ -251,7 +245,7 @@ class ReplaySession:
                     payload=payload_dict,
                 )
             )
-        events.sort(key=lambda e: (e.time_ms, e.seq))
+        events.sort(key=lambda e: (e.tick_hint, e.seq))
         return events
 
     async def _run(self) -> None:
@@ -274,69 +268,72 @@ class ReplaySession:
         if not state:
             raise ReplayLoadError("Replay engine missing state")
 
-        current_ms = 0.0
-        next_tick_ms = self.tick_interval * 1000.0
         event_idx = 0
-        epsilon_ms = 0.25
 
         while not self._cancelled:
-            next_event_ms: Optional[float] = None
-            if event_idx < len(self.events):
-                next_event_ms = float(self.events[event_idx].time_ms)
-
-            targets = [next_tick_ms]
-            if next_event_ms is not None:
-                targets.append(next_event_ms)
-            target_ms = min(targets)
-            multiplier = max(0.1, min(10.0, float(self.speed_multiplier)))
-            sleep_seconds = max(0.0, (target_ms - current_ms) / 1000.0)
-            if multiplier != 1.0:
-                sleep_seconds /= multiplier
-            if sleep_seconds > 0:
-                try:
-                    await asyncio.sleep(sleep_seconds)
-                except asyncio.CancelledError:
-                    raise
-            current_ms = target_ms
-
-            # Process all events scheduled up to current time
-            while event_idx < len(self.events):
-                event = self.events[event_idx]
-                if event.time_ms > current_ms + epsilon_ms:
-                    break
-                await self._apply_event(event)
+            # Apply any events that should occur at or before the current tick
+            while event_idx < len(self.events) and self.events[event_idx].tick_hint <= state.tick_count:
+                await self._apply_event(self.events[event_idx])
                 event_idx += 1
                 if self._cancelled:
                     break
             if self._cancelled:
                 break
 
-            # Run simulation tick if due
-            if current_ms + epsilon_ms >= next_tick_ms:
-                winner = self.engine.simulate_tick(self.tick_interval)
-                state_time = self._start_wall_time + (current_ms / 1000.0)
-                tick_message = state.to_tick_message(state_time)
-                tick_message["replay"] = True
-                await self._send_json(tick_message)
-                await self._flush_pending_captures()
-                next_tick_ms += self.tick_interval * 1000.0
-                if winner is not None:
-                    await self._announce_winner(winner)
-                    break
-
-                if self.duration_ticks and state.tick_count >= self.duration_ticks:
-                    # Replay recorded tick count reached - honour recorded winner if present
-                    winner_to_use = winner or self.recorded_winner or state.winner_id
-                    if winner_to_use is not None:
-                        await self._announce_winner(int(winner_to_use))
-                    break
-
-            if event_idx >= len(self.events) and (self.duration_ticks == 0 or state.tick_count >= self.duration_ticks):
-                # No more scheduled work; announce recorded winner if we have one
+            # If there's nothing else scheduled, honour the recorded winner if possible
+            no_more_events = event_idx >= len(self.events)
+            reached_duration = self.duration_ticks and state.tick_count >= self.duration_ticks
+            if no_more_events and not self.duration_ticks:
                 winner_final = state.winner_id or self.recorded_winner
                 if winner_final is not None and self._winner_announced is None:
                     await self._announce_winner(int(winner_final))
                 break
+            if no_more_events and reached_duration:
+                winner_final = state.winner_id or self.recorded_winner
+                if winner_final is not None and self._winner_announced is None:
+                    await self._announce_winner(int(winner_final))
+                break
+
+            # Determine whether we still need to advance the simulation
+            should_tick = True
+            if reached_duration and not no_more_events:
+                # Events reference ticks beyond the recorded duration; allow them to process without further ticks
+                should_tick = False
+            elif reached_duration and no_more_events:
+                should_tick = False
+
+            if not should_tick:
+                # No more ticks to simulate; loop back to apply any remaining same-tick events
+                if not self._cancelled and event_idx < len(self.events):
+                    # If events remain but we cannot tick further, treat this as completion to avoid stalling
+                    break
+                continue
+
+            multiplier = max(0.5, min(3.0, float(self.speed_multiplier)))
+            sleep_seconds = max(0.0, self.tick_interval / multiplier)
+            if sleep_seconds > 0:
+                try:
+                    await asyncio.sleep(sleep_seconds)
+                except asyncio.CancelledError:
+                    raise
+
+            winner = self.engine.simulate_tick(self.tick_interval)
+            state_time = self._start_wall_time + (state.tick_count * self.tick_interval)
+            tick_message = state.to_tick_message(state_time)
+            tick_message["replay"] = True
+            await self._send_json(tick_message)
+            await self._flush_pending_captures()
+
+            if winner is not None:
+                await self._announce_winner(winner)
+                break
+
+            if self.duration_ticks and state.tick_count >= self.duration_ticks:
+                winner_to_use = winner or self.recorded_winner or state.winner_id
+                if winner_to_use is not None and self._winner_announced is None:
+                    await self._announce_winner(int(winner_to_use))
+                if event_idx >= len(self.events):
+                    break
 
     async def _apply_event(self, event: ReplayEvent) -> None:
         state = self.engine.state
