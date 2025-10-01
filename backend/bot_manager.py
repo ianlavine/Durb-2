@@ -7,7 +7,7 @@ exposing simple controls for ticking and lifecycle.
 from typing import Optional, Tuple
 
 from .game_engine import GameEngine
-from .bots import Bot2
+from .bots import Bot2, BotPop1
 
 
 class BotGameManager:
@@ -21,7 +21,14 @@ class BotGameManager:
         # Last client-facing event from the most recent bot action
         self.last_client_event: Optional[dict] = None
 
-    def start_bot_game(self, human_token: str, difficulty: str = "easy", auto_expand: bool = False, speed_level: int = 3) -> Tuple[bool, Optional[str]]:
+    def start_bot_game(
+        self,
+        human_token: str,
+        difficulty: str = "easy",
+        auto_expand: bool = False,
+        speed_level: int = 3,
+        mode: str = "passive",
+    ) -> Tuple[bool, Optional[str]]:
         """
         Start a new bot vs human game with specified difficulty.
         Returns: (success, error_message)
@@ -29,8 +36,13 @@ class BotGameManager:
         try:
             speed_level = max(1, min(5, speed_level))
 
+            mode = "pop" if mode == "pop" else "passive"
+
             # Create bot player with specified difficulty
-            self.bot_player = Bot2(player_id=2, color="#3388ff", difficulty=difficulty)
+            if mode == "pop":
+                self.bot_player = BotPop1(player_id=2, color="#3388ff", difficulty=difficulty)
+            else:
+                self.bot_player = Bot2(player_id=2, color="#3388ff", difficulty=difficulty)
             self.human_token = human_token
 
             from .message_handlers import PLAYER_COLOR_SCHEMES  # avoid circular import at top level
@@ -52,7 +64,7 @@ class BotGameManager:
                 },
             ]
 
-            self.game_engine.start_game(player_slots, speed_level)
+            self.game_engine.start_game(player_slots, speed_level, mode=mode)
             self.bot_player.join_game(self.game_engine)
             self.game_active = True
 
@@ -160,5 +172,4 @@ class BotGameManager:
 
 # Global bot game manager instance
 bot_game_manager = BotGameManager()
-
 

@@ -917,10 +917,10 @@
 
   function updatePlayBotAvailability(baseEnabled = true) {
     if (!playBotBtnEl) return;
-    const modeAllowsBot = selectedMode === 'passive';
+    const modeAllowsBot = selectedMode === 'passive' || selectedMode === 'pop';
     const enabled = Boolean(baseEnabled && modeAllowsBot);
     playBotBtnEl.disabled = !enabled;
-    playBotBtnEl.title = modeAllowsBot ? '' : 'Bots are only available in Passive mode';
+    playBotBtnEl.title = modeAllowsBot ? '' : 'Bots are unavailable in this mode';
   }
 
   function setSelectedMode(nextMode, options = {}) {
@@ -1309,14 +1309,10 @@ function hideReverseCostDisplay() {
           setReplayStatus('Stop the current replay before starting a bot match.', 'warn');
           return;
         }
-        if (selectedMode !== 'passive') {
-          showErrorMessage('Bots are only available in Passive mode', 'error');
-          return;
-        }
         if (ws && ws.readyState === WebSocket.OPEN) {
-          console.log('Starting hard bot game');
+          console.log(`Starting hard bot game in ${selectedMode} mode`);
           showLobby();
-          setLobbyStatus('Starting hard bot game...');
+          setLobbyStatus(`Starting hard bot game (${formatModeText(selectedMode)} mode)...`);
           // Hide buttons when starting bot game
           if (buttonContainer) {
             buttonContainer.style.display = 'none';
@@ -1326,6 +1322,7 @@ function hideReverseCostDisplay() {
             difficulty: 'hard',
             autoExpand: persistentAutoExpand,
             guestName: savedGuestName,
+            mode: selectedMode,
           }));
         }
       });

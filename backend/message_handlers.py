@@ -802,8 +802,15 @@ class MessageRouter:
         auto_expand = bool(msg.get("autoExpand", False))
         speed_level = int(msg.get("speedLevel", 3))
         speed_level = max(1, min(5, speed_level))
+        mode = msg.get("mode", "passive")
 
-        success, error_msg = bot_game_manager.start_bot_game(token, difficulty, auto_expand, speed_level)
+        success, error_msg = bot_game_manager.start_bot_game(
+            token,
+            difficulty,
+            auto_expand,
+            speed_level,
+            mode=mode,
+        )
         if not success:
             await self._send_safe(
                 websocket,
@@ -966,10 +973,27 @@ class MessageRouter:
                     await self._send_safe(websocket, json.dumps({"type": "nodeDestroyed", "nodeId": int(node_id)}))
 
         elif msg_type == "popNode":
-            await self._send_safe(
-                websocket,
-                json.dumps({"type": "popError", "message": "Pop mode unavailable in bot matches"}),
-            )
+            node_id = msg.get("nodeId")
+            if node_id is not None:
+                success, error_msg, removal_info = bot_game_engine.handle_pop_node(token, int(node_id))
+                if not success:
+                    await self._send_safe(
+                        websocket,
+                        json.dumps({"type": "popError", "message": error_msg or "Failed to pop node"}),
+                    )
+                else:
+                    player_id = bot_game_engine.get_player_id(token)
+                    payload = {
+                        "type": "nodePopped",
+                        "nodeId": int(node_id),
+                        "playerId": player_id,
+                        "removedEdges": removal_info.get("removedEdges", []) if removal_info else [],
+                    }
+                    if removal_info and removal_info.get("reward") is not None:
+                        payload["reward"] = removal_info.get("reward")
+                    if removal_info and removal_info.get("node"):
+                        payload["nodeSnapshot"] = removal_info.get("node")
+                    await self._send_safe(websocket, json.dumps(payload))
 
         elif msg_type == "quitGame":
             winner_id = bot_game_engine.handle_quit_game(token)
