@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
@@ -23,7 +21,7 @@ if TYPE_CHECKING:  # pragma: no cover - import only for type checking
 class GameReplayRecorder:
     """Capture the essential data needed to replay a completed match."""
 
-    VERSION: int = 1
+    VERSION: int = 2
 
     def __init__(
         self,
@@ -37,7 +35,6 @@ class GameReplayRecorder:
         self.tick_interval = float(tick_interval)
         self.speed_level = int(speed_level)
         self.created_at = datetime.now(timezone.utc)
-        self._monotonic_start = time.monotonic()
         self._events: List[Dict[str, Any]] = []
         self._starting_nodes: Dict[int, int] = {}
         self._token_to_player: Dict[str, int] = {}
@@ -130,12 +127,9 @@ class GameReplayRecorder:
         if engine.state is not None:
             tick_count = int(getattr(engine.state, "tick_count", 0))
 
-        elapsed_ms = int(max(0.0, (time.monotonic() - self._monotonic_start) * 1000))
-
         event: Dict[str, Any] = {
             "seq": self._next_sequence(),
             "tick": tick_count,
-            "timeMs": elapsed_ms,
             "playerId": player_id,
             "type": event_type,
         }
@@ -195,7 +189,6 @@ class GameReplayRecorder:
 
         if self._events:
             payload["lastEventTick"] = self._events[-1]["tick"]
-            payload["lastEventTimeMs"] = self._events[-1]["timeMs"]
 
         return {
             "filename": self._build_filename(),
