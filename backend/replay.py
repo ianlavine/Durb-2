@@ -29,11 +29,9 @@ class GameReplayRecorder:
         engine: "GameEngine",
         tick_interval: float,
         player_slots: List[Dict[str, Any]],
-        speed_level: int,
     ) -> None:
         self.game_id = game_id
         self.tick_interval = float(tick_interval)
-        self.speed_level = int(speed_level)
         self.created_at = datetime.now(timezone.utc)
         self._events: List[Dict[str, Any]] = []
         self._starting_nodes: Dict[int, int] = {}
@@ -175,7 +173,6 @@ class GameReplayRecorder:
             "gameId": self.game_id,
             "createdAt": self.created_at.isoformat().replace("+00:00", "Z"),
             "tickInterval": self.tick_interval,
-            "speedLevel": self.speed_level,
             "playerCount": len(self.player_info),
             "players": self.player_info,
             "constants": constants_payload,

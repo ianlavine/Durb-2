@@ -26,7 +26,6 @@ class BotGameManager:
         human_token: str,
         difficulty: str = "easy",
         auto_expand: bool = False,
-        speed_level: int = 3,
         mode: str = "passive",
     ) -> Tuple[bool, Optional[str]]:
         """
@@ -34,8 +33,6 @@ class BotGameManager:
         Returns: (success, error_message)
         """
         try:
-            speed_level = max(1, min(5, speed_level))
-
             mode = "pop" if mode == "pop" else "passive"
 
             # Create bot player with specified difficulty
@@ -64,7 +61,7 @@ class BotGameManager:
                 },
             ]
 
-            self.game_engine.start_game(player_slots, speed_level, mode=mode)
+            self.game_engine.start_game(player_slots, mode=mode)
             self.bot_player.join_game(self.game_engine)
             self.game_active = True
 
@@ -172,4 +169,3 @@ class BotGameManager:
 
 # Global bot game manager instance
 bot_game_manager = BotGameManager()
-

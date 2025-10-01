@@ -100,8 +100,6 @@ class MessageRouter:
         player_count = int(msg.get("playerCount", MIN_FRIEND_PLAYERS))
         player_count = max(MIN_FRIEND_PLAYERS, min(MAX_FRIEND_PLAYERS, player_count))
         auto_expand = bool(msg.get("autoExpand", False))
-        speed_level = int(msg.get("speedLevel", 3))
-        speed_level = max(1, min(5, speed_level))
         token = msg.get("token") or uuid.uuid4().hex
         guest_name = _clean_guest_name(msg.get("guestName"))
         requested_mode = str(msg.get("mode") or DEFAULT_GAME_MODE).strip().lower()
@@ -122,7 +120,6 @@ class MessageRouter:
                 "token": token,
                 "websocket": websocket,
                 "auto_expand": auto_expand,
-                "speed_level": speed_level,
                 "joined_at": time.time(),
                 "guest_name": guest_name,
                 "mode": mode,
@@ -186,8 +183,6 @@ class MessageRouter:
         mode: str,
         server_context: Dict[str, Any],
     ) -> None:
-        speed_level = int(players[0].get("speed_level", 3))
-        speed_level = max(1, min(5, speed_level))
         engine = GameEngine()
         color_pool = PLAYER_COLOR_SCHEMES[:player_count]
 
@@ -215,17 +210,16 @@ class MessageRouter:
             auto_expand_state[player["token"]] = auto_expand
             guest_names[player["token"]] = guest_name
 
-        engine.start_game(player_slots, speed_level, mode=sanitized_mode)
+        engine.start_game(player_slots, mode=sanitized_mode)
         game_id = uuid.uuid4().hex
 
         tick_interval = float(server_context.get("tick_interval", 0.1))
-        replay_recorder = GameReplayRecorder(game_id, engine, tick_interval, player_slots, speed_level)
+        replay_recorder = GameReplayRecorder(game_id, engine, tick_interval, player_slots)
         game_info = {
             "engine": engine,
             "clients": {},
             "screen": engine.screen,
             "player_count": player_count,
-            "speed_level": speed_level,
             "created_at": time.time(),
             "disconnect_deadlines": {},
             "replay_recorder": replay_recorder,
@@ -800,15 +794,12 @@ class MessageRouter:
         token = msg.get("token") or uuid.uuid4().hex
         difficulty = msg.get("difficulty", "easy")
         auto_expand = bool(msg.get("autoExpand", False))
-        speed_level = int(msg.get("speedLevel", 3))
-        speed_level = max(1, min(5, speed_level))
         mode = msg.get("mode", "passive")
 
         success, error_msg = bot_game_manager.start_bot_game(
             token,
             difficulty,
             auto_expand,
-            speed_level,
             mode=mode,
         )
         if not success:
@@ -1120,7 +1111,6 @@ class MessageRouter:
             postgame_groups[group_id] = {
                 "tokens": tokens,
                 "clients": dict(clients),  # token -> websocket (may contain None)
-                "speed_level": game_info.get("speed_level", 3),
                 "created_at": time.time(),
                 "rematch_votes": set(),
                 "replay_data": replay_bundle,
@@ -1181,7 +1171,6 @@ class MessageRouter:
         votes = group.get("rematch_votes", set())
         if len(tokens) > 0 and len(votes) == len(tokens):
             # Build players array for _start_friend_game
-            speed_level = int(group.get("speed_level", 3))
             mode = str(group.get("mode", DEFAULT_GAME_MODE))
             players = []
             for t in tokens:
@@ -1189,7 +1178,6 @@ class MessageRouter:
                     "token": t,
                     "websocket": group.get("clients", {}).get(t),
                     "auto_expand": bool(group.get("auto_expand", {}).get(t, False)),
-                    "speed_level": speed_level,
                     "guest_name": group.get("guest_names", {}).get(t),
                     "mode": mode,
                 })

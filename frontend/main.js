@@ -798,7 +798,7 @@
   function calculateNodeRadius(node, baseScale) {
     const juiceVal = Math.max(0, node.size ?? node.juice ?? 0);
     const minRadius = node.owner === null ? 0.2 : 0.3;
-    const radius = Math.max(minRadius, 0.11 * Math.pow(juiceVal, 0.65));
+    const radius = Math.max(minRadius, 0.12 * Math.pow(juiceVal, 0.65));
     return radius * baseScale;
   }
 

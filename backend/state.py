@@ -51,9 +51,6 @@ class GraphState:
         self.player_auto_expand: Dict[int, bool] = {}
         self.pending_auto_expand_nodes: Dict[int, Set[int]] = {}
         
-        # Game speed level (1-5, default 3 for new 1x speed)
-        self.speed_level: int = 3
-
         # Game mode (e.g., 'passive', 'pop')
         self.mode: str = "passive"
 
@@ -69,18 +66,6 @@ class GraphState:
         # Initialize auto-expand setting (default: off)
         self.player_auto_expand[player.id] = False
         self.eliminated_players.discard(player.id)
-
-    def get_speed_multiplier(self) -> float:
-        """Get speed multiplier based on speed level (1-5)."""
-        speed_multipliers = [0.3, 0.45, 0.6, 0.75, 0.9]
-        # Speed levels are 1-5, but array is 0-4 indexed
-        level_index = max(0, min(len(speed_multipliers) - 1, self.speed_level - 1))
-        return speed_multipliers[level_index]
-
-    def get_scaled_production_rate(self) -> float:
-        """Get production rate scaled by speed level."""
-        speed_multiplier = self.get_speed_multiplier()
-        return PRODUCTION_RATE_PER_NODE * speed_multiplier
 
     def get_player_node_counts(self) -> Dict[int, int]:
         """Return a mapping of player id to number of nodes they currently own."""
@@ -439,10 +424,9 @@ class GraphState:
         intake_tracking: Dict[int, float] = {nid: 0.0 for nid in self.nodes.keys()}
 
         # Production for owned nodes
-        scaled_production_rate = self.get_scaled_production_rate()
         for node in self.nodes.values():
             if node.owner is not None:
-                base_rate = scaled_production_rate
+                base_rate = PRODUCTION_RATE_PER_NODE
                 size_delta[node.id] += base_rate
 
         # Reset last_transfer for all edges at the start of the tick

@@ -39,14 +39,11 @@ class GameEngine:
     def start_game(
         self,
         player_slots: List[Dict[str, Any]],
-        speed_level: int = 3,
         mode: str = "passive",
     ) -> None:
         """Initialize a new game with the provided player configuration."""
         data = graph_generator.generate_game_data_sync()
         self.state, self.screen = build_state_from_dict(data)
-
-        speed_level = max(1, min(5, speed_level))
 
         self.token_to_player_id.clear()
         self.player_id_to_token.clear()
@@ -56,7 +53,6 @@ class GameEngine:
             raise RuntimeError("Failed to create game state")
 
         self.state.phase = "picking"
-        self.state.speed_level = speed_level
         self.state.mode = mode
         self.state.eliminated_players.clear()
         self.state.pending_eliminations = []

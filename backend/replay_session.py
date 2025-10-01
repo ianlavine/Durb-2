@@ -112,7 +112,6 @@ def build_engine_from_replay(
     state.pending_eliminations = []
     state.eliminated_players.clear()
     state.game_duration = _coerce_float(replay.get("durationSeconds", state.game_duration), state.game_duration)
-    state.speed_level = _coerce_int(replay.get("speedLevel", 3))
 
     constants_raw = replay.get("constants")
     constants = constants_raw if isinstance(constants_raw, dict) else {}
