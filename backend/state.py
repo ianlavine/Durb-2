@@ -10,7 +10,8 @@ from .constants import (
     MAX_TRANSFER_RATIO,
     NODE_MAX_JUICE,
     NODE_MIN_JUICE,
-    PASSIVE_GOLD_PER_SECOND,
+    PASSIVE_GOLD_PER_TICK,
+    PASSIVE_INCOME_ENABLED,
     POP_NODE_REWARD,
     PRODUCTION_RATE_PER_NODE,
     RESERVE_TRANSFER_RATIO,
@@ -406,15 +407,14 @@ class GraphState:
         if (
             self.mode == "passive"
             and not self.game_ended
-            and PASSIVE_GOLD_PER_SECOND > 0.0
-            and tick_interval_seconds > 0.0
+            and PASSIVE_INCOME_ENABLED
+            and PASSIVE_GOLD_PER_TICK > 0.0
         ):
-            passive_income = PASSIVE_GOLD_PER_SECOND * tick_interval_seconds
-            if passive_income > 0.0:
-                for player_id in self.players.keys():
-                    if player_id in self.eliminated_players:
-                        continue
-                    self.player_gold[player_id] = self.player_gold.get(player_id, 0.0) + passive_income
+            passive_income = PASSIVE_GOLD_PER_TICK
+            for player_id in self.players.keys():
+                if player_id in self.eliminated_players:
+                    continue
+                self.player_gold[player_id] = self.player_gold.get(player_id, 0.0) + passive_income
 
         # Direction/flow toggles are input-driven; no random changes here
         # Compute size deltas from production and flows

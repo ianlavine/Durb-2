@@ -9,11 +9,10 @@ import websockets
 
 from .message_handlers import MessageRouter
 from .bot_manager import bot_game_manager
-from .constants import GAME_MODES, MIN_FRIEND_PLAYERS, MAX_FRIEND_PLAYERS
+from .constants import GAME_MODES, MIN_FRIEND_PLAYERS, MAX_FRIEND_PLAYERS, TICK_INTERVAL_SECONDS
 
 
 GRAPH_PATH: Path = Path(__file__).resolve().parent.parent / "graph.json"
-TICK_INTERVAL_SECONDS: float = 0.1
 WEBSOCKET_HOST: str = "0.0.0.0"
 WEBSOCKET_PORT: int = int(os.environ.get("PORT", 8765))
 

@@ -20,8 +20,8 @@ class BotTemplate:
         self.last_action_time = 0.0
         self.action_cooldown = 0.5  # Minimum seconds between actions
         self.last_bridge_time = 0.0
-        self.bridge_cooldown = 8.0  # Extra delay between bridge builds
-        self.bridge_gold_reserve = 10.0  # Keep a proportional gold buffer when bridging
+        self.bridge_cooldown = 1.0  # Extra delay between bridge builds
+        self.bridge_gold_reserve = 5.0  # Keep a proportional gold buffer when bridging
         # Targeting cadence so we don't thrash edges every tick
         self.last_target_update_time = 0.0
         self.target_cooldown = 3.0
@@ -40,9 +40,9 @@ class BotTemplate:
 
         current_time = time.time()
 
-        # Check cooldown
-        if current_time - self.last_action_time < self.action_cooldown:
-            return False
+        # # Check cooldown
+        # if current_time - self.last_action_time < self.action_cooldown:
+        #     return False
 
         # If we haven't picked a starting node yet, do that first
         if not self.game_engine.state.players_who_picked.get(self.player_id, False):

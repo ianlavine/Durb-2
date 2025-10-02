@@ -10,7 +10,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple, TYPE_CHECKING
 
 import websockets
 
-from .constants import STARTING_GOLD
+from .constants import STARTING_GOLD, TICK_INTERVAL_SECONDS
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .message_handlers import MessageRouter
@@ -191,7 +191,7 @@ class ReplaySession:
         self.websocket = websocket
         self.replay = replay
         self.router = message_router
-        self.tick_interval = max(0.01, float(replay.get("tickInterval", tick_interval_default or 0.1)))
+        self.tick_interval = max(0.01, float(replay.get("tickInterval", tick_interval_default or TICK_INTERVAL_SECONDS)))
         self.on_complete = on_complete
 
         self.engine, self.player_tokens = build_engine_from_replay(replay, self.tick_interval)

@@ -27,7 +27,7 @@
   let screen = null;
   let nodes = new Map(); // id -> {x,y,size,owner}
   let edges = new Map(); // id -> {source,target,on,flowing,flowStartTime}
-  let tickIntervalSec = 0.1; // provided by backend init; used to show per-second edge flow
+  let tickIntervalSec = 0.2; // provided by backend init; used to show per-second edge flow
   let settingsOpen = false; // persisted visibility of settings/toggles panel
 
   let graphicsEdges;
@@ -798,7 +798,7 @@
   function calculateNodeRadius(node, baseScale) {
     const juiceVal = Math.max(0, node.size ?? node.juice ?? 0);
     const minRadius = node.owner === null ? 0.2 : 0.3;
-    const radius = Math.max(minRadius, 0.12 * Math.pow(juiceVal, 0.65));
+    const radius = Math.max(minRadius, 0.15 * Math.pow(juiceVal, 0.6));
     return radius * baseScale;
   }
 

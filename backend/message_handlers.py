@@ -11,6 +11,7 @@ from .constants import (
     MAX_FRIEND_PLAYERS,
     MIN_FRIEND_PLAYERS,
     PLAYER_COLOR_SCHEMES,
+    TICK_INTERVAL_SECONDS,
 )
 from .game_engine import GameEngine
 from .bot_manager import bot_game_manager
@@ -213,7 +214,7 @@ class MessageRouter:
         engine.start_game(player_slots, mode=sanitized_mode)
         game_id = uuid.uuid4().hex
 
-        tick_interval = float(server_context.get("tick_interval", 0.1))
+        tick_interval = float(server_context.get("tick_interval", TICK_INTERVAL_SECONDS))
         replay_recorder = GameReplayRecorder(game_id, engine, tick_interval, player_slots)
         game_info = {
             "engine": engine,
@@ -767,7 +768,7 @@ class MessageRouter:
         state, screen = engine.create_new_game()
         message = state.to_init_message(
             screen,
-            server_context.get("tick_interval", 0.1),
+            server_context.get("tick_interval", TICK_INTERVAL_SECONDS),
             time.time(),
         )
         await self._send_safe(websocket, json.dumps(message))
@@ -817,7 +818,7 @@ class MessageRouter:
         if bot_game_engine.state:
             message = bot_game_engine.state.to_init_message(
                 bot_game_engine.screen,
-                server_context.get("tick_interval", 0.1),
+                server_context.get("tick_interval", TICK_INTERVAL_SECONDS),
                 time.time(),
             )
             message["type"] = "init"
@@ -1000,7 +1001,7 @@ class MessageRouter:
             if bot_game_engine.state:
                 message = bot_game_engine.state.to_init_message(
                     bot_game_engine.screen,
-                    server_context.get("tick_interval", 0.1),
+                    server_context.get("tick_interval", TICK_INTERVAL_SECONDS),
                     time.time(),
                 )
                 message["type"] = "init"
@@ -1041,7 +1042,7 @@ class MessageRouter:
             return
         message = engine.state.to_init_message(
             game_info.get("screen", {}),
-            server_context.get("tick_interval", 0.1),
+            server_context.get("tick_interval", TICK_INTERVAL_SECONDS),
             time.time(),
         )
         message["type"] = "init"
@@ -1280,7 +1281,7 @@ class MessageRouter:
         if existing:
             await existing.stop()
 
-        tick_interval = float(server_context.get("tick_interval", 0.1))
+        tick_interval = float(server_context.get("tick_interval", TICK_INTERVAL_SECONDS))
 
         def _on_complete() -> None:
             stored = server_context.get("replay_sessions", {})
