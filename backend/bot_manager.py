@@ -8,6 +8,7 @@ from typing import Optional, Tuple
 
 from .game_engine import GameEngine
 from .bots import Bot2, BotPop1
+from .constants import DEFAULT_GAME_MODE, normalize_game_mode
 
 
 class BotGameManager:
@@ -26,14 +27,14 @@ class BotGameManager:
         human_token: str,
         difficulty: str = "easy",
         auto_expand: bool = False,
-        mode: str = "passive",
+        mode: str = DEFAULT_GAME_MODE,
     ) -> Tuple[bool, Optional[str]]:
         """
         Start a new bot vs human game with specified difficulty.
         Returns: (success, error_message)
         """
         try:
-            mode = "pop" if mode == "pop" else "passive"
+            mode = normalize_game_mode(mode)
 
             # Create bot player with specified difficulty
             if mode == "pop":

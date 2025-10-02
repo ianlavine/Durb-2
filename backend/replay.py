@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from .constants import (
     DEFAULT_GAME_MODE,
     GOLD_REWARD_FOR_ENEMY_CAPTURE,
-    GOLD_REWARD_FOR_NEUTRAL_CAPTURE,
+    GOLD_REWARD_FOR_NEUTRAL_CAPTURE_BY_MODE,
     NODE_MAX_JUICE,
     NODE_MIN_JUICE,
     PASSIVE_GOLD_PER_SECOND,
@@ -14,6 +14,7 @@ from .constants import (
     POP_NODE_REWARD,
     PRODUCTION_RATE_PER_NODE,
     STARTING_GOLD,
+    get_neutral_capture_reward,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - import only for type checking
@@ -147,6 +148,9 @@ class GameReplayRecorder:
         if engine.state is not None:
             duration_ticks = int(getattr(engine.state, "tick_count", 0))
 
+        current_mode = getattr(engine.state, "mode", DEFAULT_GAME_MODE)
+        current_reward = get_neutral_capture_reward(current_mode)
+
         constants_payload = {
             "NODE_MAX_JUICE": NODE_MAX_JUICE,
             "NODE_MIN_JUICE": NODE_MIN_JUICE,
@@ -155,7 +159,8 @@ class GameReplayRecorder:
             "PASSIVE_INCOME_ENABLED": PASSIVE_INCOME_ENABLED,
             "PRODUCTION_RATE_PER_NODE": PRODUCTION_RATE_PER_NODE,
             "STARTING_GOLD": STARTING_GOLD,
-            "GOLD_REWARD_FOR_NEUTRAL_CAPTURE": GOLD_REWARD_FOR_NEUTRAL_CAPTURE,
+            "GOLD_REWARD_FOR_NEUTRAL_CAPTURE": current_reward,
+            "GOLD_REWARD_FOR_NEUTRAL_CAPTURE_BY_MODE": GOLD_REWARD_FOR_NEUTRAL_CAPTURE_BY_MODE,
             "GOLD_REWARD_FOR_ENEMY_CAPTURE": GOLD_REWARD_FOR_ENEMY_CAPTURE,
             "POP_NODE_REWARD": POP_NODE_REWARD,
         }

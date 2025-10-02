@@ -4,8 +4,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .constants import (
+    BRIDGE_BASE_COST,
+    BRIDGE_COST_PER_UNIT_DISTANCE,
+    DEFAULT_GAME_MODE,
     GOLD_REWARD_FOR_ENEMY_CAPTURE,
-    GOLD_REWARD_FOR_NEUTRAL_CAPTURE,
     INTAKE_TRANSFER_RATIO,
     MAX_TRANSFER_RATIO,
     NODE_MAX_JUICE,
@@ -17,6 +19,8 @@ from .constants import (
     RESERVE_TRANSFER_RATIO,
     STARTING_GOLD,
     UNOWNED_NODE_BASE_JUICE,
+    get_neutral_capture_reward,
+    normalize_game_mode,
 )
 from .models import Edge, Node, Player
 
@@ -52,8 +56,9 @@ class GraphState:
         self.player_auto_expand: Dict[int, bool] = {}
         self.pending_auto_expand_nodes: Dict[int, Set[int]] = {}
         
-        # Game mode (e.g., 'passive', 'pop')
-        self.mode: str = "passive"
+        # Game mode (e.g., 'basic', 'pop')
+        self.mode: str = DEFAULT_GAME_MODE
+        self.neutral_capture_reward: float = get_neutral_capture_reward(self.mode)
 
         # Replay helpers
         self.tick_count: int = 0
@@ -266,6 +271,8 @@ class GraphState:
             elapsed = max(0.0, current_time - self.game_start_time)
             timer_remaining = max(0.0, self.game_duration - elapsed)
         
+        neutral_reward = getattr(self, "neutral_capture_reward", get_neutral_capture_reward(self.mode))
+
         return {
             "type": "init",
             "screen": screen,
@@ -273,7 +280,13 @@ class GraphState:
             "nodes": nodes_arr,
             "edges": edges_arr,
             "players": players_arr,
-            "settings": {"nodeMaxJuice": NODE_MAX_JUICE, "popReward": POP_NODE_REWARD},
+            "settings": {
+                "nodeMaxJuice": NODE_MAX_JUICE,
+                "popReward": POP_NODE_REWARD,
+                "bridgeBaseCost": BRIDGE_BASE_COST,
+                "bridgeCostPerUnit": BRIDGE_COST_PER_UNIT_DISTANCE,
+                "neutralCaptureReward": neutral_reward,
+            },
             "phase": self.phase,
             "gold": gold_arr,
             "picked": picked_arr,
@@ -405,7 +418,7 @@ class GraphState:
 
         # Passive gold income for active players ($1 every 3 seconds)
         if (
-            self.mode == "passive"
+            normalize_game_mode(self.mode) == "basic"
             and not self.game_ended
             and PASSIVE_INCOME_ENABLED
             and PASSIVE_GOLD_PER_TICK > 0.0
@@ -535,7 +548,8 @@ class GraphState:
                 previous_owner = node.owner
                 reward = 0.0
                 if previous_owner is None:
-                    reward = GOLD_REWARD_FOR_NEUTRAL_CAPTURE
+                    reward = get_neutral_capture_reward(self.mode)
+                    self.neutral_capture_reward = reward
                 elif previous_owner != new_owner:
                     reward = GOLD_REWARD_FOR_ENEMY_CAPTURE
 

@@ -12,6 +12,7 @@ from .constants import (
     MIN_FRIEND_PLAYERS,
     PLAYER_COLOR_SCHEMES,
     TICK_INTERVAL_SECONDS,
+    normalize_game_mode,
 )
 from .game_engine import GameEngine
 from .bot_manager import bot_game_manager
@@ -795,7 +796,7 @@ class MessageRouter:
         token = msg.get("token") or uuid.uuid4().hex
         difficulty = msg.get("difficulty", "easy")
         auto_expand = bool(msg.get("autoExpand", False))
-        mode = msg.get("mode", "passive")
+        mode = normalize_game_mode(msg.get("mode", DEFAULT_GAME_MODE))
 
         success, error_msg = bot_game_manager.start_bot_game(
             token,

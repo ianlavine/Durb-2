@@ -9,9 +9,10 @@ from .constants import (
     BRIDGE_BASE_COST,
     BRIDGE_COST_PER_UNIT_DISTANCE,
     DEFAULT_GAME_MODE,
-    GOLD_REWARD_FOR_NEUTRAL_CAPTURE,
     NODE_MAX_JUICE,
     POP_NODE_REWARD,
+    get_neutral_capture_reward,
+    normalize_game_mode,
 )
 from .graph_generator import graph_generator
 from .models import Edge, Node, Player
@@ -39,7 +40,7 @@ class GameEngine:
     def start_game(
         self,
         player_slots: List[Dict[str, Any]],
-        mode: str = "passive",
+        mode: str = DEFAULT_GAME_MODE,
     ) -> None:
         """Initialize a new game with the provided player configuration."""
         data = graph_generator.generate_game_data_sync()
@@ -53,7 +54,9 @@ class GameEngine:
             raise RuntimeError("Failed to create game state")
 
         self.state.phase = "picking"
-        self.state.mode = mode
+        normalized_mode = normalize_game_mode(mode)
+        self.state.mode = normalized_mode
+        self.state.neutral_capture_reward = get_neutral_capture_reward(normalized_mode)
         self.state.eliminated_players.clear()
         self.state.pending_eliminations = []
 
@@ -118,6 +121,7 @@ class GameEngine:
         new_state.eliminated_players.clear()
         new_state.pending_eliminations = []
         new_state.mode = DEFAULT_GAME_MODE
+        new_state.neutral_capture_reward = get_neutral_capture_reward(DEFAULT_GAME_MODE)
 
         self.state = new_state
         self.screen = screen
@@ -218,7 +222,9 @@ class GameEngine:
             # Check if this is for picking a starting node (node is unowned and player hasn't picked yet)
             if node.owner is None and not self.state.players_who_picked.get(player_id):
                 # This is a starting node pick - give gold reward for capturing unowned node
-                self.state.player_gold[player_id] = self.state.player_gold.get(player_id, 0.0) + GOLD_REWARD_FOR_NEUTRAL_CAPTURE
+                reward = get_neutral_capture_reward(self.state.mode)
+                self.state.neutral_capture_reward = reward
+                self.state.player_gold[player_id] = self.state.player_gold.get(player_id, 0.0) + reward
                 node.owner = player_id
                 self.state.players_who_picked[player_id] = True
                 
@@ -231,7 +237,7 @@ class GameEngine:
                     self.state.pending_node_captures = []
                 self.state.pending_node_captures.append({
                     'nodeId': node_id,
-                    'reward': GOLD_REWARD_FOR_NEUTRAL_CAPTURE,
+                    'reward': reward,
                     'player_id': player_id
                 })
 

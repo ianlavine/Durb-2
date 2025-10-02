@@ -59,8 +59,9 @@
   let reverseCostDisplay = null; // current reverse edge cost display text object
   let lastReverseCostPosition = null; // last position where reverse cost was displayed
 
-  const BRIDGE_BASE_COST = 0; // keep in sync with backend/constants.py
-  const BRIDGE_COST_PER_UNIT = 2; // keep in sync with backend/constants.py
+  // Bridge costs - dynamically loaded from backend settings
+  let BRIDGE_BASE_COST = 0;
+  let BRIDGE_COST_PER_UNIT = 1.5;
 
   // Progress bar for node count victory
   let progressBar = null;
@@ -106,11 +107,11 @@
   let currentTargetSetTime = null; // Animation time when target was last set
   
   let selectedPlayerCount = 2;
-  let selectedMode = 'passive';
-  let gameMode = 'passive';
+  let selectedMode = 'basic';
+  let gameMode = 'basic';
   let popReward = 10;
   let modeButtons = [];
-  const MODE_LABELS = { passive: 'Passive', pop: 'Pop' };
+  const MODE_LABELS = { basic: 'Basic', pop: 'Pop' };
   const POP_READY_TOLERANCE = 0.01;
 
   // Money transparency system
@@ -897,13 +898,15 @@
   }
 
   function normalizeMode(value) {
-    if (typeof value !== 'string') return 'passive';
+    if (typeof value !== 'string') return 'basic';
     const lowered = value.trim().toLowerCase();
-    return Object.prototype.hasOwnProperty.call(MODE_LABELS, lowered) ? lowered : 'passive';
+    // Backward compatibility: treat 'passive' as alias for 'basic'
+    if (lowered === 'passive') return 'basic';
+    return Object.prototype.hasOwnProperty.call(MODE_LABELS, lowered) ? lowered : 'basic';
   }
 
   function formatModeText(mode) {
-    return MODE_LABELS[normalizeMode(mode)] || MODE_LABELS.passive;
+    return MODE_LABELS[normalizeMode(mode)] || MODE_LABELS.basic;
   }
 
   function updateModeButtonsUI() {
@@ -917,7 +920,7 @@
 
   function updatePlayBotAvailability(baseEnabled = true) {
     if (!playBotBtnEl) return;
-    const modeAllowsBot = selectedMode === 'passive' || selectedMode === 'pop';
+    const modeAllowsBot = selectedMode === 'basic' || selectedMode === 'pop';
     const enabled = Boolean(baseEnabled && modeAllowsBot);
     playBotBtnEl.disabled = !enabled;
     playBotBtnEl.title = modeAllowsBot ? '' : 'Bots are unavailable in this mode';
@@ -2072,7 +2075,7 @@ function hideReverseCostDisplay() {
     });
     popReadyLabels.clear();
 
-    gameMode = normalizeMode(msg.mode || 'passive');
+    gameMode = normalizeMode(msg.mode || 'basic');
     if (msg.settings && Number.isFinite(msg.settings.popReward)) {
       popReward = Number(msg.settings.popReward);
     } else {
@@ -2165,6 +2168,16 @@ function hideReverseCostDisplay() {
 
     if (msg.settings && typeof msg.settings.nodeMaxJuice === 'number') {
       nodeMaxJuice = msg.settings.nodeMaxJuice;
+    }
+
+    // Read bridge costs from backend
+    if (msg.settings) {
+      if (typeof msg.settings.bridgeBaseCost === 'number') {
+        BRIDGE_BASE_COST = msg.settings.bridgeBaseCost;
+      }
+      if (typeof msg.settings.bridgeCostPerUnit === 'number') {
+        BRIDGE_COST_PER_UNIT = msg.settings.bridgeCostPerUnit;
+      }
     }
 
     phase = typeof msg.phase === 'string' ? msg.phase : 'picking';
