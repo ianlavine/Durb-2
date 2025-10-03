@@ -359,11 +359,67 @@ class GameEngine:
         dx = (to_node.x - from_node.x) * scale
         dy = (to_node.y - from_node.y) * scale
         distance = math.hypot(dx, dy)
+        
+        # In warp mode, consider wrapped distances through screen boundaries
+        if self.state and self.state.mode == "warp":
+            warp_info = self._calculate_warp_distance(from_node, to_node)
+            if warp_info and warp_info["distance"] < distance:
+                distance = warp_info["distance"]
+        
         if distance <= 0:
             return 0
 
         total_cost = BRIDGE_BASE_COST + distance * BRIDGE_COST_PER_UNIT_DISTANCE
         return int(round(total_cost))
+    
+    def _calculate_warp_distance(self, from_node: Node, to_node: Node) -> Optional[Dict[str, Any]]:
+        """Calculate the shortest warp distance through screen boundaries.
+        Returns dict with distance and boundary info, or None if not warping."""
+        if not self.state or self.state.mode != "warp":
+            return None
+            
+        screen_width = float(self.screen.get("width", 100))
+        screen_height = float(self.screen.get("height", 100))
+        screen_min_x = float(self.screen.get("minX", 0))
+        screen_min_y = float(self.screen.get("minY", 0))
+        
+        scale = self._normalization_scale()
+        
+        # Calculate direct distance
+        dx = (to_node.x - from_node.x) * scale
+        dy = (to_node.y - from_node.y) * scale
+        direct_distance = math.hypot(dx, dy)
+        
+        best_warp = None
+        best_distance = direct_distance
+        
+        # Try wrapping through left/right
+        wrap_dx_left = ((from_node.x - screen_min_x) + (screen_min_x + screen_width - to_node.x)) * scale
+        wrap_distance_left = math.hypot(wrap_dx_left, dy)
+        if wrap_distance_left < best_distance:
+            best_distance = wrap_distance_left
+            best_warp = {"distance": wrap_distance_left, "boundary": "left", "dx": wrap_dx_left, "dy": dy}
+        
+        wrap_dx_right = ((screen_min_x + screen_width - from_node.x) + (to_node.x - screen_min_x)) * scale
+        wrap_distance_right = math.hypot(wrap_dx_right, dy)
+        if wrap_distance_right < best_distance:
+            best_distance = wrap_distance_right
+            best_warp = {"distance": wrap_distance_right, "boundary": "right", "dx": wrap_dx_right, "dy": dy}
+        
+        # Try wrapping through top/bottom
+        wrap_dy_top = ((from_node.y - screen_min_y) + (screen_min_y + screen_height - to_node.y)) * scale
+        wrap_distance_top = math.hypot(dx, wrap_dy_top)
+        if wrap_distance_top < best_distance:
+            best_distance = wrap_distance_top
+            best_warp = {"distance": wrap_distance_top, "boundary": "top", "dx": dx, "dy": wrap_dy_top}
+        
+        wrap_dy_bottom = ((screen_min_y + screen_height - from_node.y) + (to_node.y - screen_min_y)) * scale
+        wrap_distance_bottom = math.hypot(dx, wrap_dy_bottom)
+        if wrap_distance_bottom < best_distance:
+            best_distance = wrap_distance_bottom
+            best_warp = {"distance": wrap_distance_bottom, "boundary": "bottom", "dx": dx, "dy": wrap_dy_bottom}
+        
+        return best_warp
 
     def handle_build_bridge(self, token: str, from_node_id: int, to_node_id: int, 
                           client_reported_cost: float) -> Tuple[bool, Optional[Edge], float, Optional[str]]:
@@ -393,8 +449,20 @@ class GameEngine:
             if self._edge_exists_between_nodes(from_node_id, to_node_id):
                 raise GameValidationError("Edge already exists between these nodes")
             
-            # Check for intersections
-            if self._edges_would_intersect(from_node, to_node):
+            # Determine if this should be a warp pipe
+            warp_info = None
+            if self.state and self.state.mode == "warp":
+                warp_info = self._calculate_warp_distance(from_node, to_node)
+                # Only make it a warp if wrapping is actually shorter
+                scale = self._normalization_scale()
+                direct_dx = (to_node.x - from_node.x) * scale
+                direct_dy = (to_node.y - from_node.y) * scale
+                direct_distance = math.hypot(direct_dx, direct_dy)
+                if warp_info and warp_info["distance"] >= direct_distance:
+                    warp_info = None  # Not worth warping
+            
+            # Check for intersections (skip for warp pipes)
+            if not warp_info and self._edges_would_intersect(from_node, to_node):
                 raise GameValidationError("Bridge would intersect existing edge")
             
             # Create the edge (always one-way from source to target)
@@ -411,6 +479,8 @@ class GameEngine:
                 build_ticks_required=max(1, int(math.hypot(to_node.x - from_node.x, to_node.y - from_node.y) * 0.3)),
                 build_ticks_elapsed=0,
                 building=True,
+                is_warp=bool(warp_info),
+                warp_boundary=warp_info["boundary"] if warp_info else None,
             )
             
             # Add to state

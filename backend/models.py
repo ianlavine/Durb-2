@@ -38,3 +38,6 @@ class Edge:
     build_ticks_required: int = 0  # number of ticks required before edge can turn on
     build_ticks_elapsed: int = 0  # ticks that have elapsed since creation
     building: bool = False  # if True, edge cannot be toggled/clicked and will not flow
+    # Warp pipe properties
+    is_warp: bool = False  # if True, this edge wraps around screen boundaries
+    warp_boundary: Optional[str] = None  # "top", "bottom", "left", "right", or None

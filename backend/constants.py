@@ -15,7 +15,7 @@ MAX_FRIEND_PLAYERS = 4
 TICK_INTERVAL_SECONDS: float = 0.1
 
 # Game modes
-GAME_MODES: Tuple[str, ...] = ("basic", "pop")
+GAME_MODES: Tuple[str, ...] = ("basic", "pop", "warp")
 DEFAULT_GAME_MODE: str = GAME_MODES[0]
 POP_NODE_REWARD: float = 10.0
 
@@ -33,6 +33,7 @@ RESERVE_TRANSFER_RATIO: float = 0.007
 GOLD_REWARD_FOR_NEUTRAL_CAPTURE_BY_MODE: Dict[str, float] = {
     "basic": 10.0,
     "pop": 5.0,
+    "warp": 10.0,
 }
 GOLD_REWARD_FOR_NEUTRAL_CAPTURE: float = GOLD_REWARD_FOR_NEUTRAL_CAPTURE_BY_MODE[DEFAULT_GAME_MODE]
 GOLD_REWARD_FOR_ENEMY_CAPTURE: float = 0.0

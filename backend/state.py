@@ -247,6 +247,8 @@ class GraphState:
                 int(getattr(e, 'build_ticks_required', 0)),
                 int(getattr(e, 'build_ticks_elapsed', 0)),
                 1 if getattr(e, 'building', False) else 0,
+                1 if getattr(e, 'is_warp', False) else 0,
+                getattr(e, 'warp_boundary', None),
             ]
             for eid, e in self.edges.items()
         ]
@@ -309,6 +311,8 @@ class GraphState:
             int(getattr(e, 'build_ticks_required', 0)),
             int(getattr(e, 'build_ticks_elapsed', 0)),
             1 if getattr(e, 'building', False) else 0,
+            1 if getattr(e, 'is_warp', False) else 0,
+            getattr(e, 'warp_boundary', None),
         ] for eid, e in self.edges.items()]  # Always forward now
         nodes_arr = [
             [nid, round(n.juice, 3), (n.owner if n.owner is not None else None)]
