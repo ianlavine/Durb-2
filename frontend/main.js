@@ -960,7 +960,11 @@
   // Calculate the proper boundary crossing points for a warp edge
   // Returns { exit: {x, y}, entry: {x, y} } in world coordinates
   function calculateWarpBoundaryPoints(fromNode, toNode, warpInfo) {
-    if (!warpInfo || !screen) return null;
+    if (!warpInfo || !screen || !view) return null;
+    
+    // Use actual viewport edges for LEFT/RIGHT, world boundaries for TOP/BOTTOM
+    const [leftEdgeWorldX] = screenToWorld(0, 0);
+    const [rightEdgeWorldX] = screenToWorld(window.innerWidth, 0);
     
     const screenWidth = screen.width || 100;
     const screenHeight = screen.height || 100;
@@ -970,10 +974,12 @@
     const boundary = warpInfo.boundary;
     
     if (boundary === 'left' || boundary === 'right') {
-      // Horizontal wrap: calculate the Y coordinate at the boundary based on the angle
-      // The pipe travels from fromNode to the exit boundary
-      const distToExit = boundary === 'left' ? (fromNode.x - screenMinX) : (screenMinX + screenWidth - fromNode.x);
-      const distToEntry = boundary === 'left' ? (screenMinX + screenWidth - toNode.x) : (toNode.x - screenMinX);
+      // Horizontal wrap: use viewport edges for left/right
+      // Calculate the Y coordinate at the boundary based on the angle
+      const exitEdgeX = boundary === 'left' ? leftEdgeWorldX : rightEdgeWorldX;
+      const entryEdgeX = boundary === 'left' ? rightEdgeWorldX : leftEdgeWorldX;
+      
+      const distToExit = Math.abs(fromNode.x - exitEdgeX);
       
       // Calculate the Y position at the boundary using the angle from warpInfo
       // dy/dx ratio gives us the slope
@@ -985,8 +991,8 @@
         const exitY = fromNode.y;
         const entryY = toNode.y;
         return {
-          exit: { x: boundary === 'left' ? screenMinX : screenMinX + screenWidth, y: exitY },
-          entry: { x: boundary === 'left' ? screenMinX + screenWidth : screenMinX, y: entryY }
+          exit: { x: exitEdgeX, y: exitY },
+          entry: { x: entryEdgeX, y: entryY }
         };
       }
       
@@ -996,13 +1002,15 @@
       const entryY = exitY;
       
       return {
-        exit: { x: boundary === 'left' ? screenMinX : screenMinX + screenWidth, y: exitY },
-        entry: { x: boundary === 'left' ? screenMinX + screenWidth : screenMinX, y: entryY }
+        exit: { x: exitEdgeX, y: exitY },
+        entry: { x: entryEdgeX, y: entryY }
       };
     } else {
-      // Vertical wrap: calculate the X coordinate at the boundary based on the angle
-      const distToExit = boundary === 'top' ? (fromNode.y - screenMinY) : (screenMinY + screenHeight - fromNode.y);
-      const distToEntry = boundary === 'top' ? (screenMinY + screenHeight - toNode.y) : (toNode.y - screenMinY);
+      // Vertical wrap: use world boundaries (purple lines) for top/bottom
+      const exitEdgeY = boundary === 'top' ? screenMinY : screenMinY + screenHeight;
+      const entryEdgeY = boundary === 'top' ? screenMinY + screenHeight : screenMinY;
+      
+      const distToExit = Math.abs(fromNode.y - exitEdgeY);
       
       const totalDx = warpInfo.dx;
       const totalDy = warpInfo.dy;
@@ -1012,8 +1020,8 @@
         const exitX = fromNode.x;
         const entryX = toNode.x;
         return {
-          exit: { x: exitX, y: boundary === 'top' ? screenMinY : screenMinY + screenHeight },
-          entry: { x: entryX, y: boundary === 'top' ? screenMinY + screenHeight : screenMinY }
+          exit: { x: exitX, y: exitEdgeY },
+          entry: { x: entryX, y: entryEdgeY }
         };
       }
       
@@ -1023,8 +1031,8 @@
       const entryX = exitX;
       
       return {
-        exit: { x: exitX, y: boundary === 'top' ? screenMinY : screenMinY + screenHeight },
-        entry: { x: entryX, y: boundary === 'top' ? screenMinY + screenHeight : screenMinY }
+        exit: { x: exitX, y: exitEdgeY },
+        entry: { x: entryX, y: entryEdgeY }
       };
     }
   }
@@ -1127,26 +1135,31 @@
     
     // Handle wrapping in warp mode - ONLY during bridge building
     if (activeAbility === 'bridge1way') {
+      // Use actual screen/viewport edges for LEFT/RIGHT wrapping
+      const [leftEdgeWorldX] = screenToWorld(0, 0);
+      const [rightEdgeWorldX] = screenToWorld(window.innerWidth, 0);
+      
+      // Use world boundaries (purple lines) for TOP/BOTTOM wrapping
       const screenMinX = screen.minX || 0;
       const screenMinY = screen.minY || 0;
       const screenWidth = screen.width || 100;
       const screenHeight = screen.height || 100;
       
-      // Wrap horizontally (left/right edges)
-      if (virtualCursorX < screenMinX) {
-        virtualCursorX = screenMinX + screenWidth + (virtualCursorX - screenMinX);
-      } else if (virtualCursorX > screenMinX + screenWidth) {
-        virtualCursorX = screenMinX + (virtualCursorX - (screenMinX + screenWidth));
+      // Wrap horizontally at viewport edges (left/right edges of screen)
+      if (virtualCursorX < leftEdgeWorldX) {
+        virtualCursorX = rightEdgeWorldX + (virtualCursorX - leftEdgeWorldX);
+      } else if (virtualCursorX > rightEdgeWorldX) {
+        virtualCursorX = leftEdgeWorldX + (virtualCursorX - rightEdgeWorldX);
       }
       
-      // Wrap vertically (top/bottom at purple boundaries)
+      // Wrap vertically at world boundaries (purple lines at top/bottom)
       if (virtualCursorY < screenMinY) {
         virtualCursorY = screenMinY + screenHeight + (virtualCursorY - screenMinY);
       } else if (virtualCursorY > screenMinY + screenHeight) {
         virtualCursorY = screenMinY + (virtualCursorY - (screenMinY + screenHeight));
       }
     } else {
-      // During normal play, clamp cursor to screen boundaries (no wrapping)
+      // During normal play, clamp cursor to world boundaries (no wrapping)
       const screenMinX = screen.minX || 0;
       const screenMinY = screen.minY || 0;
       const screenWidth = screen.width || 100;
