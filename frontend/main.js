@@ -73,6 +73,10 @@
   let progressNameSegments = new Map();
   let winThreshold = 40; // default, will be updated from backend
   let totalNodes = 60; // default, will be updated from backend
+  
+  // UI background bars
+  let topUiBar = null;
+  let bottomUiBar = null;
 
   // Timer system
   let timerDisplay = null;
@@ -1351,10 +1355,10 @@ function hideReverseCostDisplay() {
     setReplayControlsDisabled(false);
     setReplayStatus('', 'info');
 
-    // Quit overlay button
+    // Quit overlay button (forfeit - bottom left)
     const quitBtn = document.createElement('button');
     quitBtn.textContent = 'Forfeit';
-    Object.assign(quitBtn.style, { position: 'absolute', left: '10px', top: '10px', zIndex: 10, padding: '8px 14px', borderRadius: '8px', border: 'none', background: '#ff5555', color: '#111', cursor: 'pointer', display: 'none' });
+    Object.assign(quitBtn.style, { position: 'absolute', left: '10px', bottom: '10px', zIndex: 10, padding: '8px 14px', borderRadius: '8px', border: 'none', background: '#ff5555', color: '#111', cursor: 'pointer', display: 'none' });
     document.body.appendChild(quitBtn);
     quitBtn.addEventListener('click', () => {
       if (isReplayActive() || replayMode) {
@@ -1395,11 +1399,12 @@ function hideReverseCostDisplay() {
     reviewReplayDownloadButton.textContent = 'Download';
     reviewReplayDownloadButton.dataset.clicked = '';
     Object.assign(reviewReplayDownloadButton.style, {
-      position: 'absolute', left: '10px', top: '56px', zIndex: 10,
-      padding: '10px 18px', borderRadius: '10px', border: 'none',
+      position: 'absolute', left: '70px', bottom: '56px', zIndex: 11,
+      padding: '8px 14px', borderRadius: '8px', border: 'none',
       background: '#f3eaff', color: '#251638', cursor: 'pointer',
       boxShadow: '0 4px 12px rgba(0,0,0,0.25)', display: 'none',
-      transition: 'transform 120ms ease, background 160ms ease, color 160ms ease, box-shadow 160ms ease'
+      width: '80px',
+      transition: 'transform 120ms ease, background 160ms ease, color 160ms ease, box-shadow 160ms ease, opacity 120ms ease'
     });
     reviewReplayDownloadButton.addEventListener('mouseenter', () => {
       if (reviewReplayDownloadButton.dataset.clicked === 'true') return;
@@ -1433,8 +1438,8 @@ function hideReverseCostDisplay() {
     rematchButton = document.createElement('button');
     rematchButton.textContent = 'Rematch';
     Object.assign(rematchButton.style, {
-      position: 'absolute', left: '10px', top: '56px', zIndex: 10,
-      padding: '10px 18px', borderRadius: '10px', border: 'none',
+      position: 'absolute', left: '160px', bottom: '10px', zIndex: 10,
+      padding: '8px 14px', borderRadius: '8px', border: 'none',
       background: '#7ee49c', color: '#0a2f18', cursor: 'pointer',
       boxShadow: '0 6px 18px rgba(0,0,0,0.35)', display: 'none',
       transition: 'transform 120ms ease, background 160ms ease, color 160ms ease, box-shadow 160ms ease'
@@ -1463,7 +1468,7 @@ function hideReverseCostDisplay() {
 
     saveReplayWrapper = document.createElement('div');
     Object.assign(saveReplayWrapper.style, {
-      position: 'absolute', left: '10px', top: '102px', zIndex: 10,
+      position: 'absolute', left: '70px', bottom: '10px', zIndex: 10,
       display: 'none', width: 'auto',
     });
 
@@ -1471,10 +1476,11 @@ function hideReverseCostDisplay() {
     saveReplayButton.textContent = 'Review';
     saveReplayButton.dataset.clicked = '';
     Object.assign(saveReplayButton.style, {
-      padding: '10px 18px', borderRadius: '10px', border: 'none',
+      padding: '8px 14px', borderRadius: '8px', border: 'none',
       background: '#ff7ac7', color: '#3a123f', cursor: 'pointer',
       boxShadow: '0 6px 18px rgba(0,0,0,0.35)', display: 'block',
-      width: '100%', transition: 'transform 120ms ease, background 160ms ease, color 160ms ease, box-shadow 160ms ease'
+      width: '80px',
+      transition: 'transform 120ms ease, background 160ms ease, color 160ms ease, box-shadow 160ms ease'
     });
     saveReplayButton.addEventListener('mouseenter', () => {
       if (saveReplayButton.dataset.clicked === 'true') return;
@@ -1527,10 +1533,10 @@ function hideReverseCostDisplay() {
     reviewDropdownButton = document.createElement('button');
     reviewDropdownButton.textContent = 'Download';
     Object.assign(reviewDropdownButton.style, {
-      marginTop: '8px', borderRadius: '10px', border: 'none',
-      padding: '8px 18px', background: '#f3eaff', color: '#251638',
+      position: 'absolute', bottom: '46px', left: '0px', borderRadius: '8px', border: 'none',
+      padding: '8px 14px', background: '#f3eaff', color: '#251638',
       cursor: 'pointer', boxShadow: '0 4px 12px rgba(0,0,0,0.25)',
-      display: 'none', width: '100%', transition: 'background 160ms ease, color 160ms ease, box-shadow 160ms ease'
+      display: 'none', transition: 'background 160ms ease, color 160ms ease, box-shadow 160ms ease, opacity 120ms ease', opacity: '0'
     });
     reviewDropdownButton.addEventListener('mouseenter', () => {
       reviewDropdownButton.style.background = '#ffffff';
@@ -1558,10 +1564,16 @@ function hideReverseCostDisplay() {
     });
 
     saveReplayWrapper.addEventListener('mouseenter', () => {
-      if (reviewDropdownButton) reviewDropdownButton.style.display = 'block';
+      if (reviewDropdownButton) {
+        reviewDropdownButton.style.display = 'block';
+        setTimeout(() => { reviewDropdownButton.style.opacity = '1'; }, 10);
+      }
     });
     saveReplayWrapper.addEventListener('mouseleave', () => {
-      if (reviewDropdownButton) reviewDropdownButton.style.display = 'none';
+      if (reviewDropdownButton) {
+        reviewDropdownButton.style.opacity = '0';
+        setTimeout(() => { if (reviewDropdownButton.style.opacity === '0') reviewDropdownButton.style.display = 'none'; }, 120);
+      }
     });
 
     saveReplayWrapper.appendChild(saveReplayButton);
@@ -1571,8 +1583,8 @@ function hideReverseCostDisplay() {
     postgameNotice = document.createElement('div');
     postgameNotice.textContent = '';
     Object.assign(postgameNotice.style, {
-      position: 'absolute', left: '10px', top: '58px', zIndex: 10,
-      padding: '8px 10px', borderRadius: '8px', color: '#b22222',
+      position: 'absolute', left: '160px', bottom: '10px', zIndex: 10,
+      padding: '8px 14px', borderRadius: '8px', color: '#b22222',
       background: 'rgba(0,0,0,0.0)', display: 'none', font: '16px/1.2 monospace'
     });
     document.body.appendChild(postgameNotice);
@@ -1587,31 +1599,9 @@ function hideReverseCostDisplay() {
       rematchButton.style.display = showRematchUI ? 'block' : 'none';
       if (saveReplayWrapper) {
         saveReplayWrapper.style.display = showSaveReplay ? 'block' : 'none';
-        saveReplayWrapper.style.left = quitBtn.style.left;
       }
       postgameNotice.style.display = (!menuVisible && opponentHasLeft) ? 'block' : 'none';
-      // Ensure spacing alignment with quit
-      rematchButton.style.left = quitBtn.style.left;
-      try {
-        const quitTop = parseInt(quitBtn.style.top.replace('px','') || '10', 10);
-        const rematchTop = quitTop + 46;
-        rematchButton.style.top = rematchTop + 'px';
-        if (saveReplayWrapper) {
-          saveReplayWrapper.style.top = (rematchTop + 46) + 'px';
-        }
-        let noticeTop = rematchTop;
-        const saveShown = saveReplayWrapper && saveReplayWrapper.style.display !== 'none';
-        if (opponentHasLeft) {
-          // Align the notice with where the rematch button would have been.
-          noticeTop = rematchTop;
-        } else if (saveShown) {
-          // Place notice just below the download button when both buttons visible.
-          noticeTop = rematchTop + 92;
-        } else {
-          noticeTop = rematchTop + 48;
-        }
-        postgameNotice.style.top = noticeTop + 'px';
-      } catch (e) {}
+      // Buttons now positioned horizontally at bottom with fixed positions
       updateReplaySpeedUI();
       updateReviewReplayDownloadButton();
     });
@@ -1670,20 +1660,20 @@ function hideReverseCostDisplay() {
     });
     document.body.appendChild(overlayMsg);
 
-    // Gold number display in bottom right
+    // Gold number display in top right corner
     const goldNumber = document.createElement('div');
     goldNumber.id = 'goldNumber';
     Object.assign(goldNumber.style, {
       position: 'absolute',
-      right: '20px',
-      bottom: '20px',
-      fontSize: '120px',
+      right: '8px',
+      top: '8px',
+      fontSize: '64px',
       fontWeight: 'bold',
       color: '#ffd700',
       lineHeight: '1',
-      textAlign: 'center',
-      textShadow: '3px 3px 6px rgba(0,0,0,0.8)',
-      zIndex: 8,
+      textAlign: 'right',
+      textShadow: '2px 2px 4px rgba(0,0,0,0.8)',
+      zIndex: 12,
       display: 'none', // initially hidden
     });
     goldNumber.textContent = '$0';
@@ -1700,6 +1690,10 @@ function hideReverseCostDisplay() {
     if (progressMarkerLeft) progressMarkerLeft.style.display = 'none';
     if (progressMarkerRight) progressMarkerRight.style.display = 'none';
     if (progressNameContainer) progressNameContainer.style.display = 'none';
+    
+    // Initialize UI background bars
+    topUiBar = document.getElementById('topUiBar');
+    bottomUiBar = document.getElementById('bottomUiBar');
     
     // Initialize timer display
     timerDisplay = document.getElementById('timerDisplay');
@@ -2309,9 +2303,6 @@ function hideReverseCostDisplay() {
     if (postgameNotice) {
       postgameNotice.textContent = 'Opponent has left';
       postgameNotice.style.color = '#b22222';
-      if (rematchButton && rematchButton.style.top) {
-        postgameNotice.style.top = rematchButton.style.top;
-      }
       const menu = document.getElementById('menu');
       const menuVisible = menu ? !menu.classList.contains('hidden') : false;
       postgameNotice.style.display = menuVisible ? 'none' : 'block';
@@ -3085,8 +3076,18 @@ function hideReverseCostDisplay() {
       popReadyLabels.forEach(label => {
         if (label) label.setVisible(false);
       });
+      // Hide UI bars when menu is visible
+      if (topUiBar) topUiBar.style.display = 'none';
+      if (bottomUiBar) bottomUiBar.style.display = 'none';
       return; // Do not draw game under menu
     }
+    
+    // Show UI bars when game is active
+    if (topUiBar) topUiBar.style.display = 'block';
+    if (bottomUiBar) bottomUiBar.style.display = 'block';
+    
+    // Draw border box around play area
+    drawPlayAreaBorder();
     
     // Show gold display when graph is being drawn and we have nodes/game data
     if (goldDisplay && nodes.size > 0) {
@@ -3464,6 +3465,32 @@ function hideReverseCostDisplay() {
   function worldToScreen(x, y) {
     if (!view) return [x, y];
     return [x * view.scaleX + view.offsetX, y * view.scaleY + view.offsetY];
+  }
+
+  function drawPlayAreaBorder() {
+    if (!view || !screen) return;
+    
+    // Get world bounds from screen object
+    const minX = Number.isFinite(screen.minX) ? screen.minX : 0;
+    const minY = Number.isFinite(screen.minY) ? screen.minY : 0;
+    const maxX = minX + (Number.isFinite(screen.width) ? screen.width : 100);
+    const maxY = minY + (Number.isFinite(screen.height) ? screen.height : 100);
+    
+    // Convert corners to screen coordinates
+    const [topLeftX, topLeftY] = worldToScreen(minX, minY);
+    const [topRightX, topRightY] = worldToScreen(maxX, minY);
+    const [bottomRightX, bottomRightY] = worldToScreen(maxX, maxY);
+    const [bottomLeftX, bottomLeftY] = worldToScreen(minX, maxY);
+    
+    // Draw border rectangle
+    graphicsEdges.lineStyle(4, 0x888888, 1); // Grey border, 4px thick
+    graphicsEdges.beginPath();
+    graphicsEdges.moveTo(topLeftX, topLeftY);
+    graphicsEdges.lineTo(topRightX, topRightY);
+    graphicsEdges.lineTo(bottomRightX, bottomRightY);
+    graphicsEdges.lineTo(bottomLeftX, bottomLeftY);
+    graphicsEdges.closePath();
+    graphicsEdges.strokePath();
   }
 
   function hexToInt(color) {
@@ -4085,7 +4112,9 @@ function hideReverseCostDisplay() {
       }
       if (nameCell) {
         const displayName = info.name || `Player ${id}`;
-        nameCell.textContent = displayName;
+        // Truncate name to max 10 characters
+        const truncatedName = displayName.length > 10 ? displayName.substring(0, 10) : displayName;
+        nameCell.textContent = truncatedName;
         nameCell.style.order = index;
         nameCell.style.flex = `0 0 ${Math.max(percent, 0)}%`;
         nameCell.style.color = primary || '#ffffff';
