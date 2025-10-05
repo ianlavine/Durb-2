@@ -1621,7 +1621,7 @@ function hideReverseCostDisplay() {
     backBtn.textContent = 'Back';
     Object.assign(backBtn.style, {
       position: 'absolute',
-      left: '10px',
+      right: '10px',
       top: '10px',
       zIndex: 12,
       padding: '8px 14px',
