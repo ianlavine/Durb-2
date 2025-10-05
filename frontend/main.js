@@ -21,6 +21,8 @@
     scene: { preload, create, update },
   };
 
+  const SHOW_PLAY_AREA_BORDER = false; // toggle to render the play-area outline
+
   const game = new Phaser.Game(config);
 
   let ws = null;
@@ -3087,7 +3089,9 @@ function hideReverseCostDisplay() {
     if (bottomUiBar) bottomUiBar.style.display = 'block';
     
     // Draw border box around play area
-    drawPlayAreaBorder();
+    if (SHOW_PLAY_AREA_BORDER) {
+      drawPlayAreaBorder();
+    }
     
     // Show gold display when graph is being drawn and we have nodes/game data
     if (goldDisplay && nodes.size > 0) {
@@ -3446,18 +3450,26 @@ function hideReverseCostDisplay() {
       }
     }
 
-    const topPadding = 60; // tighter HUD margin while keeping space for overlays
-    const bottomPadding = 40;
+    const topBarHeight = (topUiBar && topUiBar.style.display !== 'none') ? (topUiBar.offsetHeight || 0) : 0;
+    const bottomBarHeight = (bottomUiBar && bottomUiBar.style.display !== 'none') ? (bottomUiBar.offsetHeight || 0) : 0;
+    const baseTopPadding = 52;
+    const baseBottomPadding = 32;
+    const verticalMargin = 8;
+    const topPadding = Math.max(baseTopPadding, topBarHeight) + verticalMargin;
+    const bottomPadding = Math.max(baseBottomPadding, bottomBarHeight) + verticalMargin;
     const sidePadding = 40;
     const rightReservedPx = 24; // space for gold number and margins
-    const horizontalPlayable = Math.max(1, viewW - sidePadding * 2 - rightReservedPx);
+    const extraSide = rightReservedPx / 2;
+    const leftPadding = sidePadding + extraSide;
+    const rightPadding = sidePadding + extraSide;
+    const horizontalPlayable = Math.max(1, viewW - leftPadding - rightPadding);
     const verticalPlayable = Math.max(1, viewH - topPadding - bottomPadding);
 
     const width = Math.max(1, maxX - minX);
     const height = Math.max(1, maxY - minY);
     const scale = Math.min(horizontalPlayable / width, verticalPlayable / height);
 
-    const offsetX = sidePadding + (horizontalPlayable - scale * width) / 2 - scale * minX;
+    const offsetX = leftPadding + (horizontalPlayable - scale * width) / 2 - scale * minX;
     const offsetY = topPadding + (verticalPlayable - scale * height) / 2 - scale * minY;
     view = { minX, minY, maxX, maxY, scaleX: scale, scaleY: scale, offsetX, offsetY };
   }
