@@ -1666,8 +1666,8 @@ function hideReverseCostDisplay() {
     Object.assign(goldNumber.style, {
       position: 'absolute',
       right: '8px',
-      top: '8px',
-      fontSize: '64px',
+      top: '2px',
+      fontSize: '58px',
       fontWeight: 'bold',
       color: '#ffd700',
       lineHeight: '1',
