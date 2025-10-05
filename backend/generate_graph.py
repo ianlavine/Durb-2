@@ -13,8 +13,8 @@ DESIRED_EDGE_COUNT: int = 55
 ONE_WAY_PERCENT: float = 0.5
 
 # Layout scaling (extra stretch toward top-right)
-WIDTH_SCALE: float = 1.25  # widen 25%, anchored on left edge
-HEIGHT_SCALE: float = 1.2  # extend 20% upward while keeping bottom fixed
+WIDTH_SCALE: float = 1  # widen 25%, anchored on left edge
+HEIGHT_SCALE: float = 1.1  # extend 20% upward while keeping bottom fixed
 
 SCREEN_WIDTH: Optional[int] = None
 SCREEN_HEIGHT: Optional[int] = None
