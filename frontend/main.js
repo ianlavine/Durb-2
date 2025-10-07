@@ -97,6 +97,10 @@
   let virtualCursorEl = null;
   let lastPointerDownButton = null;
   let pendingVirtualUiClickTarget = null;
+  let warpWrapUsed = false;
+  let lastDoubleWarpWarningTime = 0;
+  let lastWarpAxis = null;
+  let lastWarpDirection = null;
 
   // Timer system
   let timerDisplay = null;
@@ -1211,6 +1215,15 @@ function hideReverseCostDisplay() {
 }
 
 
+function clearBridgeSelection() {
+  bridgeFirstNode = null;
+  warpWrapUsed = false;
+  lastDoubleWarpWarningTime = 0;
+  lastWarpAxis = null;
+  lastWarpDirection = null;
+}
+
+
   // Money indicator functions
   // Create an animated text indicator that rises & fades out
   function createMoneyIndicator(x, y, text, color, duration = 2000, options = {}) {
@@ -2258,7 +2271,7 @@ function hideReverseCostDisplay() {
     edgeFlowTexts.clear();
 
     activeAbility = null;
-    bridgeFirstNode = null;
+    clearBridgeSelection();
     hideBridgeCostDisplay();
     hideReverseCostDisplay();
 
@@ -2810,7 +2823,7 @@ function hideReverseCostDisplay() {
     }
     if (myEliminated && activeAbility) {
       activeAbility = null;
-      bridgeFirstNode = null;
+      clearBridgeSelection();
       hideBridgeCostDisplay();
     }
 
@@ -2872,7 +2885,7 @@ function hideReverseCostDisplay() {
     // Backend includes `cost` on the message only for the acting player
     if (activeAbility === 'bridge1way' && msg.cost) {
       activeAbility = null;
-      bridgeFirstNode = null;
+      clearBridgeSelection();
       hideBridgeCostDisplay();
     }
   }
@@ -3093,7 +3106,7 @@ function hideReverseCostDisplay() {
     // Reset destroy mode on successful node destruction
     if (activeAbility === 'destroy') {
       activeAbility = null;
-      bridgeFirstNode = null;
+      clearBridgeSelection();
     }
   }
 
@@ -3970,28 +3983,89 @@ function hideReverseCostDisplay() {
     const height = bounds.maxY - bounds.minY;
     let nextX = x;
     let nextY = y;
+    const originalX = x;
+    const originalY = y;
+    let horizontalWrap = false;
+    let verticalWrap = false;
+    let wrapAxis = null;
+    let wrapDirection = null;
 
     if (width > 0) {
-      if (nextX < bounds.minX) {
+      if (originalX < bounds.minX) {
         const delta = bounds.minX - nextX;
         const wraps = Math.floor(delta / width) + 1;
         nextX += wraps * width;
-      } else if (nextX > bounds.maxX) {
+        horizontalWrap = true;
+        wrapAxis = 'horizontal';
+        wrapDirection = 'leftToRight';
+      } else if (originalX > bounds.maxX) {
         const delta = nextX - bounds.maxX;
         const wraps = Math.floor(delta / width) + 1;
         nextX -= wraps * width;
+        horizontalWrap = true;
+        wrapAxis = 'horizontal';
+        wrapDirection = 'rightToLeft';
       }
     }
 
     if (height > 0) {
-      if (nextY < bounds.minY) {
+      if (originalY < bounds.minY) {
         const delta = bounds.minY - nextY;
         const wraps = Math.floor(delta / height) + 1;
         nextY += wraps * height;
-      } else if (nextY > bounds.maxY) {
+        verticalWrap = true;
+        if (wrapAxis) {
+          wrapAxis = 'mixed';
+          wrapDirection = null;
+        } else {
+          wrapAxis = 'vertical';
+          wrapDirection = 'topToBottom';
+        }
+      } else if (originalY > bounds.maxY) {
         const delta = nextY - bounds.maxY;
         const wraps = Math.floor(delta / height) + 1;
         nextY -= wraps * height;
+        verticalWrap = true;
+        if (wrapAxis) {
+          wrapAxis = 'mixed';
+          wrapDirection = null;
+        } else {
+          wrapAxis = 'vertical';
+          wrapDirection = 'bottomToTop';
+        }
+      }
+    }
+
+    const wrapOccurred = horizontalWrap || verticalWrap;
+    const enforceLimit = bridgeFirstNode !== null;
+
+    if (wrapOccurred && enforceLimit) {
+      if (warpWrapUsed) {
+        const returningSameEdge = (
+          wrapAxis && wrapAxis !== 'mixed' &&
+          lastWarpAxis === wrapAxis &&
+          lastWarpDirection && wrapDirection &&
+          lastWarpDirection !== wrapDirection
+        );
+        if (returningSameEdge) {
+          warpWrapUsed = false;
+          lastWarpAxis = null;
+          lastWarpDirection = null;
+          wrapAxis = null;
+          wrapDirection = null;
+        } else {
+          const now = Date.now();
+          if (now - lastDoubleWarpWarningTime > 600) {
+            showErrorMessage('no double warping');
+            lastDoubleWarpWarningTime = now;
+          }
+          return clampCursorToWarpBounds(x, y);
+        }
+      }
+      if (!warpWrapUsed && wrapAxis !== null) {
+        warpWrapUsed = true;
+        lastWarpAxis = wrapAxis;
+        lastWarpDirection = wrapDirection;
       }
     }
 
@@ -4004,6 +4078,14 @@ function hideReverseCostDisplay() {
     return {
       x: Math.max(0, Math.min(maxX, x)),
       y: Math.max(0, Math.min(maxY, y)),
+    };
+  }
+
+  function clampCursorToWarpBounds(x, y) {
+    if (!warpBoundsScreen) return { x, y };
+    return {
+      x: Math.max(warpBoundsScreen.minX, Math.min(warpBoundsScreen.maxX, x)),
+      y: Math.max(warpBoundsScreen.minY, Math.min(warpBoundsScreen.maxY, y)),
     };
   }
 
@@ -4096,6 +4178,12 @@ function hideReverseCostDisplay() {
       virtualCursorScreenX = lastPointerClientX;
       virtualCursorScreenY = lastPointerClientY;
     }
+    if (!locked) {
+      warpWrapUsed = false;
+      lastDoubleWarpWarningTime = 0;
+      lastWarpAxis = null;
+      lastWarpDirection = null;
+    }
     updateMouseWorldFromVirtualCursor();
   }
 
@@ -4173,12 +4261,16 @@ function hideReverseCostDisplay() {
         if (bridgeFirstNode === null) {
           // Start bridge building from any node
           bridgeFirstNode = nodeId;
+          warpWrapUsed = false;
+          lastDoubleWarpWarningTime = 0;
+          lastWarpAxis = null;
+          lastWarpDirection = null;
           return true; // Handled
         } else if (bridgeFirstNode !== nodeId) {
           // Complete bridge building - second node can be any node
           const firstNode = nodes.get(bridgeFirstNode);
           if (!firstNode) {
-            bridgeFirstNode = null;
+            clearBridgeSelection();
             hideBridgeCostDisplay();
             return true;
           }
@@ -4203,7 +4295,7 @@ function hideReverseCostDisplay() {
           }
         } else {
           // Clicked same node, cancel selection
-          bridgeFirstNode = null;
+          clearBridgeSelection();
           hideBridgeCostDisplay();
           return true; // Handled
         }
@@ -4213,7 +4305,7 @@ function hideReverseCostDisplay() {
     // If we get here, it means we clicked on empty space, an edge, or an invalid node
     // Cancel bridge building
     activeAbility = null;
-    bridgeFirstNode = null;
+    clearBridgeSelection();
     hideBridgeCostDisplay();
     hideReverseCostDisplay();
     return true; // Handled
@@ -4340,7 +4432,7 @@ function hideReverseCostDisplay() {
     if (ev.key.toLowerCase() === 'escape') {
       if (activeAbility) {
         activeAbility = null;
-        bridgeFirstNode = null;
+        clearBridgeSelection();
         hideBridgeCostDisplay();
         hideReverseCostDisplay();
       }
@@ -4476,18 +4568,18 @@ function hideReverseCostDisplay() {
     if (activeAbility === abilityName) {
       // Deactivate
       activeAbility = null;
-      bridgeFirstNode = null;
+      clearBridgeSelection();
       hideBridgeCostDisplay();
       hideReverseCostDisplay();
     } else if (abilityName === 'bridge1way') {
       // Activate bridge building
       activeAbility = abilityName;
-      bridgeFirstNode = null;
+      clearBridgeSelection();
       hideReverseCostDisplay();
     } else if (abilityName === 'destroy') {
       // Activate destroy mode
       activeAbility = abilityName;
-      bridgeFirstNode = null; // reuse for destroy node selection
+      clearBridgeSelection(); // reuse for destroy node selection
       hideBridgeCostDisplay();
       hideReverseCostDisplay();
     }
@@ -4783,7 +4875,7 @@ function hideReverseCostDisplay() {
     if (progressBarInner) progressBarInner.style.justifyContent = 'flex-start';
 
     activeAbility = null;
-    bridgeFirstNode = null;
+    clearBridgeSelection();
     hideBridgeCostDisplay();
     hideReverseCostDisplay();
     clearMoneyIndicators();
