@@ -96,6 +96,7 @@
   let lastPointerClientY = virtualCursorScreenY;
   let virtualCursorEl = null;
   let lastPointerDownButton = null;
+  let pendingVirtualUiClickTarget = null;
 
   // Timer system
   let timerDisplay = null;
@@ -1532,6 +1533,9 @@ function hideReverseCostDisplay() {
     Object.assign(quitBtn.style, { position: 'absolute', left: '10px', bottom: '10px', zIndex: 10, padding: '8px 14px', borderRadius: '8px', border: 'none', background: '#ff5555', color: '#111', cursor: 'pointer', display: 'none' });
     document.body.appendChild(quitBtn);
     quitBtn.addEventListener('click', () => {
+      if (pointerLockActive) {
+        releaseVirtualCursor();
+      }
       if (isReplayActive() || replayMode) {
         stopReplaySession();
         replayMode = false;
@@ -4003,6 +4007,53 @@ function hideReverseCostDisplay() {
     };
   }
 
+  function resolveVirtualUiTarget() {
+    if (!pointerLockActive) return null;
+    const element = document.elementFromPoint(virtualCursorScreenX, virtualCursorScreenY);
+    if (!element) return null;
+    if (virtualCursorEl && (element === virtualCursorEl || virtualCursorEl.contains(element))) {
+      return null;
+    }
+    const canvas = getGameCanvas();
+    if (canvas && (element === canvas || canvas.contains(element))) {
+      return null;
+    }
+    if (element.closest && element.closest('#game')) {
+      return null;
+    }
+
+    const toggle = element.closest ? element.closest('.toggle-switch') : null;
+    if (toggle) return toggle;
+
+    const button = element.closest ? element.closest('button') : null;
+    if (button) return button;
+
+    const interactive = element.closest ? element.closest('input, select, textarea, [role="button"]') : null;
+    return interactive || null;
+  }
+
+  function dispatchVirtualUiClick(target) {
+    if (!target) return;
+    try {
+      if (typeof target.focus === 'function') {
+        target.focus({ preventScroll: true });
+      }
+    } catch (err) {
+      /* ignore focus errors */
+    }
+
+    const syntheticClick = new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      clientX: virtualCursorScreenX,
+      clientY: virtualCursorScreenY,
+      view: window,
+    });
+    syntheticClick.__virtualCursor = true;
+    target.dispatchEvent(syntheticClick);
+  }
+
   function isEventInsideGameCanvas(ev) {
     const canvas = getGameCanvas();
     if (!canvas || !ev) return false;
@@ -4052,6 +4103,7 @@ function hideReverseCostDisplay() {
   document.addEventListener('pointerlockerror', handlePointerLockStateChange);
 
   window.addEventListener('pointerdown', (ev) => {
+    pendingVirtualUiClickTarget = null;
     const pointerType = ev.pointerType || 'mouse';
     if (pointerType !== 'mouse') return;
     lastPointerDownButton = ev.button;
@@ -4060,6 +4112,16 @@ function hideReverseCostDisplay() {
       return;
     }
     if (ev.button === 0) {
+      if (pointerLockActive) {
+        const uiTarget = resolveVirtualUiTarget();
+        if (uiTarget) {
+          pendingVirtualUiClickTarget = uiTarget;
+          syncVirtualCursorToEvent(ev);
+          ev.preventDefault();
+          ev.stopPropagation();
+          return;
+        }
+      }
       maybeEnableVirtualCursor(ev);
       syncVirtualCursorToEvent(ev);
     }
@@ -4067,6 +4129,18 @@ function hideReverseCostDisplay() {
 
   // Input: during picking, click to claim a node once; during playing, edge interactions allowed
   window.addEventListener('click', (ev) => {
+    if (ev.__virtualCursor) {
+      return;
+    }
+    if (pendingVirtualUiClickTarget) {
+      const target = pendingVirtualUiClickTarget;
+      pendingVirtualUiClickTarget = null;
+      dispatchVirtualUiClick(target);
+      ev.preventDefault();
+      ev.stopPropagation();
+      ev.stopImmediatePropagation?.();
+      return;
+    }
     if (lastPointerDownButton != null && lastPointerDownButton !== 0) {
       lastPointerDownButton = null;
       return;
