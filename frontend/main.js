@@ -80,7 +80,7 @@
   let topUiBar = null;
   let bottomUiBar = null;
 
-  // Warp mode visuals & geometry (frontend prototype hooked to Pop mode)
+  // Warp mode visuals & geometry (frontend prototype hooked to Warp mode)
   const WARP_MARGIN_RATIO_X = 0.06; // horizontal extra space relative to board width
   const WARP_MARGIN_RATIO_Y = 0.10; // vertical extra space relative to board height
   const WARP_BORDER_COLOR = 0x9b4dff; // purple border for warp space
@@ -128,8 +128,6 @@
   
   // Node juice display system
   let nodeJuiceTexts = new Map(); // nodeId -> text object
-  let popReadyLabels = new Map(); // nodeId -> text object for pop-ready hint
-
   // Targeting visual indicator system
   let currentTargetNodeId = null; // The node currently being targeted (for visual indicator)
   let currentTargetSetTime = null; // Animation time when target was last set
@@ -137,10 +135,8 @@
   let selectedPlayerCount = 2;
   let selectedMode = 'basic';
   let gameMode = 'basic';
-  let popReward = 10;
   let modeButtons = [];
-  const MODE_LABELS = { basic: 'Basic', pop: 'Pop' };
-  const POP_READY_TOLERANCE = 0.01;
+  const MODE_LABELS = { basic: 'Basic', warp: 'Warp' };
 
   // Money transparency system
   let moneyIndicators = []; // Array of {x, y, text, color, startTime, duration}
@@ -292,14 +288,6 @@
       { freq: 780, type: 'sine', attack: 0.005, decay: 0.12, volume: 0.14, delay: 0.00 },
       { freq: 1170, type: 'sine', attack: 0.005, decay: 0.12, volume: 0.11, delay: 0.05 },
     ]);
-  }
-  function playPopBurst() {
-    // Bright pop with airy shimmer
-    playToneSequence([
-      { freq: 1180, type: 'triangle', attack: 0.004, decay: 0.09, volume: 0.16, delay: 0.00 },
-      { freq: 760, type: 'sine', attack: 0.004, decay: 0.12, volume: 0.13, delay: 0.03 },
-    ]);
-    playNoiseBurst({ duration: 0.12, volume: 0.22, filterType: 'bandpass', filterFreq: 1650, q: 2.8, attack: 0.002, decay: 0.14 });
   }
   function playLoseNodeWarning() {
     // Intentionally silent for now; keeping function for future use
@@ -900,7 +888,7 @@
   }
 
   function isWarpFrontendActive() {
-    return (gameMode === 'pop' || selectedMode === 'pop') && warpBoundsWorld && Number.isFinite(warpBoundsWorld.width) && Number.isFinite(warpBoundsWorld.height);
+    return (gameMode === 'warp' || selectedMode === 'warp') && warpBoundsWorld && Number.isFinite(warpBoundsWorld.width) && Number.isFinite(warpBoundsWorld.height);
   }
 
   function makeEndpoint(x, y, node = null, portalAxis = null) {
@@ -1052,6 +1040,207 @@
     return Math.round(cost);
   }
 
+  function normalizeWarpSegmentList(rawSegments, sourceNode, targetNode) {
+    const segments = [];
+    if (Array.isArray(rawSegments)) {
+      rawSegments.forEach((seg) => {
+        let sx;
+        let sy;
+        let ex;
+        let ey;
+        if (Array.isArray(seg) && seg.length >= 4) {
+          [sx, sy, ex, ey] = seg.map(Number);
+        } else if (seg && typeof seg === 'object') {
+          const start = seg.start || seg.from;
+          const end = seg.end || seg.to;
+          if (start && typeof start === 'object' && end && typeof end === 'object') {
+            sx = Number(start.x);
+            sy = Number(start.y);
+            ex = Number(end.x);
+            ey = Number(end.y);
+          } else {
+            sx = Number(seg.sx ?? seg.x1 ?? seg.xStart ?? seg.x0);
+            sy = Number(seg.sy ?? seg.y1 ?? seg.yStart ?? seg.y0);
+            ex = Number(seg.ex ?? seg.x2 ?? seg.xEnd ?? seg.x1);
+            ey = Number(seg.ey ?? seg.y2 ?? seg.yEnd ?? seg.y1);
+          }
+        }
+        if ([sx, sy, ex, ey].every((value) => Number.isFinite(value))) {
+          segments.push({ sx, sy, ex, ey });
+        }
+      });
+    }
+    if (!segments.length && sourceNode && targetNode) {
+      segments.push({ sx: sourceNode.x, sy: sourceNode.y, ex: targetNode.x, ey: targetNode.y });
+    }
+    return segments;
+  }
+
+  function normalizeEdgeWarpPayload(payload, sourceNode, targetNode) {
+    let axis = 'none';
+    if (payload && typeof payload.axis === 'string') {
+      axis = payload.axis;
+    } else if (payload && typeof payload.wrapAxis === 'string') {
+      axis = payload.wrapAxis;
+    } else if (payload && typeof payload.warpAxis === 'string') {
+      axis = payload.warpAxis;
+    }
+    if (axis !== 'horizontal' && axis !== 'vertical') {
+      axis = 'none';
+    }
+    let rawSegments = payload && payload.segments;
+    if (!rawSegments && payload) {
+      rawSegments = payload.warpSegments;
+    }
+    const segments = normalizeWarpSegmentList(rawSegments, sourceNode, targetNode);
+    return { axis, segments };
+  }
+
+  function buildWarpInfoForBridge(fromNode, toNode) {
+    const path = computeWarpBridgeSegments(fromNode, toNode);
+    let axis = 'none';
+    let segments = [];
+    if (path && typeof path.wrapAxis === 'string') {
+      axis = path.wrapAxis;
+    }
+    if (path && Array.isArray(path.segments)) {
+      segments = path.segments
+        .map((segment) => {
+          const start = segment && segment.start;
+          const end = segment && segment.end;
+          if (!start || !end) return null;
+          const sx = Number(start.x);
+          const sy = Number(start.y);
+          const ex = Number(end.x);
+          const ey = Number(end.y);
+          if ([sx, sy, ex, ey].every((value) => Number.isFinite(value))) {
+            return [sx, sy, ex, ey];
+          }
+          return null;
+        })
+        .filter(Boolean);
+    }
+    if (!segments.length) {
+      segments = [[fromNode.x, fromNode.y, toNode.x, toNode.y]];
+    }
+    return { axis, segments };
+  }
+
+  function getEdgeWarpSegments(edge) {
+    if (edge && Array.isArray(edge.warpSegments) && edge.warpSegments.length) {
+      return edge.warpSegments.map((seg) => ({
+        sx: Number(seg.sx),
+        sy: Number(seg.sy),
+        ex: Number(seg.ex),
+        ey: Number(seg.ey),
+      })).filter((seg) => [seg.sx, seg.sy, seg.ex, seg.ey].every((value) => Number.isFinite(value)));
+    }
+    const sourceNode = edge ? nodes.get(edge.source) : null;
+    const targetNode = edge ? nodes.get(edge.target) : null;
+    if (sourceNode && targetNode) {
+      return [{ sx: sourceNode.x, sy: sourceNode.y, ex: targetNode.x, ey: targetNode.y }];
+    }
+    return [];
+  }
+
+  function getEdgeMidpointWorld(edge) {
+    const segments = getEdgeWarpSegments(edge);
+    if (!segments.length) return null;
+    const lengths = segments.map((seg) => Math.hypot(seg.ex - seg.sx, seg.ey - seg.sy));
+    const totalLength = lengths.reduce((sum, len) => sum + len, 0);
+    if (totalLength <= 0) {
+      const last = segments[segments.length - 1];
+      return { x: last.ex, y: last.ey };
+    }
+    let remaining = totalLength / 2;
+    for (let i = 0; i < segments.length; i++) {
+      const len = lengths[i];
+      if (len <= 0) continue;
+      if (remaining <= len) {
+        const seg = segments[i];
+        const t = remaining / len;
+        return {
+          x: seg.sx + (seg.ex - seg.sx) * t,
+          y: seg.sy + (seg.ey - seg.sy) * t,
+        };
+      }
+      remaining -= len;
+    }
+    const last = segments[segments.length - 1];
+    return { x: last.ex, y: last.ey };
+  }
+
+  function applyEdgeWarpData(edgeRecord, warpPayload, sourceNode, targetNode) {
+    const { axis, segments } = normalizeEdgeWarpPayload(warpPayload, sourceNode, targetNode);
+    edgeRecord.warpAxis = axis;
+    edgeRecord.warpSegments = segments;
+  }
+
+  function buildEdgeScreenPath(edge, fromNode, toNode, fromRadius, toRadius) {
+    const worldSegments = getEdgeWarpSegments(edge);
+    if (!worldSegments.length) return [];
+
+    const screenSegments = worldSegments.map((seg) => {
+      const [sx, sy] = worldToScreen(seg.sx, seg.sy);
+      const [ex, ey] = worldToScreen(seg.ex, seg.ey);
+      return { sx, sy, ex, ey };
+    });
+
+    if (!screenSegments.length) return [];
+
+    const first = screenSegments[0];
+    if (first) {
+      const dx = first.ex - first.sx;
+      const dy = first.ey - first.sy;
+      const len = Math.hypot(dx, dy);
+      if (len > 1e-6 && Number.isFinite(fromRadius)) {
+        const maxTrim = Math.max(0, len - 0.5);
+        const trim = Math.min(Math.max(fromRadius, 0), maxTrim);
+        const ux = dx / len;
+        const uy = dy / len;
+        first.sx += ux * trim;
+        first.sy += uy * trim;
+      }
+    }
+
+    const last = screenSegments[screenSegments.length - 1];
+    if (last) {
+      const dx = last.ex - last.sx;
+      const dy = last.ey - last.sy;
+      const len = Math.hypot(dx, dy);
+      if (len > 1e-6 && Number.isFinite(toRadius)) {
+        const maxTrim = Math.max(0, len - 0.5);
+        const trim = Math.min(Math.max(toRadius, 0), maxTrim);
+        const ux = dx / len;
+        const uy = dy / len;
+        last.ex -= ux * trim;
+        last.ey -= uy * trim;
+      }
+    }
+
+    const path = [];
+    for (const seg of screenSegments) {
+      const dx = seg.ex - seg.sx;
+      const dy = seg.ey - seg.sy;
+      const len = Math.hypot(dx, dy);
+      if (len <= 1e-6) continue;
+      const ux = dx / len;
+      const uy = dy / len;
+      path.push({
+        sx: seg.sx,
+        sy: seg.sy,
+        ex: seg.ex,
+        ey: seg.ey,
+        length: len,
+        ux,
+        uy,
+        angle: Math.atan2(uy, ux),
+      });
+    }
+
+    return path;
+  }
+
   function formatCost(value) {
     if (!Number.isFinite(value)) return '0';
     const rounded = Math.round(value);
@@ -1063,6 +1252,7 @@
     const lowered = value.trim().toLowerCase();
     // Backward compatibility: treat 'passive' as alias for 'basic'
     if (lowered === 'passive') return 'basic';
+    if (lowered === 'pop') return 'warp';
     return Object.prototype.hasOwnProperty.call(MODE_LABELS, lowered) ? lowered : 'basic';
   }
 
@@ -1081,7 +1271,7 @@
 
   function updatePlayBotAvailability(baseEnabled = true) {
     if (!playBotBtnEl) return;
-    const modeAllowsBot = selectedMode === 'basic' || selectedMode === 'pop';
+    const modeAllowsBot = selectedMode === 'basic' || selectedMode === 'warp';
     const enabled = Boolean(baseEnabled && modeAllowsBot);
     playBotBtnEl.disabled = !enabled;
     playBotBtnEl.title = modeAllowsBot ? '' : 'Bots are unavailable in this mode';
@@ -1116,18 +1306,26 @@ function updateBridgeCostDisplay(fromNode, toNode) {
   let anchorY = (fromNode.y + toNode.y) / 2;
 
   if (path && Number.isFinite(path.totalWorldDistance) && path.totalWorldDistance > 0 && Array.isArray(path.segments)) {
-    let halfDistance = path.totalWorldDistance / 2;
-    for (const segment of path.segments) {
-      const segDx = segment.end.x - segment.start.x;
-      const segDy = segment.end.y - segment.start.y;
-      const segLength = Math.hypot(segDx, segDy);
-      if (segLength >= halfDistance) {
-        const t = segLength > 0 ? halfDistance / segLength : 0;
-        anchorX = segment.start.x + segDx * t;
-        anchorY = segment.start.y + segDy * t;
-        break;
+    if (path.wrapAxis && path.wrapAxis !== 'none' && path.segments.length >= 2) {
+      const postWrap = path.segments[path.segments.length - 1];
+      const segDx = postWrap.end.x - postWrap.start.x;
+      const segDy = postWrap.end.y - postWrap.start.y;
+      anchorX = postWrap.start.x + segDx * 0.5;
+      anchorY = postWrap.start.y + segDy * 0.5;
+    } else {
+      let halfDistance = path.totalWorldDistance / 2;
+      for (const segment of path.segments) {
+        const segDx = segment.end.x - segment.start.x;
+        const segDy = segment.end.y - segment.start.y;
+        const segLength = Math.hypot(segDx, segDy);
+        if (segLength >= halfDistance) {
+          const t = segLength > 0 ? halfDistance / segLength : 0;
+          anchorX = segment.start.x + segDx * t;
+          anchorY = segment.start.y + segDy * t;
+          break;
+        }
+        halfDistance -= segLength;
       }
-      halfDistance -= segLength;
     }
   }
 
@@ -1171,8 +1369,9 @@ function updateReverseCostDisplay(edge) {
   const targetNode = nodes.get(edge.target);
   if (!sourceNode || !targetNode) return;
 
-  const midX = (sourceNode.x + targetNode.x) / 2;
-  const midY = (sourceNode.y + targetNode.y) / 2;
+  const midPoint = getEdgeMidpointWorld(edge);
+  const midX = midPoint ? midPoint.x : (sourceNode.x + targetNode.x) / 2;
+  const midY = midPoint ? midPoint.y : (sourceNode.y + targetNode.y) / 2;
   const [sx, sy] = worldToScreen(midX, midY);
   
   // Store the position for later use in cost indicator animation
@@ -2072,11 +2271,7 @@ function clearBridgeSelection() {
     }
     const anySpinning = updateReverseSpinAnimations();
     
-    // Check if hovering over a poppable node (for burst animation)
-    const hoveringPoppable = hoveredNodeId !== null && gameMode === 'pop' && phase === 'playing' && 
-                             (() => { const n = nodes.get(hoveredNodeId); return n && isNodePopReady(n); })();
-    
-    if (hasFlowingEdges || anySpinning || moneyIndicators.length > 0 || (persistentTargeting && currentTargetNodeId !== null) || hoveringPoppable) {
+    if (hasFlowingEdges || anySpinning || moneyIndicators.length > 0 || (persistentTargeting && currentTargetNodeId !== null)) {
       redrawStatic();
     }
   }
@@ -2087,9 +2282,12 @@ function clearBridgeSelection() {
     const s = nodes.get(edge.source);
     const t = nodes.get(edge.target);
     if (!s || !t) return;
-    const [sx0, sy0] = worldToScreen(s.x, s.y);
-    const [tx0, ty0] = worldToScreen(t.x, t.y);
-    const len = Math.max(1, Math.hypot(tx0 - sx0, ty0 - sy0));
+    const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
+    const fromR = Math.max(1, calculateNodeRadius(s, baseScale)) + 1;
+    const toR = Math.max(1, calculateNodeRadius(t, baseScale)) + 1;
+    const path = buildEdgeScreenPath(edge, s, t, fromR, toR);
+    const len = path.reduce((sum, seg) => sum + seg.length, 0);
+    if (len <= 0) return;
     const triH = 16;
     const triCount = Math.max(1, Math.floor(len / triH));
     edge._spin = {
@@ -2156,9 +2354,7 @@ function clearBridgeSelection() {
       else if (msg.type === 'bridgeError') handleBridgeError(msg);
       else if (msg.type === 'reverseEdgeError') handleReverseEdgeError(msg);
       else if (msg.type === 'nodeDestroyed') handleNodeDestroyed(msg);
-      else if (msg.type === 'nodePopped') handleNodePopped(msg);
       else if (msg.type === 'destroyError') handleDestroyError(msg);
-      else if (msg.type === 'popError') handlePopError(msg);
       else if (msg.type === 'nodeCaptured') handleNodeCaptured(msg);
       else if (msg.type === 'lobbyTimeout') handleLobbyTimeout();
       else if (msg.type === 'postgame') handlePostgame(msg);
@@ -2252,17 +2448,7 @@ function clearBridgeSelection() {
     });
     nodeJuiceTexts.clear();
 
-    popReadyLabels.forEach(label => {
-      if (label) label.destroy();
-    });
-    popReadyLabels.clear();
-
     gameMode = normalizeMode(msg.mode || 'basic');
-    if (msg.settings && Number.isFinite(msg.settings.popReward)) {
-      popReward = Number(msg.settings.popReward);
-    } else {
-      popReward = 10;
-    }
 
     // Clear any lingering edge flow labels between games
     edgeFlowTexts.forEach(text => {
@@ -2282,10 +2468,11 @@ function clearBridgeSelection() {
       }
     }
 
+    const edgeWarpMap = msg.edgeWarp || {};
     if (Array.isArray(msg.edges)) {
       for (const arr of msg.edges) {
         const [id, s, t, _forward, _always1, buildReq = 0, buildElap = 0, building = 0] = arr;
-        edges.set(id, {
+        const record = {
           source: s,
           target: t,
           on: false,
@@ -2298,7 +2485,12 @@ function clearBridgeSelection() {
           builtByMe: false,
           hammerAccumSec: 0,
           hammerHitIndex: 0,
-        });
+          warpAxis: 'none',
+          warpSegments: [],
+        };
+        const warpPayload = edgeWarpMap[id] ?? edgeWarpMap[String(id)];
+        applyEdgeWarpData(record, warpPayload, nodes.get(s), nodes.get(t));
+        edges.set(id, record);
       }
     }
 
@@ -2684,10 +2876,6 @@ function clearBridgeSelection() {
     if (typeof msg.mode === 'string') {
       gameMode = normalizeMode(msg.mode);
     }
-    if (Number.isFinite(msg.popReward)) {
-      popReward = Number(msg.popReward);
-    }
-
     if (Array.isArray(msg.nodes)) {
       msg.nodes.forEach(([id, size, owner]) => {
         const node = nodes.get(id);
@@ -2841,7 +3029,7 @@ function clearBridgeSelection() {
     // Add new edge to the frontend map
     if (msg.edge) {
       const edge = msg.edge;
-      edges.set(edge.id, {
+      const record = {
         source: edge.source,
         target: edge.target,
         on: edge.on,
@@ -2853,8 +3041,12 @@ function clearBridgeSelection() {
         buildStartTime: animationTime,
         hammerAccumSec: 0,
         hammerHitIndex: 0,
-        builtByMe: !!msg.cost, // server only includes cost for the actor
-      });
+        builtByMe: !!msg.cost,
+        warpAxis: 'none',
+        warpSegments: [],
+      };
+      applyEdgeWarpData(record, edge.warp ?? edge, nodes.get(edge.source), nodes.get(edge.target));
+      edges.set(edge.id, record);
       
       // Show cost indicator for bridge building
       if (activeAbility === 'bridge1way' && msg.cost) {
@@ -2862,8 +3054,9 @@ function clearBridgeSelection() {
         const sourceNode = nodes.get(edge.source);
         const targetNode = nodes.get(edge.target);
         if (sourceNode && targetNode) {
-          const midX = (sourceNode.x + targetNode.x) / 2;
-          const midY = (sourceNode.y + targetNode.y) / 2;
+          const midPoint = getEdgeMidpointWorld(record);
+          const midX = midPoint ? midPoint.x : (sourceNode.x + targetNode.x) / 2;
+          const midY = midPoint ? midPoint.y : (sourceNode.y + targetNode.y) / 2;
           const [screenX, screenY] = worldToScreen(midX, midY);
           
           createMoneyIndicator(
@@ -2902,6 +3095,7 @@ function clearBridgeSelection() {
         const wasFlowing = existingEdge.flowing;
         existingEdge.on = edge.on;
         existingEdge.flowing = edge.flowing;
+        applyEdgeWarpData(existingEdge, edge.warp ?? edge, nodes.get(existingEdge.source), nodes.get(existingEdge.target));
         
         // Track flow start time for initialization animation
         if (!wasFlowing && existingEdge.flowing) {
@@ -2990,11 +3184,6 @@ function clearBridgeSelection() {
       juiceText.destroy();
       nodeJuiceTexts.delete(nodeId);
     }
-    const popLabel = popReadyLabels.get(nodeId);
-    if (popLabel) {
-      popLabel.destroy();
-      popReadyLabels.delete(nodeId);
-    }
   }
 
   function removeEdges(edgeIds) {
@@ -3018,55 +3207,6 @@ function clearBridgeSelection() {
       }
     });
     removeEdges(edgeIds);
-  }
-
-  function spawnPopBurst(nodeSnapshot) {
-    if (!sceneRef || !nodeSnapshot) return;
-    const [sx, sy] = worldToScreen(nodeSnapshot.x, nodeSnapshot.y);
-
-    const inner = sceneRef.add.circle(sx, sy, 6, 0xfff4aa, 0.55)
-      .setOrigin(0.5, 0.5)
-      .setDepth(1250);
-    const ring = sceneRef.add.circle(sx, sy, 10)
-      .setStrokeStyle(3, 0xffd36f, 0.95)
-      .setFillStyle(0xffd36f, 0)
-      .setDepth(1249);
-
-    sceneRef.tweens.add({
-      targets: inner,
-      scale: { from: 0.4, to: 1.7 },
-      alpha: { from: 0.65, to: 0 },
-      duration: 220,
-      ease: 'Cubic.easeOut',
-      onComplete: () => inner.destroy(),
-    });
-
-    sceneRef.tweens.add({
-      targets: ring,
-      scale: { from: 0.6, to: 2.4 },
-      alpha: { from: 0.9, to: 0 },
-      duration: 260,
-      ease: 'Cubic.easeOut',
-      onComplete: () => ring.destroy(),
-    });
-  }
-
-  function isNodePopReady(node) {
-    if (!node) return false;
-    if (gameMode !== 'pop') return false;
-    if (node.owner !== myPlayerId) return false;
-    const size = Number(node.size ?? 0);
-    return size >= (nodeMaxJuice - POP_READY_TOLERANCE);
-  }
-
-  function attemptPopNode(nodeId) {
-    const node = nodes.get(nodeId);
-    if (!isNodePopReady(node)) return false;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
-    if (phase !== 'playing') return false;
-    const token = localStorage.getItem('token');
-    ws.send(JSON.stringify({ type: 'popNode', nodeId, token }));
-    return true;
   }
 
   function handleNodeDestroyed(msg) {
@@ -3110,52 +3250,9 @@ function clearBridgeSelection() {
     }
   }
 
-  function handleNodePopped(msg) {
-    const nodeId = Number(msg.nodeId);
-    if (!Number.isFinite(nodeId)) return;
-
-    const nodeSnapshot = msg.nodeSnapshot || nodes.get(nodeId);
-
-    if (nodes.has(nodeId)) {
-      nodes.delete(nodeId);
-    }
-    cleanupNodeVisuals(nodeId);
-
-    if (Array.isArray(msg.removedEdges)) {
-      removeEdges(msg.removedEdges.map(Number));
-    } else {
-      fallbackRemoveEdgesForNode(nodeId);
-    }
-
-    if (msg.playerId === myPlayerId && Number.isFinite(msg.reward) && msg.reward > 0 && nodeSnapshot) {
-      const scale = view ? Math.min(view.scaleX, view.scaleY) : 1;
-      const radiusPx = calculateNodeRadius(nodeSnapshot, scale || 1);
-      const radiusWorld = (scale && scale > 0) ? radiusPx / scale : 0;
-      const worldOffset = persistentNumbers ? -(radiusWorld + 0.6) : 0;
-      createMoneyIndicator(
-        nodeSnapshot.x,
-        nodeSnapshot.y,
-        `+$${formatCost(msg.reward)}`,
-        0xffd700,
-        2000,
-        { worldOffset, floatDistance: 28 }
-      );
-      playCaptureDing();
-    }
-
-    spawnPopBurst(nodeSnapshot);
-    playPopBurst();
-
-    redrawStatic();
-  }
-
   function handleDestroyError(msg) {
     // Show error message to the player
     showErrorMessage(msg.message || "Can't destroy this node!");
-  }
-
-  function handlePopError(msg) {
-    showErrorMessage(msg.message || 'Cannot pop this node right now');
   }
 
   function handleNodeCaptured(msg) {
@@ -3262,9 +3359,6 @@ function clearBridgeSelection() {
       // Hide toggles grid when menu is visible
       const togglesGrid = document.getElementById('inGameToggles');
       if (togglesGrid) togglesGrid.style.display = 'none';
-      popReadyLabels.forEach(label => {
-        if (label) label.setVisible(false);
-      });
       // Hide UI bars when menu is visible
       if (topUiBar) topUiBar.style.display = 'none';
       if (bottomUiBar) bottomUiBar.style.display = 'none';
@@ -3301,8 +3395,9 @@ function clearBridgeSelection() {
       drawEdge(e, s, t, id);
 
       // Edge flow labels at midpoint
-      const midX = (s.x + t.x) / 2;
-      const midY = (s.y + t.y) / 2;
+      const midPoint = getEdgeMidpointWorld(e);
+      const midX = midPoint ? midPoint.x : (s.x + t.x) / 2;
+      const midY = midPoint ? midPoint.y : (s.y + t.y) / 2;
       const [sx, sy] = worldToScreen(midX, midY);
       let textObj = edgeFlowTexts.get(id);
       if (persistentEdgeFlow && (e.lastTransfer || 0) > 0) {
@@ -3385,82 +3480,6 @@ function clearBridgeSelection() {
       if (juiceVal >= nodeMaxJuice - 1e-6) {
         graphicsNodes.lineStyle(4, 0x000000, 1);
         graphicsNodes.strokeCircle(nx, ny, r + 2);
-      }
-
-      if (gameMode === 'pop' && isNodePopReady(n) && phase === 'playing') {
-        const highlightRadius = Math.max(1, r);
-        
-        // When hovering and in bridge building mode (right-click), show normal highlights
-        const inBridgeMode = activeAbility === 'bridge1way';
-        const isHovering = hoveredNodeId === id;
-        
-        if (isHovering && !inBridgeMode) {
-          // "Ready to burst" effect: make bubble look more volatile
-          // Add a pulsing outer glow
-          const pulseTime = Date.now() / 300;
-          const pulseAlpha = 0.3 + Math.sin(pulseTime) * 0.15;
-          const pulseSize = highlightRadius + 2 + Math.sin(pulseTime * 1.5) * 1.5;
-          
-          graphicsNodes.fillStyle(0xffd700, pulseAlpha);
-          graphicsNodes.fillCircle(nx, ny, pulseSize);
-          
-          // Add unstable "wobble" highlights around the edge
-          for (let i = 0; i < 8; i++) {
-            const angle = (i / 8) * Math.PI * 2 + pulseTime * 0.5;
-            const offsetDist = highlightRadius * 0.8;
-            const wobbleX = nx + Math.cos(angle) * offsetDist;
-            const wobbleY = ny + Math.sin(angle) * offsetDist;
-            const wobbleSize = highlightRadius * 0.15;
-            graphicsNodes.fillStyle(0xffffff, 0.4 + Math.sin(pulseTime + i) * 0.2);
-            graphicsNodes.fillCircle(wobbleX, wobbleY, wobbleSize);
-          }
-        } else {
-          // Normal bubble sheen effect (not hovering or in bridge mode)
-          graphicsNodes.fillStyle(0xffffff, 0.16);
-          graphicsNodes.fillCircle(nx, ny, highlightRadius);
-
-          const sheenRadius = highlightRadius * 0.75;
-          graphicsNodes.fillStyle(0xffffff, 0.35);
-          graphicsNodes.fillCircle(nx, ny - highlightRadius * 0.35, sheenRadius);
-
-          graphicsNodes.fillStyle(0xffffff, 0.18);
-          graphicsNodes.fillCircle(nx + highlightRadius * 0.25, ny - highlightRadius * 0.2, highlightRadius * 0.28);
-        }
-
-        // Show dollar amount INSIDE the node
-        const labelText = `$${formatCost(popReward)}`;
-        let hint = popReadyLabels.get(id);
-        // Position text at the center of the node
-        const hintY = ny;
-        if (!hint) {
-          hint = sceneRef.add.text(nx, hintY, labelText, {
-            font: '14px monospace',
-            color: '#ffd700',
-            stroke: '#000000',
-            strokeThickness: 3,
-            align: 'center',
-          });
-          hint.setOrigin(0.5, 0.5);
-          hint.setDepth(1200);
-          popReadyLabels.set(id, hint);
-        } else {
-          if (hint.text !== labelText) hint.setText(labelText);
-          hint.setColor('#ffd700');
-          hint.setStroke('#000000', 3);
-          hint.setPosition(nx, hintY);
-        }
-        if (hint && !hint.visible) hint.setVisible(true);
-
-        // Only show ring highlight when in bridge building mode (right-click)
-        if (isHovering && inBridgeMode) {
-          graphicsNodes.lineStyle(4, 0xffeb8a, 0.95);
-          graphicsNodes.strokeCircle(nx, ny, highlightRadius + 6);
-          graphicsNodes.lineStyle(2, 0xffc04d, 0.9);
-          graphicsNodes.strokeCircle(nx, ny, highlightRadius + 11);
-        }
-      } else {
-        const hint = popReadyLabels.get(id);
-        if (hint && hint.visible) hint.setVisible(false);
       }
 
       // Hover effect: player's color border when eligible for starting node pick
@@ -3635,7 +3654,7 @@ function clearBridgeSelection() {
       }
     }
 
-    const warpViewActive = (gameMode === 'pop' || selectedMode === 'pop');
+    const warpViewActive = (gameMode === 'warp' || selectedMode === 'warp');
     if (warpViewActive) {
       const padX = (Math.max(1, maxX - minX)) * WARP_MARGIN_RATIO_X;
       const padY = (Math.max(1, maxY - minY)) * WARP_MARGIN_RATIO_Y;
@@ -3704,7 +3723,7 @@ function clearBridgeSelection() {
     }
 
     // Compute & draw warp border (purple) when active
-    if (gameMode === 'pop' || selectedMode === 'pop') {
+    if (gameMode === 'warp' || selectedMode === 'warp') {
       const marginX = boardWidth * WARP_MARGIN_RATIO_X;
       const marginY = boardHeight * WARP_MARGIN_RATIO_Y;
       const warpMinX = minX - marginX;
@@ -4150,7 +4169,7 @@ function clearBridgeSelection() {
     if (gameEnded) return;
     const menuVisible = !document.getElementById('menu')?.classList.contains('hidden');
     if (menuVisible) return;
-    if (gameMode !== 'pop' && selectedMode !== 'pop') return;
+    if (gameMode !== 'warp' && selectedMode !== 'warp') return;
     const canvas = getGameCanvas();
     if (!canvas || typeof canvas.requestPointerLock !== 'function') return;
     if (document.pointerLockElement === canvas) return;
@@ -4279,11 +4298,13 @@ function clearBridgeSelection() {
           if (goldValue >= cost && ws && ws.readyState === WebSocket.OPEN) {
             
             const token = localStorage.getItem('token');
+            const warpInfo = buildWarpInfoForBridge(firstNode, node);
             ws.send(JSON.stringify({
               type: 'buildBridge',
               fromNodeId: bridgeFirstNode,
               toNodeId: nodeId,
               cost: cost,
+              warpInfo,
               token: token
             }));
             // Don't reset bridge building state here - wait for server response
@@ -4375,10 +4396,6 @@ function clearBridgeSelection() {
       const token = localStorage.getItem('token');
       ws.send(JSON.stringify({ type: 'clickNode', nodeId: nodeId, token }));
       return; // Return after handling starting node pick
-    }
-
-    if (nodeId != null && attemptPopNode(nodeId)) {
-      return;
     }
 
     // Handle all other clicks (node flow targeting, edge clicks, etc.)
@@ -5031,13 +5048,14 @@ function clearBridgeSelection() {
     let bestId = null;
     let bestD2 = maxD2;
     for (const [id, e] of edges.entries()) {
-      const a = nodes.get(e.source);
-      const b = nodes.get(e.target);
-      if (!a || !b) continue;
-      const d2 = pointToSegmentDistanceSquared(wx, wy, a.x, a.y, b.x, b.y);
-      if (d2 <= bestD2) {
-        bestId = id;
-        bestD2 = d2;
+      const segments = getEdgeWarpSegments(e);
+      if (!segments.length) continue;
+      for (const seg of segments) {
+        const d2 = pointToSegmentDistanceSquared(wx, wy, seg.sx, seg.sy, seg.ex, seg.ey);
+        if (d2 <= bestD2) {
+          bestId = id;
+          bestD2 = d2;
+        }
       }
     }
     return bestId;
@@ -5145,33 +5163,17 @@ function clearBridgeSelection() {
     const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
     const fromR = Math.max(1, calculateNodeRadius(from, baseScale)) + 1;
     const toR = Math.max(1, calculateNodeRadius(to, baseScale)) + 1;
-    const [sx0, sy0] = worldToScreen(from.x, from.y);
-    const [tx0, ty0] = worldToScreen(to.x, to.y);
-    const dx0 = tx0 - sx0;
-    const dy0 = ty0 - sy0;
-    const len0 = Math.max(1, Math.hypot(dx0, dy0));
-    const ux0 = dx0 / len0;
-    const uy0 = dy0 / len0;
-    const sx = sx0 + ux0 * fromR;
-    const sy = sy0 + uy0 * fromR;
-    const tx = tx0 - ux0 * toR;
-    const ty = ty0 - uy0 * toR;
+    const screenPath = buildEdgeScreenPath(e, from, to, fromR, toR);
+    if (!screenPath.length) return;
 
-    const dx = tx - sx;
-    const dy = ty - sy;
-    const len = Math.max(1, Math.hypot(dx, dy));
-    const ux = dx / len;
-    const uy = dy / len;
-    const angle = Math.atan2(uy, ux);
+    const totalLength = screenPath.reduce((sum, seg) => sum + seg.length, 0);
+    if (totalLength <= 0) return;
 
-    // All edges are now one-way: chain of triangles pointing from source to target
+    // All edges are single direction: chain of triangles along the path
     const triH = 16;
     const triW = 12;
-    const packedSpacing = triH; // packed: tip touches base of next
-    const packedCount = Math.max(1, Math.floor(len / packedSpacing));
-    
-    // Calculate actual spacing to ensure last triangle tip touches node edge
-    const actualSpacing = len / packedCount;
+    const packedCount = Math.max(1, Math.floor(totalLength / triH));
+    const actualSpacing = totalLength / packedCount;
     
     const canLeftClick = (from && from.owner === myPlayerId) && !e.building;
     const canReverse = canReverseEdge(e);
@@ -5188,15 +5190,28 @@ function clearBridgeSelection() {
         hoverAllowed = true;
       }
     }
+    const buildingProgress = e.building
+      ? Math.max(0, Math.min(1, (e.buildTicksElapsed || 0) / Math.max(1, e.buildTicksRequired || 1)))
+      : 1;
+    const trianglesToDraw = e.building
+      ? Math.max(1, Math.floor(packedCount * buildingProgress))
+      : packedCount;
 
-    // If edge is building: show progressive triangle addition animation from source to target
-    const buildingProgress = e.building ? Math.max(0, Math.min(1, (e.buildTicksElapsed || 0) / Math.max(1, e.buildTicksRequired || 1))) : 1;
-    const visibleTriangles = Math.max(1, Math.floor(packedCount * buildingProgress));
-
-    for (let i = 0; i < (e.building ? visibleTriangles : packedCount); i++) {
-      const cx = sx + (i + 0.5) * actualSpacing * ux;
-      const cy = sy + (i + 0.5) * actualSpacing * uy;
-      drawTriangle(cx, cy, triW, triH, angle, e, from, hoverColor, hoverAllowed, i, packedCount);
+    for (let i = 0; i < trianglesToDraw; i++) {
+      const targetDistance = (i + 0.5) * actualSpacing;
+      let remaining = targetDistance;
+      let segment = screenPath[0];
+      for (let s = 0; s < screenPath.length; s++) {
+        const seg = screenPath[s];
+        if (remaining <= seg.length || s === screenPath.length - 1) {
+          segment = seg;
+          break;
+        }
+        remaining -= seg.length;
+      }
+      const cx = segment.sx + segment.ux * remaining;
+      const cy = segment.sy + segment.uy * remaining;
+      drawTriangle(cx, cy, triW, triH, segment.angle, e, from, hoverColor, hoverAllowed, i, packedCount);
     }
   }
 

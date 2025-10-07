@@ -11,7 +11,6 @@ from .constants import (
     PASSIVE_GOLD_PER_SECOND,
     PASSIVE_GOLD_PER_TICK,
     PASSIVE_INCOME_ENABLED,
-    POP_NODE_REWARD,
     PRODUCTION_RATE_PER_NODE,
     STARTING_GOLD,
     get_neutral_capture_reward,
@@ -95,6 +94,11 @@ class GameReplayRecorder:
                     "buildTicksRequired": int(getattr(edge, "build_ticks_required", 0)),
                     "buildTicksElapsed": int(getattr(edge, "build_ticks_elapsed", 0)),
                     "building": bool(getattr(edge, "building", False)),
+                    "warpAxis": getattr(edge, "warp_axis", "none"),
+                    "warpSegments": [
+                        [sx, sy, ex, ey]
+                        for sx, sy, ex, ey in (getattr(edge, "warp_segments", []) or [])
+                    ],
                 }
             )
 
@@ -162,7 +166,6 @@ class GameReplayRecorder:
             "GOLD_REWARD_FOR_NEUTRAL_CAPTURE": current_reward,
             "GOLD_REWARD_FOR_NEUTRAL_CAPTURE_BY_MODE": GOLD_REWARD_FOR_NEUTRAL_CAPTURE_BY_MODE,
             "GOLD_REWARD_FOR_ENEMY_CAPTURE": GOLD_REWARD_FOR_ENEMY_CAPTURE,
-            "POP_NODE_REWARD": POP_NODE_REWARD,
         }
 
         starting_nodes_payload = [

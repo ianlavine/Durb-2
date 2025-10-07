@@ -7,7 +7,7 @@ exposing simple controls for ticking and lifecycle.
 from typing import Optional, Tuple
 
 from .game_engine import GameEngine
-from .bots import Bot2, BotPop1
+from .bots import Bot2
 from .constants import DEFAULT_GAME_MODE, normalize_game_mode
 
 
@@ -37,10 +37,7 @@ class BotGameManager:
             mode = normalize_game_mode(mode)
 
             # Create bot player with specified difficulty
-            if mode == "pop":
-                self.bot_player = BotPop1(player_id=2, color="#3388ff", difficulty=difficulty)
-            else:
-                self.bot_player = Bot2(player_id=2, color="#3388ff", difficulty=difficulty)
+            self.bot_player = Bot2(player_id=2, color="#3388ff", difficulty=difficulty)
             self.human_token = human_token
 
             from .message_handlers import PLAYER_COLOR_SCHEMES  # avoid circular import at top level
@@ -97,6 +94,10 @@ class BotGameManager:
                 if pre_edges is None or eid not in pre_edges:
                     e = state.edges.get(eid)
                     if e:
+                        warp_payload = {
+                            "axis": e.warp_axis,
+                            "segments": [[sx, sy, ex, ey] for sx, sy, ex, ey in (e.warp_segments or [])],
+                        }
                         self.last_client_event = {
                             "type": "newEdge",
                             "edge": {
@@ -110,6 +111,9 @@ class BotGameManager:
                                 "building": bool(getattr(e, 'building', False)),
                                 "buildTicksRequired": int(getattr(e, 'build_ticks_required', 0)),
                                 "buildTicksElapsed": int(getattr(e, 'build_ticks_elapsed', 0)),
+                                "warp": warp_payload,
+                                "warpAxis": warp_payload["axis"],
+                                "warpSegments": warp_payload["segments"],
                             },
                         }
                         break
@@ -127,6 +131,10 @@ class BotGameManager:
                     # True reversal when source/target swap places
                     reversed_dir = (after_src == before_tgt and after_tgt == before_src)
                     if reversed_dir:
+                        warp_payload = {
+                            "axis": e.warp_axis,
+                            "segments": [[sx, sy, ex, ey] for sx, sy, ex, ey in (e.warp_segments or [])],
+                        }
                         self.last_client_event = {
                             "type": "edgeReversed",
                             "edge": {
@@ -137,6 +145,9 @@ class BotGameManager:
                                 "forward": True,
                                 "on": e.on,
                                 "flowing": e.flowing,
+                                "warp": warp_payload,
+                                "warpAxis": warp_payload["axis"],
+                                "warpSegments": warp_payload["segments"],
                             },
                         }
                         break

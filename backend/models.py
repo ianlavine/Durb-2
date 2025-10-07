@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from .constants import UNOWNED_NODE_BASE_JUICE
 
@@ -38,3 +38,5 @@ class Edge:
     build_ticks_required: int = 0  # number of ticks required before edge can turn on
     build_ticks_elapsed: int = 0  # ticks that have elapsed since creation
     building: bool = False  # if True, edge cannot be toggled/clicked and will not flow
+    warp_axis: str = "none"
+    warp_segments: List[Tuple[float, float, float, float]] = field(default_factory=list)

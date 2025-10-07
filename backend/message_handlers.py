@@ -52,7 +52,6 @@ class MessageRouter:
             "redirectEnergy": self.handle_redirect_energy,
             "localTargeting": self.handle_local_targeting,
             "destroyNode": self.handle_destroy_node,
-            "popNode": self.handle_pop_node,
             "quitGame": self.handle_quit_game,
             "toggleAutoExpand": self.handle_toggle_auto_expand,
             "newGame": self.handle_new_game,
@@ -391,6 +390,12 @@ class MessageRouter:
                         "forward": True,
                         "on": edge.on,
                         "flowing": edge.flowing,
+                        "warp": {
+                            "axis": edge.warp_axis,
+                            "segments": [[sx, sy, ex, ey] for sx, sy, ex, ey in (edge.warp_segments or [])],
+                        },
+                        "warpAxis": edge.warp_axis,
+                        "warpSegments": [[sx, sy, ex, ey] for sx, sy, ex, ey in (edge.warp_segments or [])],
                     }
                 }
                 
@@ -413,6 +418,11 @@ class MessageRouter:
         if edge_after:
             payload["source"] = edge_after.source_node_id
             payload["target"] = edge_after.target_node_id
+            payload["warpAxis"] = edge_after.warp_axis
+            payload["warpSegments"] = [
+                [sx, sy, ex, ey]
+                for sx, sy, ex, ey in (edge_after.warp_segments or [])
+            ]
         self._record_game_event(game_info, token, "reverseEdge", payload)
 
     async def handle_build_bridge(
@@ -425,6 +435,7 @@ class MessageRouter:
         from_node_id = msg.get("fromNodeId")
         to_node_id = msg.get("toNodeId")
         cost = float(msg.get("cost", 0))
+        warp_info = msg.get("warpInfo")
         if token is None or from_node_id is None or to_node_id is None:
             return
 
@@ -434,7 +445,7 @@ class MessageRouter:
 
         engine = game_info["engine"]
         success, new_edge, actual_cost, error_msg = engine.handle_build_bridge(
-            token, int(from_node_id), int(to_node_id), cost
+            token, int(from_node_id), int(to_node_id), cost, warp_info=warp_info
         )
 
         if not success:
@@ -446,6 +457,11 @@ class MessageRouter:
 
         if new_edge:
             # Send edge state update to all players (without cost)
+            warp_payload = {
+                "axis": new_edge.warp_axis,
+                "segments": [[sx, sy, ex, ey] for sx, sy, ex, ey in (new_edge.warp_segments or [])],
+            }
+
             edge_update_message = {
                 "type": "newEdge",
                 "edge": {
@@ -454,12 +470,15 @@ class MessageRouter:
                     "target": new_edge.target_node_id,
                     "bidirectional": False,
                     "forward": True,
-                        "on": new_edge.on,
-                        "flowing": new_edge.flowing,
-                        "building": bool(getattr(new_edge, 'building', False)),
-                        "buildTicksRequired": int(getattr(new_edge, 'build_ticks_required', 0)),
-                        "buildTicksElapsed": int(getattr(new_edge, 'build_ticks_elapsed', 0)),
-                }
+                    "on": new_edge.on,
+                    "flowing": new_edge.flowing,
+                    "building": bool(getattr(new_edge, 'building', False)),
+                    "buildTicksRequired": int(getattr(new_edge, 'build_ticks_required', 0)),
+                    "buildTicksElapsed": int(getattr(new_edge, 'build_ticks_elapsed', 0)),
+                    "warp": warp_payload,
+                    "warpAxis": warp_payload["axis"],
+                    "warpSegments": warp_payload["segments"],
+                },
             }
             
             # Send to all players, but include cost only for the acting player
@@ -481,6 +500,11 @@ class MessageRouter:
         }
         if new_edge:
             event_payload["edgeId"] = new_edge.id
+            event_payload["warpAxis"] = new_edge.warp_axis
+            event_payload["warpSegments"] = [
+                [sx, sy, ex, ey]
+                for sx, sy, ex, ey in (new_edge.warp_segments or [])
+            ]
         self._record_game_event(game_info, token, "buildBridge", event_payload)
 
     async def handle_redirect_energy(
@@ -623,56 +647,6 @@ class MessageRouter:
                 "nodeId": int(node_id),
                 "removedEdges": removal_info.get("removedEdges", []) if removal_info else [],
                 "cost": cost,
-            },
-        )
-
-    async def handle_pop_node(
-        self,
-        websocket: websockets.WebSocketServerProtocol,
-        msg: Dict[str, Any],
-        server_context: Dict[str, Any],
-    ) -> None:
-        token = msg.get("token")
-        node_id = msg.get("nodeId")
-        if token is None or node_id is None:
-            return
-
-        game_info = self._get_game_info(token, server_context)
-        if not game_info:
-            return
-
-        engine = game_info["engine"]
-        success, error_msg, removal_info = engine.handle_pop_node(token, int(node_id))
-        if not success:
-            await self._send_safe(
-                websocket,
-                json.dumps({"type": "popError", "message": error_msg or "Failed to pop node"}),
-            )
-            return
-
-        player_id = engine.get_player_id(token)
-        reward = removal_info.get("reward") if removal_info else None
-        removal_payload: Dict[str, Any] = {
-            "type": "nodePopped",
-            "nodeId": int(node_id),
-            "playerId": player_id,
-            "removedEdges": removal_info.get("removedEdges", []) if removal_info else [],
-        }
-        if reward is not None:
-            removal_payload["reward"] = reward
-        if removal_info and removal_info.get("node"):
-            removal_payload["nodeSnapshot"] = removal_info.get("node")
-
-        await self._broadcast_to_game(game_info, removal_payload)
-
-        self._record_game_event(
-            game_info,
-            token,
-            "popNode",
-            {
-                "nodeId": int(node_id),
-                "removedEdges": removal_info.get("removedEdges", []) if removal_info else [],
-                "reward": removal_info.get("reward") if removal_info else None,
             },
         )
 
@@ -964,29 +938,6 @@ class MessageRouter:
                     )
                 else:
                     await self._send_safe(websocket, json.dumps({"type": "nodeDestroyed", "nodeId": int(node_id)}))
-
-        elif msg_type == "popNode":
-            node_id = msg.get("nodeId")
-            if node_id is not None:
-                success, error_msg, removal_info = bot_game_engine.handle_pop_node(token, int(node_id))
-                if not success:
-                    await self._send_safe(
-                        websocket,
-                        json.dumps({"type": "popError", "message": error_msg or "Failed to pop node"}),
-                    )
-                else:
-                    player_id = bot_game_engine.get_player_id(token)
-                    payload = {
-                        "type": "nodePopped",
-                        "nodeId": int(node_id),
-                        "playerId": player_id,
-                        "removedEdges": removal_info.get("removedEdges", []) if removal_info else [],
-                    }
-                    if removal_info and removal_info.get("reward") is not None:
-                        payload["reward"] = removal_info.get("reward")
-                    if removal_info and removal_info.get("node"):
-                        payload["nodeSnapshot"] = removal_info.get("node")
-                    await self._send_safe(websocket, json.dumps(payload))
 
         elif msg_type == "quitGame":
             winner_id = bot_game_engine.handle_quit_game(token)
