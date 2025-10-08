@@ -4296,17 +4296,31 @@ function clearBridgeSelection() {
           const cost = calculateBridgeCost(firstNode, node);
           
           if (goldValue >= cost && ws && ws.readyState === WebSocket.OPEN) {
-            
+
             const token = localStorage.getItem('token');
             const warpInfo = buildWarpInfoForBridge(firstNode, node);
-            ws.send(JSON.stringify({
+            const warpInfoPayload = warpInfo ? {
+              axis: warpInfo.axis,
+              segments: Array.isArray(warpInfo.segments)
+                ? warpInfo.segments.map((segment) => [
+                    Number(segment[0]),
+                    Number(segment[1]),
+                    Number(segment[2]),
+                    Number(segment[3])
+                  ])
+                : []
+            } : null;
+
+            const buildBridgePayload = {
               type: 'buildBridge',
               fromNodeId: bridgeFirstNode,
               toNodeId: nodeId,
               cost: cost,
-              warpInfo,
+              warpInfo: warpInfoPayload,
               token: token
-            }));
+            };
+
+            ws.send(JSON.stringify(buildBridgePayload));
             // Don't reset bridge building state here - wait for server response
             return true; // Handled
           } else if (goldValue < cost) {

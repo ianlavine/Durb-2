@@ -891,9 +891,10 @@ class MessageRouter:
             from_node_id = msg.get("fromNodeId")
             to_node_id = msg.get("toNodeId")
             cost = float(msg.get("cost", 1.0))
+            warp_info = msg.get("warpInfo")
             if from_node_id is not None and to_node_id is not None:
                 success, new_edge, actual_cost, error_msg = bot_game_engine.handle_build_bridge(
-                    token, int(from_node_id), int(to_node_id), cost
+                    token, int(from_node_id), int(to_node_id), cost, warp_info=warp_info
                 )
                 if not success:
                     await self._send_safe(
@@ -901,6 +902,10 @@ class MessageRouter:
                         json.dumps({"type": "bridgeError", "message": error_msg or "Failed to build bridge"}),
                     )
                 elif new_edge:
+                    warp_payload = {
+                        "axis": new_edge.warp_axis,
+                        "segments": [[sx, sy, ex, ey] for sx, sy, ex, ey in (new_edge.warp_segments or [])],
+                    }
                     message = {
                         "type": "newEdge",
                         "edge": {
@@ -911,6 +916,9 @@ class MessageRouter:
                             "forward": True,
                             "on": new_edge.on,
                             "flowing": new_edge.flowing,
+                            "warp": warp_payload,
+                            "warpAxis": warp_payload["axis"],
+                            "warpSegments": warp_payload["segments"],
                         },
                         "cost": actual_cost,
                     }

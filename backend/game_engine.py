@@ -391,6 +391,125 @@ class GameEngine:
             "height": height + 2.0 * margin_y,
         }
 
+    def _parse_client_warp_info(
+        self,
+        warp_info: Dict[str, Any],
+        from_node: Node,
+        to_node: Node,
+    ) -> Tuple[str, List[Tuple[float, float, float, float]], float]:
+        if not isinstance(warp_info, dict):
+            raise GameValidationError("Invalid warp info payload")
+
+        axis_value = warp_info.get("axis")
+        if not isinstance(axis_value, str):
+            axis_value = warp_info.get("warpAxis")
+        if not isinstance(axis_value, str):
+            axis_value = warp_info.get("wrapAxis")
+
+        axis_value = (axis_value or "none").strip().lower()
+        if axis_value not in {"none", "horizontal", "vertical"}:
+            raise GameValidationError("Invalid warp axis")
+        axis = axis_value
+
+        if axis != "none" and not self._is_warp_mode_active():
+            raise GameValidationError("Warp bridges only allowed in warp mode")
+
+        segments_raw = warp_info.get("segments")
+        if segments_raw is None:
+            segments_raw = warp_info.get("warpSegments")
+        if segments_raw is None:
+            segments_raw = warp_info.get("warp_segments")
+        if segments_raw is None:
+            segments_raw = []
+
+        if not isinstance(segments_raw, list):
+            raise GameValidationError("Invalid warp segments")
+
+        segments: List[Tuple[float, float, float, float]] = []
+        for seg in segments_raw:
+            if isinstance(seg, (list, tuple)):
+                if len(seg) < 4:
+                    raise GameValidationError("Invalid warp segment format")
+                sx, sy, ex, ey = seg[0], seg[1], seg[2], seg[3]
+            elif isinstance(seg, dict):
+                if "start" in seg and "end" in seg:
+                    start = seg.get("start") or {}
+                    end = seg.get("end") or {}
+                    sx = start.get("x")
+                    sy = start.get("y")
+                    ex = end.get("x")
+                    ey = end.get("y")
+                else:
+                    sx = seg.get("sx")
+                    sy = seg.get("sy")
+                    ex = seg.get("ex")
+                    ey = seg.get("ey")
+            else:
+                raise GameValidationError("Invalid warp segment format")
+
+            try:
+                sx_f = float(sx)
+                sy_f = float(sy)
+                ex_f = float(ex)
+                ey_f = float(ey)
+            except (TypeError, ValueError):
+                raise GameValidationError("Invalid warp segment coordinates")
+
+            if not all(math.isfinite(val) for val in (sx_f, sy_f, ex_f, ey_f)):
+                raise GameValidationError("Invalid warp segment coordinates")
+
+            segments.append((sx_f, sy_f, ex_f, ey_f))
+
+        if not segments:
+            if axis != "none":
+                raise GameValidationError("Warp segments required for warped bridge")
+            segments = [(from_node.x, from_node.y, to_node.x, to_node.y)]
+
+        EPSILON = 1e-3
+
+        # Force exact connections to the declared endpoints so later validation never drifts
+        first_sx, first_sy, first_ex, first_ey = segments[0]
+        last_sx, last_sy, last_ex, last_ey = segments[-1]
+
+        if math.hypot(first_sx - from_node.x, first_sy - from_node.y) > EPSILON:
+            if axis == "none":
+                raise GameValidationError("Warp path must begin at source node")
+            segments[0] = (from_node.x, from_node.y, first_ex, first_ey)
+        else:
+            segments[0] = (from_node.x, from_node.y, first_ex, first_ey)
+
+        if math.hypot(last_ex - to_node.x, last_ey - to_node.y) > EPSILON:
+            if axis == "none":
+                raise GameValidationError("Warp path must end at target node")
+            segments[-1] = (last_sx, last_sy, to_node.x, to_node.y)
+        else:
+            segments[-1] = (last_sx, last_sy, to_node.x, to_node.y)
+
+        for idx in range(1, len(segments)):
+            prev = segments[idx - 1]
+            curr = segments[idx]
+            gap = math.hypot(prev[2] - curr[0], prev[3] - curr[1])
+            if axis == "none" and gap > EPSILON:
+                raise GameValidationError("Warp path segments must connect")
+            # For warped bridges we allow a discontinuity between exit and entry portals.
+            # We still enforce the final endpoint correction above.
+            if axis == "none" and gap > 0:
+                segments[idx] = (prev[2], prev[3], curr[2], curr[3])
+
+        if len(segments) > 2:
+            raise GameValidationError("No double warping")
+        if axis == "none" and len(segments) > 1:
+            raise GameValidationError("No double warping")
+
+        if axis != "none" and len(segments) != 2:
+            raise GameValidationError("Warp bridges must include entry and exit segments")
+
+        total_distance = 0.0
+        for sx, sy, ex, ey in segments:
+            total_distance += math.hypot(ex - sx, ey - sy)
+
+        return axis, segments, total_distance
+
     def _compute_warp_bridge_path(self, from_node: Node, to_node: Node) -> Dict[str, Any]:
         base_dx = to_node.x - from_node.x
         base_dy = to_node.y - from_node.y
@@ -490,6 +609,24 @@ class GameEngine:
             edge.warp_segments = []
             return
 
+        EPSILON = 1e-3
+
+        existing_segments = list(edge.warp_segments or [])
+        if existing_segments:
+            first = existing_segments[0]
+            last = existing_segments[-1]
+            if (
+                math.hypot(first[0] - from_node.x, first[1] - from_node.y) <= EPSILON
+                and math.hypot(last[2] - to_node.x, last[3] - to_node.y) <= EPSILON
+            ):
+                sanitized: List[Tuple[float, float, float, float]] = []
+                for sx, sy, ex, ey in existing_segments:
+                    sanitized.append((float(sx), float(sy), float(ex), float(ey)))
+                edge.warp_segments = sanitized
+                if edge.warp_axis not in {"none", "horizontal", "vertical"}:
+                    edge.warp_axis = "none"
+                return
+
         path = self._compute_warp_bridge_path(from_node, to_node)
         segments = path.get("segments") or []
         edge.warp_axis = path.get("warp_axis", "none") or "none"
@@ -506,12 +643,22 @@ class GameEngine:
         for edge in self.state.edges.values():
             self._apply_edge_warp_geometry(edge)
 
-    def calculate_bridge_cost(self, from_node: Node, to_node: Node) -> float:
+    def calculate_bridge_cost(
+        self,
+        from_node: Node,
+        to_node: Node,
+        segments_override: Optional[List[Tuple[float, float, float, float]]] = None,
+    ) -> float:
         """Calculate the gold cost for a bridge using normalized coordinates."""
         scale = self._normalization_scale()
-        path = self._compute_warp_bridge_path(from_node, to_node)
+        segments = segments_override
+        if segments is None:
+            path = self._compute_warp_bridge_path(from_node, to_node)
+            segments = path.get("segments", [])
+        if not segments:
+            segments = [(from_node.x, from_node.y, to_node.x, to_node.y)]
         normalized_distance = 0.0
-        for sx, sy, ex, ey in path.get("segments", []):
+        for sx, sy, ex, ey in segments:
             seg_dx = (ex - sx) * scale
             seg_dy = (ey - sy) * scale
             normalized_distance += math.hypot(seg_dx, seg_dy)
@@ -537,34 +684,48 @@ class GameEngine:
         try:
             self.validate_game_active()
             player_id = self.validate_player(token)
-            
+
             # Allow bridge building if player has picked starting node
             self.validate_player_can_act(player_id)
-            
+
             # Validate nodes
             from_node = self.validate_node_exists(from_node_id)
             to_node = self.validate_node_exists(to_node_id)
-            
+
             if from_node_id == to_node_id:
                 raise GameValidationError("Cannot connect node to itself")
-            
-            path_info = self._compute_warp_bridge_path(from_node, to_node)
-            candidate_segments = path_info.get("segments") or []
-            warp_axis = path_info.get("warp_axis", "none") or "none"
 
+            candidate_segments: List[Tuple[float, float, float, float]] = []
+            warp_axis = "none"
+            total_world_distance = 0.0
+
+            if warp_info:
+                warp_axis, candidate_segments, total_world_distance = self._parse_client_warp_info(
+                    warp_info, from_node, to_node
+                )
+            else:
+                path_info = self._compute_warp_bridge_path(from_node, to_node)
+                candidate_segments = path_info.get("segments") or []
+                warp_axis = path_info.get("warp_axis", "none") or "none"
+                total_world_distance = float(path_info.get("total_distance") or 0.0)
+
+            if not candidate_segments:
+                candidate_segments = [(from_node.x, from_node.y, to_node.x, to_node.y)]
             if warp_axis not in {"none", "horizontal", "vertical"}:
-                raise GameValidationError("No double warping")
+                raise GameValidationError("Invalid warp axis")
             if len(candidate_segments) > 2:
                 raise GameValidationError("No double warping")
+            if warp_axis != "none" and len(candidate_segments) != 2:
+                raise GameValidationError("Warp bridges must include entry and exit segments")
 
             # Calculate and validate gold using server-side formula
-            actual_cost = self.calculate_bridge_cost(from_node, to_node)
+            actual_cost = self.calculate_bridge_cost(from_node, to_node, segments_override=candidate_segments)
             self.validate_sufficient_gold(player_id, actual_cost)
-            
+
             # Check if edge already exists
             if self._edge_exists_between_nodes(from_node_id, to_node_id):
                 raise GameValidationError("Edge already exists between these nodes")
-            
+
             # Check for intersections
             if self._edges_would_intersect(from_node, to_node, candidate_segments):
                 raise GameValidationError("Bridge would intersect existing edge")
@@ -574,7 +735,12 @@ class GameEngine:
             
             new_edge_should_be_on = from_node.owner == player_id
 
-            total_world_distance = path_info.get("total_distance", math.hypot(to_node.x - from_node.x, to_node.y - from_node.y))
+            if total_world_distance <= 0.0:
+                total_world_distance = 0.0
+                for sx, sy, ex, ey in candidate_segments:
+                    total_world_distance += math.hypot(ex - sx, ey - sy)
+            if total_world_distance <= 0.0:
+                total_world_distance = math.hypot(to_node.x - from_node.x, to_node.y - from_node.y)
 
             new_edge = Edge(
                 id=new_edge_id,
@@ -594,9 +760,6 @@ class GameEngine:
             from_node.attached_edge_ids.append(new_edge_id)
             to_node.attached_edge_ids.append(new_edge_id)
 
-            # Ensure geometry is cached for future checks
-            self._apply_edge_warp_geometry(new_edge)
-            
             # Deduct gold using verified cost
             self.state.player_gold[player_id] = max(0.0, self.state.player_gold[player_id] - actual_cost)
 
@@ -611,13 +774,6 @@ class GameEngine:
                     f"[bridge] cost mismatch: client reported {client_reported_cost}, server calculated {actual_cost}"
                 )
 
-            if warp_info:
-                client_axis = warp_info.get("axis") or warp_info.get("wrapAxis")
-                if client_axis and client_axis != warp_axis:
-                    print(
-                        f"[bridge] warp axis mismatch: client {client_axis}, server {warp_axis}"
-                    )
-            
             return True, new_edge, actual_cost, None
             
         except GameValidationError as e:
