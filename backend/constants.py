@@ -15,7 +15,7 @@ MAX_FRIEND_PLAYERS = 4
 TICK_INTERVAL_SECONDS: float = 0.1
 
 # Game modes
-GAME_MODES: Tuple[str, ...] = ("basic", "warp")
+GAME_MODES: Tuple[str, ...] = ("basic", "warp", "sparse")
 DEFAULT_GAME_MODE: str = GAME_MODES[0]
 
 
@@ -32,6 +32,7 @@ RESERVE_TRANSFER_RATIO: float = 0.007
 GOLD_REWARD_FOR_NEUTRAL_CAPTURE_BY_MODE: Dict[str, float] = {
     "basic": 10.0,
     "warp": 10.0,
+    "sparse": 10.0,
 }
 GOLD_REWARD_FOR_NEUTRAL_CAPTURE: float = GOLD_REWARD_FOR_NEUTRAL_CAPTURE_BY_MODE[DEFAULT_GAME_MODE]
 GOLD_REWARD_FOR_ENEMY_CAPTURE: float = 0.0
@@ -47,7 +48,12 @@ UNOWNED_NODE_BASE_JUICE: float = 50.0
 
 # Bridge costs
 BRIDGE_BASE_COST: float = 0.0
-BRIDGE_COST_PER_UNIT_DISTANCE: float = 1.5
+BRIDGE_COST_PER_UNIT_DISTANCE_BY_MODE: Dict[str, float] = {
+    "basic": 1.5,
+    "warp": 1.5,
+    "sparse": 1.0,
+}
+BRIDGE_COST_PER_UNIT_DISTANCE: float = BRIDGE_COST_PER_UNIT_DISTANCE_BY_MODE[DEFAULT_GAME_MODE]
 
 # Warp geometry (mirror frontend)
 WARP_MARGIN_RATIO_X: float = 0.06
@@ -70,3 +76,9 @@ def get_neutral_capture_reward(mode: str) -> float:
     """Return the gold reward for capturing a neutral node for the given mode."""
     key = normalize_game_mode(mode)
     return GOLD_REWARD_FOR_NEUTRAL_CAPTURE_BY_MODE.get(key, GOLD_REWARD_FOR_NEUTRAL_CAPTURE)
+
+
+def get_bridge_cost_per_unit(mode: str) -> float:
+    """Return the bridge cost per unit distance for the given mode."""
+    key = normalize_game_mode(mode)
+    return BRIDGE_COST_PER_UNIT_DISTANCE_BY_MODE.get(key, BRIDGE_COST_PER_UNIT_DISTANCE)

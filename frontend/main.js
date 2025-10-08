@@ -133,10 +133,15 @@
   let currentTargetSetTime = null; // Animation time when target was last set
   
   let selectedPlayerCount = 2;
-  let selectedMode = 'basic';
-  let gameMode = 'basic';
+  let selectedMode = 'warp';
+  let gameMode = 'warp';
   let modeButtons = [];
-  const MODE_LABELS = { basic: 'Basic', warp: 'Warp' };
+  const MODE_LABELS = { basic: 'Basic', warp: 'Original', sparse: 'Sparse' };
+
+  function isWarpLike(mode) {
+    const normalized = normalizeMode(mode);
+    return normalized === 'warp' || normalized === 'sparse';
+  }
 
   // Money transparency system
   let moneyIndicators = []; // Array of {x, y, text, color, startTime, duration}
@@ -888,7 +893,7 @@
   }
 
   function isWarpFrontendActive() {
-    return (gameMode === 'warp' || selectedMode === 'warp') && warpBoundsWorld && Number.isFinite(warpBoundsWorld.width) && Number.isFinite(warpBoundsWorld.height);
+    return (isWarpLike(gameMode) || isWarpLike(selectedMode)) && warpBoundsWorld && Number.isFinite(warpBoundsWorld.width) && Number.isFinite(warpBoundsWorld.height);
   }
 
   function makeEndpoint(x, y, node = null, portalAxis = null) {
@@ -1271,7 +1276,7 @@
 
   function updatePlayBotAvailability(baseEnabled = true) {
     if (!playBotBtnEl) return;
-    const modeAllowsBot = selectedMode === 'basic' || selectedMode === 'warp';
+    const modeAllowsBot = selectedMode === 'basic' || isWarpLike(selectedMode);
     const enabled = Boolean(baseEnabled && modeAllowsBot);
     playBotBtnEl.disabled = !enabled;
     playBotBtnEl.title = modeAllowsBot ? '' : 'Bots are unavailable in this mode';
@@ -3654,7 +3659,7 @@ function clearBridgeSelection() {
       }
     }
 
-    const warpViewActive = (gameMode === 'warp' || selectedMode === 'warp');
+    const warpViewActive = (isWarpLike(gameMode) || isWarpLike(selectedMode));
     if (warpViewActive) {
       const padX = (Math.max(1, maxX - minX)) * WARP_MARGIN_RATIO_X;
       const padY = (Math.max(1, maxY - minY)) * WARP_MARGIN_RATIO_Y;
@@ -3723,7 +3728,7 @@ function clearBridgeSelection() {
     }
 
     // Compute & draw warp border (purple) when active
-    if (gameMode === 'warp' || selectedMode === 'warp') {
+    if (isWarpLike(gameMode) || isWarpLike(selectedMode)) {
       const marginX = boardWidth * WARP_MARGIN_RATIO_X;
       const marginY = boardHeight * WARP_MARGIN_RATIO_Y;
       const warpMinX = minX - marginX;
@@ -4169,7 +4174,7 @@ function clearBridgeSelection() {
     if (gameEnded) return;
     const menuVisible = !document.getElementById('menu')?.classList.contains('hidden');
     if (menuVisible) return;
-    if (gameMode !== 'warp' && selectedMode !== 'warp') return;
+    if (!isWarpLike(gameMode) && !isWarpLike(selectedMode)) return;
     const canvas = getGameCanvas();
     if (!canvas || typeof canvas.requestPointerLock !== 'function') return;
     if (document.pointerLockElement === canvas) return;

@@ -639,7 +639,10 @@ class Bot1(BotTemplate):
             return max(40.0, median_cost * 1.3)
 
         # Fallback: base on map scale (100 normalized units)
-        return max(40.0, BRIDGE_COST_PER_UNIT_DISTANCE * 45.0)
+        cost_per_unit = BRIDGE_COST_PER_UNIT_DISTANCE
+        if self.game_engine and self.game_engine.state:
+            cost_per_unit = getattr(self.game_engine.state, "bridge_cost_per_unit", cost_per_unit)
+        return max(40.0, cost_per_unit * 45.0)
 
     def _source_has_flow_capacity(self, node) -> bool:
         if node is None:
@@ -920,8 +923,7 @@ class Bot2(Bot1):
 
         if not candidates:
             return (None, None)
-        candidates.sort()
-        _, best_node, best_cost = candidates[0]
+        best_score, best_node, best_cost = min(candidates, key=lambda item: item[0])
         return (best_node, best_cost)
 
     # ---------- Edge Reversal Tweaks ----------
@@ -1090,4 +1092,3 @@ class Bot2(Bot1):
                         visited.add(nxt_id)
                         queue.append(nxt_id)
         return False
-

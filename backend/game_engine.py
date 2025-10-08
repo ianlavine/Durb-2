@@ -12,6 +12,7 @@ from .constants import (
     NODE_MAX_JUICE,
     WARP_MARGIN_RATIO_X,
     WARP_MARGIN_RATIO_Y,
+    get_bridge_cost_per_unit,
     get_neutral_capture_reward,
     normalize_game_mode,
 )
@@ -44,7 +45,8 @@ class GameEngine:
         mode: str = DEFAULT_GAME_MODE,
     ) -> None:
         """Initialize a new game with the provided player configuration."""
-        data = graph_generator.generate_game_data_sync()
+        normalized_mode = normalize_game_mode(mode)
+        data = graph_generator.generate_game_data_sync(mode=normalized_mode)
         self.state, self.screen = build_state_from_dict(data)
 
         self.token_to_player_id.clear()
@@ -55,9 +57,9 @@ class GameEngine:
             raise RuntimeError("Failed to create game state")
 
         self.state.phase = "picking"
-        normalized_mode = normalize_game_mode(mode)
         self.state.mode = normalized_mode
         self.state.neutral_capture_reward = get_neutral_capture_reward(normalized_mode)
+        self.state.bridge_cost_per_unit = get_bridge_cost_per_unit(normalized_mode)
         self.state.eliminated_players.clear()
         self.state.pending_eliminations = []
 
@@ -114,7 +116,7 @@ class GameEngine:
 
     def create_new_game(self) -> Tuple[GraphState, Dict[str, int]]:
         """Create a new single-player game for testing/development."""
-        data = graph_generator.generate_game_data_sync()
+        data = graph_generator.generate_game_data_sync(mode=DEFAULT_GAME_MODE)
         new_state, screen = build_state_from_dict(data)
         
         # Ensure Player 1 exists
@@ -125,6 +127,7 @@ class GameEngine:
         new_state.pending_eliminations = []
         new_state.mode = DEFAULT_GAME_MODE
         new_state.neutral_capture_reward = get_neutral_capture_reward(DEFAULT_GAME_MODE)
+        new_state.bridge_cost_per_unit = get_bridge_cost_per_unit(DEFAULT_GAME_MODE)
 
         self.state = new_state
         self.screen = screen
@@ -363,7 +366,7 @@ class GameEngine:
         if not self.state:
             return False
         current_mode = normalize_game_mode(getattr(self.state, "mode", DEFAULT_GAME_MODE))
-        return current_mode == "warp"
+        return current_mode in {"warp", "sparse"}
 
     def _compute_warp_bounds(self) -> Optional[Dict[str, float]]:
         if not self._is_warp_mode_active():
@@ -666,7 +669,10 @@ class GameEngine:
         if normalized_distance <= 0:
             return 0
 
-        total_cost = BRIDGE_BASE_COST + normalized_distance * BRIDGE_COST_PER_UNIT_DISTANCE
+        cost_per_unit = BRIDGE_COST_PER_UNIT_DISTANCE
+        if self.state:
+            cost_per_unit = getattr(self.state, "bridge_cost_per_unit", BRIDGE_COST_PER_UNIT_DISTANCE)
+        total_cost = BRIDGE_BASE_COST + normalized_distance * cost_per_unit
         return int(round(total_cost))
 
     def handle_build_bridge(

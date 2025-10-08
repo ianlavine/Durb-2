@@ -3,7 +3,7 @@ import math
 import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Set
 from .models import Node, Edge
 
 
@@ -135,6 +135,85 @@ def generate_planar_edges(nodes: List[Node], desired_edges: int, one_way_percent
         else:
             edges.append(Edge(id=len(edges), source_node_id=i, target_node_id=j))
         existing_segments.append(((nodes[i].x, nodes[i].y), (nodes[j].x, nodes[j].y)))
+    return edges
+
+
+def generate_sparse_edges(nodes: List[Node], _: Optional[int], one_way_percent: float) -> List[Edge]:
+    """Connect isolated nodes to their nearest non-crossing neighbor and ensure ≥40 edges."""
+    num_nodes = len(nodes)
+    if num_nodes == 0:
+        return []
+
+    coords = [(n.x, n.y) for n in nodes]
+    candidate_lists: List[List[Tuple[float, int]]] = []
+    global_candidates: List[Tuple[float, int, int]] = []
+    for i in range(num_nodes):
+        xi, yi = coords[i]
+        local_candidates: List[Tuple[float, int]] = []
+        for j in range(num_nodes):
+            if i == j:
+                continue
+            xj, yj = coords[j]
+            d2 = (xi - xj) * (xi - xj) + (yi - yj) * (yi - yj)
+            local_candidates.append((d2, j))
+            if i < j:
+                global_candidates.append((d2, i, j))
+        local_candidates.sort(key=lambda t: t[0])
+        candidate_lists.append(local_candidates)
+    global_candidates.sort(key=lambda t: t[0])
+
+    edges: List[Edge] = []
+    existing_segments: List[Tuple[Tuple[float, float], Tuple[float, float]]] = []
+    taken_pairs: Set[Tuple[int, int]] = set()
+    connected_nodes: Set[int] = set()
+    MIN_EDGE_COUNT = 40
+
+    def would_cross(i: int, j: int) -> bool:
+        p1 = (nodes[i].x, nodes[i].y)
+        p2 = (nodes[j].x, nodes[j].y)
+        for (q1, q2) in existing_segments:
+            if (q1 == p1) or (q1 == p2) or (q2 == p1) or (q2 == p2):
+                continue
+            if segments_intersect(p1, p2, q1, q2):
+                return True
+        return False
+
+    def add_edge(i: int, j: int) -> bool:
+        pair = (i, j) if i < j else (j, i)
+        if pair in taken_pairs:
+            return False
+        if would_cross(i, j):
+            return False
+
+        taken_pairs.add(pair)
+        is_one_way = random.random() < max(0.0, min(1.0, one_way_percent))
+        if is_one_way:
+            if random.random() < 0.5:
+                source, target = i, j
+            else:
+                source, target = j, i
+        else:
+            source, target = i, j
+
+        edges.append(Edge(id=len(edges), source_node_id=source, target_node_id=target))
+        existing_segments.append(((nodes[i].x, nodes[i].y), (nodes[j].x, nodes[j].y)))
+        connected_nodes.add(i)
+        connected_nodes.add(j)
+        return True
+
+    for i in range(num_nodes):
+        if i in connected_nodes:
+            continue
+        for _, j in candidate_lists[i]:
+            if add_edge(i, j):
+                break
+
+    if len(edges) < MIN_EDGE_COUNT:
+        for _, i, j in global_candidates:
+            if len(edges) >= MIN_EDGE_COUNT:
+                break
+            add_edge(i, j)
+
     return edges
 
 
