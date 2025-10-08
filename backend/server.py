@@ -40,14 +40,18 @@ class WebSocketServer:
     async def handler(self, websocket: websockets.WebSocketServerProtocol) -> None:
         self.clients.add(websocket)
         try:
-            async for raw in websocket:
-                try:
-                    msg = json.loads(raw)
-                    await self.message_router.route_message(websocket, msg, self.server_context)
-                except Exception as e:
-                    # Log error but continue processing other messages
-                    print(f"Error processing message: {e}")
-                    continue
+            try:
+                async for raw in websocket:
+                    try:
+                        msg = json.loads(raw)
+                        await self.message_router.route_message(websocket, msg, self.server_context)
+                    except Exception as e:
+                        # Log error but continue processing other messages
+                        print(f"Error processing message: {e}")
+                        continue
+            except websockets.exceptions.ConnectionClosed as exc:
+                # Expected for abrupt client disconnects; cleanup happens in finally block
+                print(f"Client connection closed: {exc}")
         finally:
             await self._handle_disconnect(websocket)
 
@@ -57,6 +61,23 @@ class WebSocketServer:
         self.clients.discard(websocket)
 
         ws_to_token = self.server_context.get("ws_to_token", {})
+        token = ws_to_token.get(websocket)
+
+        close_code = getattr(websocket, "close_code", None)
+        close_reason = getattr(websocket, "close_reason", "")
+        try:
+            ws_exception = websocket.exception()
+        except Exception:
+            ws_exception = None
+
+        print(
+            "=== WS_DISCONNECT === "
+            f"token={token} "
+            f"code={close_code} "
+            f"reason={close_reason!r} "
+            f"exception={ws_exception}"
+        )
+
         token = ws_to_token.pop(websocket, None)
 
         replay_sessions = self.server_context.get("replay_sessions", {})
