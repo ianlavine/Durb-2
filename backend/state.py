@@ -14,7 +14,6 @@ from .constants import (
     NODE_MIN_JUICE,
     PASSIVE_GOLD_PER_TICK,
     PASSIVE_INCOME_ENABLED,
-    POP_NODE_REWARD,
     PRODUCTION_RATE_PER_NODE,
     RESERVE_TRANSFER_RATIO,
     STARTING_GOLD,
@@ -56,7 +55,7 @@ class GraphState:
         self.player_auto_expand: Dict[int, bool] = {}
         self.pending_auto_expand_nodes: Dict[int, Set[int]] = {}
         
-        # Game mode (e.g., 'basic', 'pop')
+        # Game mode (e.g., 'basic', 'warp')
         self.mode: str = DEFAULT_GAME_MODE
         self.neutral_capture_reward: float = get_neutral_capture_reward(self.mode)
 
@@ -250,6 +249,18 @@ class GraphState:
             ]
             for eid, e in self.edges.items()
         ]
+        edge_warp = {}
+        for eid, edge in self.edges.items():
+            segments = list(getattr(edge, "warp_segments", []) or [])
+            if not segments:
+                source = self.nodes.get(edge.source_node_id)
+                target = self.nodes.get(edge.target_node_id)
+                if source and target:
+                    segments = [(source.x, source.y, target.x, target.y)]
+            edge_warp[eid] = {
+                "axis": getattr(edge, "warp_axis", "none"),
+                "segments": [[sx, sy, ex, ey] for sx, sy, ex, ey in segments],
+            }
         players_arr = [
             {
                 "id": pid,
@@ -282,7 +293,6 @@ class GraphState:
             "players": players_arr,
             "settings": {
                 "nodeMaxJuice": NODE_MAX_JUICE,
-                "popReward": POP_NODE_REWARD,
                 "bridgeBaseCost": BRIDGE_BASE_COST,
                 "bridgeCostPerUnit": BRIDGE_COST_PER_UNIT_DISTANCE,
                 "neutralCaptureReward": neutral_reward,
@@ -297,6 +307,7 @@ class GraphState:
             "gameDuration": self.game_duration,
             "timerRemaining": timer_remaining,
             "mode": self.mode,
+            "edgeWarp": edge_warp,
         }
 
     def to_tick_message(self, current_time: float = 0.0) -> Dict:
@@ -345,7 +356,6 @@ class GraphState:
             "gameDuration": self.game_duration,
             "timerRemaining": timer_remaining,
             "mode": self.mode,
-            "popReward": POP_NODE_REWARD,
         }
 
     def _update_edge_flowing_status(self) -> None:
@@ -661,10 +671,24 @@ def load_graph(graph_path: Path) -> Tuple[GraphState, Dict[str, int]]:
         Node(id=n["id"], x=n["x"], y=n["y"], juice=UNOWNED_NODE_BASE_JUICE, cur_intake=0.0)
         for n in nodes_raw
     ]
-    edges: List[Edge] = [
-        Edge(id=e["id"], source_node_id=e["source"], target_node_id=e["target"])
-        for e in edges_raw
-    ]
+    edges: List[Edge] = []
+    for e in edges_raw:
+        warp_axis = e.get("warpAxis") if isinstance(e, dict) else None
+        warp_segments = e.get("warpSegments") if isinstance(e, dict) else None
+        edge = Edge(id=e["id"], source_node_id=e["source"], target_node_id=e["target"])
+        if isinstance(warp_axis, str):
+            edge.warp_axis = warp_axis
+        if isinstance(warp_segments, list):
+            parsed_segments: List[Tuple[float, float, float, float]] = []
+            for seg in warp_segments:
+                if isinstance(seg, (list, tuple)) and len(seg) >= 4:
+                    sx, sy, ex, ey = seg[:4]
+                    try:
+                        parsed_segments.append((float(sx), float(sy), float(ex), float(ey)))
+                    except (TypeError, ValueError):
+                        continue
+            edge.warp_segments = parsed_segments
+        edges.append(edge)
     return GraphState(nodes, edges), screen
 
 

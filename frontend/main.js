@@ -80,6 +80,28 @@
   let topUiBar = null;
   let bottomUiBar = null;
 
+  // Warp mode visuals & geometry (frontend prototype hooked to Warp mode)
+  const WARP_MARGIN_RATIO_X = 0.06; // horizontal extra space relative to board width
+  const WARP_MARGIN_RATIO_Y = 0.10; // vertical extra space relative to board height
+  const WARP_BORDER_COLOR = 0x9b4dff; // purple border for warp space
+  const VIRTUAL_CURSOR_COLOR = '#b675ff';
+  let warpBoundsWorld = null; // { minX, minY, maxX, maxY, width, height }
+  let warpBoundsScreen = null; // { minX, minY, maxX, maxY }
+
+  // Virtual cursor (pointer-lock driven) to support warp wrap previews
+  let pointerLockActive = false;
+  let virtualCursorScreenX = window.innerWidth / 2;
+  let virtualCursorScreenY = window.innerHeight / 2;
+  let lastPointerClientX = virtualCursorScreenX;
+  let lastPointerClientY = virtualCursorScreenY;
+  let virtualCursorEl = null;
+  let lastPointerDownButton = null;
+  let pendingVirtualUiClickTarget = null;
+  let warpWrapUsed = false;
+  let lastDoubleWarpWarningTime = 0;
+  let lastWarpAxis = null;
+  let lastWarpDirection = null;
+
   // Timer system
   let timerDisplay = null;
   let gameStartTime = null;
@@ -106,8 +128,6 @@
   
   // Node juice display system
   let nodeJuiceTexts = new Map(); // nodeId -> text object
-  let popReadyLabels = new Map(); // nodeId -> text object for pop-ready hint
-
   // Targeting visual indicator system
   let currentTargetNodeId = null; // The node currently being targeted (for visual indicator)
   let currentTargetSetTime = null; // Animation time when target was last set
@@ -115,10 +135,8 @@
   let selectedPlayerCount = 2;
   let selectedMode = 'basic';
   let gameMode = 'basic';
-  let popReward = 10;
   let modeButtons = [];
-  const MODE_LABELS = { basic: 'Basic', pop: 'Pop' };
-  const POP_READY_TOLERANCE = 0.01;
+  const MODE_LABELS = { basic: 'Basic', warp: 'Warp' };
 
   // Money transparency system
   let moneyIndicators = []; // Array of {x, y, text, color, startTime, duration}
@@ -270,14 +288,6 @@
       { freq: 780, type: 'sine', attack: 0.005, decay: 0.12, volume: 0.14, delay: 0.00 },
       { freq: 1170, type: 'sine', attack: 0.005, decay: 0.12, volume: 0.11, delay: 0.05 },
     ]);
-  }
-  function playPopBurst() {
-    // Bright pop with airy shimmer
-    playToneSequence([
-      { freq: 1180, type: 'triangle', attack: 0.004, decay: 0.09, volume: 0.16, delay: 0.00 },
-      { freq: 760, type: 'sine', attack: 0.004, decay: 0.12, volume: 0.13, delay: 0.03 },
-    ]);
-    playNoiseBurst({ duration: 0.12, volume: 0.22, filterType: 'bandpass', filterFreq: 1650, q: 2.8, attack: 0.002, decay: 0.14 });
   }
   function playLoseNodeWarning() {
     // Intentionally silent for now; keeping function for future use
@@ -877,6 +887,129 @@
     return '#' + (hex >>> 0).toString(16).padStart(6, '0');
   }
 
+  function isWarpFrontendActive() {
+    return (gameMode === 'warp' || selectedMode === 'warp') && warpBoundsWorld && Number.isFinite(warpBoundsWorld.width) && Number.isFinite(warpBoundsWorld.height);
+  }
+
+  function makeEndpoint(x, y, node = null, portalAxis = null) {
+    return { x, y, node: node || null, portalAxis };
+  }
+
+  function computeWarpBridgeSegments(fromNode, toNode) {
+    if (!fromNode || !toNode) {
+      return null;
+    }
+
+    const baseSegment = {
+      wrapAxis: 'none',
+      segments: [
+        {
+          start: makeEndpoint(fromNode.x, fromNode.y, fromNode),
+          end: makeEndpoint(toNode.x, toNode.y, toNode),
+        },
+      ],
+      totalWorldDistance: Math.hypot(toNode.x - fromNode.x, toNode.y - fromNode.y),
+    };
+
+    if (!isWarpFrontendActive()) {
+      return baseSegment;
+    }
+
+    const width = warpBoundsWorld.width;
+    const height = warpBoundsWorld.height;
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      return baseSegment;
+    }
+
+    const dx = toNode.x - fromNode.x;
+    const dy = toNode.y - fromNode.y;
+
+    let best = {
+      wrapAxis: 'none',
+      segments: baseSegment.segments.map((seg) => ({
+        start: { ...seg.start },
+        end: { ...seg.end },
+      })),
+      totalWorldDistance: baseSegment.totalWorldDistance,
+    };
+
+    const EPS = 1e-6;
+
+    // Horizontal wrap candidate (left/right)
+    if (Math.abs(dx) > width / 2 + EPS) {
+      const adjust = dx > 0 ? -width : width;
+      const adjustedTargetX = toNode.x + adjust;
+      const dxWrap = adjustedTargetX - fromNode.x;
+      if (Math.abs(dxWrap) > EPS) {
+        const boundaryX = dxWrap > 0 ? warpBoundsWorld.maxX : warpBoundsWorld.minX;
+        const t = (boundaryX - fromNode.x) / dxWrap;
+        if (t > EPS && t < 1 - EPS) {
+          const exitY = fromNode.y + t * dy;
+          if (exitY >= warpBoundsWorld.minY - EPS && exitY <= warpBoundsWorld.maxY + EPS) {
+            const entryX = dxWrap > 0 ? warpBoundsWorld.minX : warpBoundsWorld.maxX;
+            const dist1 = Math.hypot(boundaryX - fromNode.x, exitY - fromNode.y);
+            const dist2 = Math.hypot(toNode.x - entryX, toNode.y - exitY);
+            const total = dist1 + dist2;
+            if (total + EPS < best.totalWorldDistance || best.totalWorldDistance < EPS) {
+              best = {
+                wrapAxis: 'horizontal',
+                segments: [
+                  {
+                    start: makeEndpoint(fromNode.x, fromNode.y, fromNode),
+                    end: makeEndpoint(boundaryX, exitY, null, 'horizontal'),
+                  },
+                  {
+                    start: makeEndpoint(entryX, exitY, null, 'horizontal'),
+                    end: makeEndpoint(toNode.x, toNode.y, toNode),
+                  },
+                ],
+                totalWorldDistance: total,
+              };
+            }
+          }
+        }
+      }
+    }
+
+    // Vertical wrap candidate (top/bottom)
+    if (Math.abs(dy) > height / 2 + EPS) {
+      const adjust = dy > 0 ? -height : height;
+      const adjustedTargetY = toNode.y + adjust;
+      const dyWrap = adjustedTargetY - fromNode.y;
+      if (Math.abs(dyWrap) > EPS) {
+        const boundaryY = dyWrap > 0 ? warpBoundsWorld.maxY : warpBoundsWorld.minY;
+        const t = (boundaryY - fromNode.y) / dyWrap;
+        if (t > EPS && t < 1 - EPS) {
+          const exitX = fromNode.x + t * dx;
+          if (exitX >= warpBoundsWorld.minX - EPS && exitX <= warpBoundsWorld.maxX + EPS) {
+            const entryY = dyWrap > 0 ? warpBoundsWorld.minY : warpBoundsWorld.maxY;
+            const dist1 = Math.hypot(exitX - fromNode.x, boundaryY - fromNode.y);
+            const dist2 = Math.hypot(toNode.x - exitX, toNode.y - entryY);
+            const total = dist1 + dist2;
+            if (total + EPS < best.totalWorldDistance || best.totalWorldDistance < EPS) {
+              best = {
+                wrapAxis: 'vertical',
+                segments: [
+                  {
+                    start: makeEndpoint(fromNode.x, fromNode.y, fromNode),
+                    end: makeEndpoint(exitX, boundaryY, null, 'vertical'),
+                  },
+                  {
+                    start: makeEndpoint(exitX, entryY, null, 'vertical'),
+                    end: makeEndpoint(toNode.x, toNode.y, toNode),
+                  },
+                ],
+                totalWorldDistance: total,
+              };
+            }
+          }
+        }
+      }
+    }
+
+    return best;
+  }
+
   // Bridge cost calculation
   function calculateBridgeCost(fromNode, toNode) {
     if (!fromNode || !toNode) return 0;
@@ -886,15 +1019,226 @@
     const largestSpan = Math.max(1, baseWidth, baseHeight);
     const scale = 100 / largestSpan;
 
-    // Normalize distance so it matches backend math regardless of viewport stretch
-    const dx = (toNode.x - fromNode.x) * scale;
-    const dy = (toNode.y - fromNode.y) * scale;
-    const distance = Math.sqrt(dx * dx + dy * dy);
+    const path = computeWarpBridgeSegments(fromNode, toNode);
+    let normalizedDistance = 0;
 
-    if (distance === 0) return 0;
+    if (path && Array.isArray(path.segments) && path.segments.length) {
+      for (const segment of path.segments) {
+        const segDx = (segment.end.x - segment.start.x) * scale;
+        const segDy = (segment.end.y - segment.start.y) * scale;
+        normalizedDistance += Math.hypot(segDx, segDy);
+      }
+    } else {
+      const dx = (toNode.x - fromNode.x) * scale;
+      const dy = (toNode.y - fromNode.y) * scale;
+      normalizedDistance = Math.hypot(dx, dy);
+    }
 
-    const cost = BRIDGE_BASE_COST + distance * BRIDGE_COST_PER_UNIT;
+    if (normalizedDistance === 0) return 0;
+
+    const cost = BRIDGE_BASE_COST + normalizedDistance * BRIDGE_COST_PER_UNIT;
     return Math.round(cost);
+  }
+
+  function normalizeWarpSegmentList(rawSegments, sourceNode, targetNode) {
+    const segments = [];
+    if (Array.isArray(rawSegments)) {
+      rawSegments.forEach((seg) => {
+        let sx;
+        let sy;
+        let ex;
+        let ey;
+        if (Array.isArray(seg) && seg.length >= 4) {
+          [sx, sy, ex, ey] = seg.map(Number);
+        } else if (seg && typeof seg === 'object') {
+          const start = seg.start || seg.from;
+          const end = seg.end || seg.to;
+          if (start && typeof start === 'object' && end && typeof end === 'object') {
+            sx = Number(start.x);
+            sy = Number(start.y);
+            ex = Number(end.x);
+            ey = Number(end.y);
+          } else {
+            sx = Number(seg.sx ?? seg.x1 ?? seg.xStart ?? seg.x0);
+            sy = Number(seg.sy ?? seg.y1 ?? seg.yStart ?? seg.y0);
+            ex = Number(seg.ex ?? seg.x2 ?? seg.xEnd ?? seg.x1);
+            ey = Number(seg.ey ?? seg.y2 ?? seg.yEnd ?? seg.y1);
+          }
+        }
+        if ([sx, sy, ex, ey].every((value) => Number.isFinite(value))) {
+          segments.push({ sx, sy, ex, ey });
+        }
+      });
+    }
+    if (!segments.length && sourceNode && targetNode) {
+      segments.push({ sx: sourceNode.x, sy: sourceNode.y, ex: targetNode.x, ey: targetNode.y });
+    }
+    return segments;
+  }
+
+  function normalizeEdgeWarpPayload(payload, sourceNode, targetNode) {
+    let axis = 'none';
+    if (payload && typeof payload.axis === 'string') {
+      axis = payload.axis;
+    } else if (payload && typeof payload.wrapAxis === 'string') {
+      axis = payload.wrapAxis;
+    } else if (payload && typeof payload.warpAxis === 'string') {
+      axis = payload.warpAxis;
+    }
+    if (axis !== 'horizontal' && axis !== 'vertical') {
+      axis = 'none';
+    }
+    let rawSegments = payload && payload.segments;
+    if (!rawSegments && payload) {
+      rawSegments = payload.warpSegments;
+    }
+    const segments = normalizeWarpSegmentList(rawSegments, sourceNode, targetNode);
+    return { axis, segments };
+  }
+
+  function buildWarpInfoForBridge(fromNode, toNode) {
+    const path = computeWarpBridgeSegments(fromNode, toNode);
+    let axis = 'none';
+    let segments = [];
+    if (path && typeof path.wrapAxis === 'string') {
+      axis = path.wrapAxis;
+    }
+    if (path && Array.isArray(path.segments)) {
+      segments = path.segments
+        .map((segment) => {
+          const start = segment && segment.start;
+          const end = segment && segment.end;
+          if (!start || !end) return null;
+          const sx = Number(start.x);
+          const sy = Number(start.y);
+          const ex = Number(end.x);
+          const ey = Number(end.y);
+          if ([sx, sy, ex, ey].every((value) => Number.isFinite(value))) {
+            return [sx, sy, ex, ey];
+          }
+          return null;
+        })
+        .filter(Boolean);
+    }
+    if (!segments.length) {
+      segments = [[fromNode.x, fromNode.y, toNode.x, toNode.y]];
+    }
+    return { axis, segments };
+  }
+
+  function getEdgeWarpSegments(edge) {
+    if (edge && Array.isArray(edge.warpSegments) && edge.warpSegments.length) {
+      return edge.warpSegments.map((seg) => ({
+        sx: Number(seg.sx),
+        sy: Number(seg.sy),
+        ex: Number(seg.ex),
+        ey: Number(seg.ey),
+      })).filter((seg) => [seg.sx, seg.sy, seg.ex, seg.ey].every((value) => Number.isFinite(value)));
+    }
+    const sourceNode = edge ? nodes.get(edge.source) : null;
+    const targetNode = edge ? nodes.get(edge.target) : null;
+    if (sourceNode && targetNode) {
+      return [{ sx: sourceNode.x, sy: sourceNode.y, ex: targetNode.x, ey: targetNode.y }];
+    }
+    return [];
+  }
+
+  function getEdgeMidpointWorld(edge) {
+    const segments = getEdgeWarpSegments(edge);
+    if (!segments.length) return null;
+    const lengths = segments.map((seg) => Math.hypot(seg.ex - seg.sx, seg.ey - seg.sy));
+    const totalLength = lengths.reduce((sum, len) => sum + len, 0);
+    if (totalLength <= 0) {
+      const last = segments[segments.length - 1];
+      return { x: last.ex, y: last.ey };
+    }
+    let remaining = totalLength / 2;
+    for (let i = 0; i < segments.length; i++) {
+      const len = lengths[i];
+      if (len <= 0) continue;
+      if (remaining <= len) {
+        const seg = segments[i];
+        const t = remaining / len;
+        return {
+          x: seg.sx + (seg.ex - seg.sx) * t,
+          y: seg.sy + (seg.ey - seg.sy) * t,
+        };
+      }
+      remaining -= len;
+    }
+    const last = segments[segments.length - 1];
+    return { x: last.ex, y: last.ey };
+  }
+
+  function applyEdgeWarpData(edgeRecord, warpPayload, sourceNode, targetNode) {
+    const { axis, segments } = normalizeEdgeWarpPayload(warpPayload, sourceNode, targetNode);
+    edgeRecord.warpAxis = axis;
+    edgeRecord.warpSegments = segments;
+  }
+
+  function buildEdgeScreenPath(edge, fromNode, toNode, fromRadius, toRadius) {
+    const worldSegments = getEdgeWarpSegments(edge);
+    if (!worldSegments.length) return [];
+
+    const screenSegments = worldSegments.map((seg) => {
+      const [sx, sy] = worldToScreen(seg.sx, seg.sy);
+      const [ex, ey] = worldToScreen(seg.ex, seg.ey);
+      return { sx, sy, ex, ey };
+    });
+
+    if (!screenSegments.length) return [];
+
+    const first = screenSegments[0];
+    if (first) {
+      const dx = first.ex - first.sx;
+      const dy = first.ey - first.sy;
+      const len = Math.hypot(dx, dy);
+      if (len > 1e-6 && Number.isFinite(fromRadius)) {
+        const maxTrim = Math.max(0, len - 0.5);
+        const trim = Math.min(Math.max(fromRadius, 0), maxTrim);
+        const ux = dx / len;
+        const uy = dy / len;
+        first.sx += ux * trim;
+        first.sy += uy * trim;
+      }
+    }
+
+    const last = screenSegments[screenSegments.length - 1];
+    if (last) {
+      const dx = last.ex - last.sx;
+      const dy = last.ey - last.sy;
+      const len = Math.hypot(dx, dy);
+      if (len > 1e-6 && Number.isFinite(toRadius)) {
+        const maxTrim = Math.max(0, len - 0.5);
+        const trim = Math.min(Math.max(toRadius, 0), maxTrim);
+        const ux = dx / len;
+        const uy = dy / len;
+        last.ex -= ux * trim;
+        last.ey -= uy * trim;
+      }
+    }
+
+    const path = [];
+    for (const seg of screenSegments) {
+      const dx = seg.ex - seg.sx;
+      const dy = seg.ey - seg.sy;
+      const len = Math.hypot(dx, dy);
+      if (len <= 1e-6) continue;
+      const ux = dx / len;
+      const uy = dy / len;
+      path.push({
+        sx: seg.sx,
+        sy: seg.sy,
+        ex: seg.ex,
+        ey: seg.ey,
+        length: len,
+        ux,
+        uy,
+        angle: Math.atan2(uy, ux),
+      });
+    }
+
+    return path;
   }
 
   function formatCost(value) {
@@ -908,6 +1252,7 @@
     const lowered = value.trim().toLowerCase();
     // Backward compatibility: treat 'passive' as alias for 'basic'
     if (lowered === 'passive') return 'basic';
+    if (lowered === 'pop') return 'warp';
     return Object.prototype.hasOwnProperty.call(MODE_LABELS, lowered) ? lowered : 'basic';
   }
 
@@ -926,7 +1271,7 @@
 
   function updatePlayBotAvailability(baseEnabled = true) {
     if (!playBotBtnEl) return;
-    const modeAllowsBot = selectedMode === 'basic' || selectedMode === 'pop';
+    const modeAllowsBot = selectedMode === 'basic' || selectedMode === 'warp';
     const enabled = Boolean(baseEnabled && modeAllowsBot);
     playBotBtnEl.disabled = !enabled;
     playBotBtnEl.title = modeAllowsBot ? '' : 'Bots are unavailable in this mode';
@@ -956,10 +1301,35 @@
 function updateBridgeCostDisplay(fromNode, toNode) {
   if (!sceneRef || !fromNode || !toNode) return;
 
-  // midpoint between nodes (reads nicely, like your reversal capture $ signs)
-  const midX = (fromNode.x + toNode.x) / 2;
-  const midY = (fromNode.y + toNode.y) / 2;
-  const [sx, sy] = worldToScreen(midX, midY);
+  const path = computeWarpBridgeSegments(fromNode, toNode);
+  let anchorX = (fromNode.x + toNode.x) / 2;
+  let anchorY = (fromNode.y + toNode.y) / 2;
+
+  if (path && Number.isFinite(path.totalWorldDistance) && path.totalWorldDistance > 0 && Array.isArray(path.segments)) {
+    if (path.wrapAxis && path.wrapAxis !== 'none' && path.segments.length >= 2) {
+      const postWrap = path.segments[path.segments.length - 1];
+      const segDx = postWrap.end.x - postWrap.start.x;
+      const segDy = postWrap.end.y - postWrap.start.y;
+      anchorX = postWrap.start.x + segDx * 0.5;
+      anchorY = postWrap.start.y + segDy * 0.5;
+    } else {
+      let halfDistance = path.totalWorldDistance / 2;
+      for (const segment of path.segments) {
+        const segDx = segment.end.x - segment.start.x;
+        const segDy = segment.end.y - segment.start.y;
+        const segLength = Math.hypot(segDx, segDy);
+        if (segLength >= halfDistance) {
+          const t = segLength > 0 ? halfDistance / segLength : 0;
+          anchorX = segment.start.x + segDx * t;
+          anchorY = segment.start.y + segDy * t;
+          break;
+        }
+        halfDistance -= segLength;
+      }
+    }
+  }
+
+  const [sx, sy] = worldToScreen(anchorX, anchorY);
 
   const cost = calculateBridgeCost(fromNode, toNode);
   const canAfford = goldValue >= cost;
@@ -999,8 +1369,9 @@ function updateReverseCostDisplay(edge) {
   const targetNode = nodes.get(edge.target);
   if (!sourceNode || !targetNode) return;
 
-  const midX = (sourceNode.x + targetNode.x) / 2;
-  const midY = (sourceNode.y + targetNode.y) / 2;
+  const midPoint = getEdgeMidpointWorld(edge);
+  const midX = midPoint ? midPoint.x : (sourceNode.x + targetNode.x) / 2;
+  const midY = midPoint ? midPoint.y : (sourceNode.y + targetNode.y) / 2;
   const [sx, sy] = worldToScreen(midX, midY);
   
   // Store the position for later use in cost indicator animation
@@ -1040,6 +1411,15 @@ function hideReverseCostDisplay() {
   }
   // Clear stored position when hiding display
   lastReverseCostPosition = null;
+}
+
+
+function clearBridgeSelection() {
+  bridgeFirstNode = null;
+  warpWrapUsed = false;
+  lastDoubleWarpWarningTime = 0;
+  lastWarpAxis = null;
+  lastWarpDirection = null;
 }
 
 
@@ -1145,6 +1525,8 @@ function hideReverseCostDisplay() {
     graphicsEdges = this.add.graphics();
     graphicsNodes = this.add.graphics();
     statusText = this.add.text(10, 10, 'Connect to start a game', { font: '16px monospace', color: '#cccccc' });
+
+    ensureVirtualCursorElement();
 
     // Load persistent settings
     loadPersistentAutoExpand();
@@ -1363,6 +1745,9 @@ function hideReverseCostDisplay() {
     Object.assign(quitBtn.style, { position: 'absolute', left: '10px', bottom: '10px', zIndex: 10, padding: '8px 14px', borderRadius: '8px', border: 'none', background: '#ff5555', color: '#111', cursor: 'pointer', display: 'none' });
     document.body.appendChild(quitBtn);
     quitBtn.addEventListener('click', () => {
+      if (pointerLockActive) {
+        releaseVirtualCursor();
+      }
       if (isReplayActive() || replayMode) {
         stopReplaySession();
         replayMode = false;
@@ -1886,11 +2271,7 @@ function hideReverseCostDisplay() {
     }
     const anySpinning = updateReverseSpinAnimations();
     
-    // Check if hovering over a poppable node (for burst animation)
-    const hoveringPoppable = hoveredNodeId !== null && gameMode === 'pop' && phase === 'playing' && 
-                             (() => { const n = nodes.get(hoveredNodeId); return n && isNodePopReady(n); })();
-    
-    if (hasFlowingEdges || anySpinning || moneyIndicators.length > 0 || (persistentTargeting && currentTargetNodeId !== null) || hoveringPoppable) {
+    if (hasFlowingEdges || anySpinning || moneyIndicators.length > 0 || (persistentTargeting && currentTargetNodeId !== null)) {
       redrawStatic();
     }
   }
@@ -1901,9 +2282,12 @@ function hideReverseCostDisplay() {
     const s = nodes.get(edge.source);
     const t = nodes.get(edge.target);
     if (!s || !t) return;
-    const [sx0, sy0] = worldToScreen(s.x, s.y);
-    const [tx0, ty0] = worldToScreen(t.x, t.y);
-    const len = Math.max(1, Math.hypot(tx0 - sx0, ty0 - sy0));
+    const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
+    const fromR = Math.max(1, calculateNodeRadius(s, baseScale)) + 1;
+    const toR = Math.max(1, calculateNodeRadius(t, baseScale)) + 1;
+    const path = buildEdgeScreenPath(edge, s, t, fromR, toR);
+    const len = path.reduce((sum, seg) => sum + seg.length, 0);
+    if (len <= 0) return;
     const triH = 16;
     const triCount = Math.max(1, Math.floor(len / triH));
     edge._spin = {
@@ -1970,9 +2354,7 @@ function hideReverseCostDisplay() {
       else if (msg.type === 'bridgeError') handleBridgeError(msg);
       else if (msg.type === 'reverseEdgeError') handleReverseEdgeError(msg);
       else if (msg.type === 'nodeDestroyed') handleNodeDestroyed(msg);
-      else if (msg.type === 'nodePopped') handleNodePopped(msg);
       else if (msg.type === 'destroyError') handleDestroyError(msg);
-      else if (msg.type === 'popError') handlePopError(msg);
       else if (msg.type === 'nodeCaptured') handleNodeCaptured(msg);
       else if (msg.type === 'lobbyTimeout') handleLobbyTimeout();
       else if (msg.type === 'postgame') handlePostgame(msg);
@@ -2066,17 +2448,7 @@ function hideReverseCostDisplay() {
     });
     nodeJuiceTexts.clear();
 
-    popReadyLabels.forEach(label => {
-      if (label) label.destroy();
-    });
-    popReadyLabels.clear();
-
     gameMode = normalizeMode(msg.mode || 'basic');
-    if (msg.settings && Number.isFinite(msg.settings.popReward)) {
-      popReward = Number(msg.settings.popReward);
-    } else {
-      popReward = 10;
-    }
 
     // Clear any lingering edge flow labels between games
     edgeFlowTexts.forEach(text => {
@@ -2085,7 +2457,7 @@ function hideReverseCostDisplay() {
     edgeFlowTexts.clear();
 
     activeAbility = null;
-    bridgeFirstNode = null;
+    clearBridgeSelection();
     hideBridgeCostDisplay();
     hideReverseCostDisplay();
 
@@ -2096,10 +2468,11 @@ function hideReverseCostDisplay() {
       }
     }
 
+    const edgeWarpMap = msg.edgeWarp || {};
     if (Array.isArray(msg.edges)) {
       for (const arr of msg.edges) {
         const [id, s, t, _forward, _always1, buildReq = 0, buildElap = 0, building = 0] = arr;
-        edges.set(id, {
+        const record = {
           source: s,
           target: t,
           on: false,
@@ -2112,7 +2485,12 @@ function hideReverseCostDisplay() {
           builtByMe: false,
           hammerAccumSec: 0,
           hammerHitIndex: 0,
-        });
+          warpAxis: 'none',
+          warpSegments: [],
+        };
+        const warpPayload = edgeWarpMap[id] ?? edgeWarpMap[String(id)];
+        applyEdgeWarpData(record, warpPayload, nodes.get(s), nodes.get(t));
+        edges.set(id, record);
       }
     }
 
@@ -2473,6 +2851,7 @@ function hideReverseCostDisplay() {
       overlayMsg.style.display = 'block';
     }
     gameEnded = true;
+    releaseVirtualCursor();
     if (!viewingReplay) {
       myEliminated = msg.winnerId !== myId;
     }
@@ -2497,10 +2876,6 @@ function hideReverseCostDisplay() {
     if (typeof msg.mode === 'string') {
       gameMode = normalizeMode(msg.mode);
     }
-    if (Number.isFinite(msg.popReward)) {
-      popReward = Number(msg.popReward);
-    }
-
     if (Array.isArray(msg.nodes)) {
       msg.nodes.forEach(([id, size, owner]) => {
         const node = nodes.get(id);
@@ -2636,7 +3011,7 @@ function hideReverseCostDisplay() {
     }
     if (myEliminated && activeAbility) {
       activeAbility = null;
-      bridgeFirstNode = null;
+      clearBridgeSelection();
       hideBridgeCostDisplay();
     }
 
@@ -2654,7 +3029,7 @@ function hideReverseCostDisplay() {
     // Add new edge to the frontend map
     if (msg.edge) {
       const edge = msg.edge;
-      edges.set(edge.id, {
+      const record = {
         source: edge.source,
         target: edge.target,
         on: edge.on,
@@ -2666,8 +3041,12 @@ function hideReverseCostDisplay() {
         buildStartTime: animationTime,
         hammerAccumSec: 0,
         hammerHitIndex: 0,
-        builtByMe: !!msg.cost, // server only includes cost for the actor
-      });
+        builtByMe: !!msg.cost,
+        warpAxis: 'none',
+        warpSegments: [],
+      };
+      applyEdgeWarpData(record, edge.warp ?? edge, nodes.get(edge.source), nodes.get(edge.target));
+      edges.set(edge.id, record);
       
       // Show cost indicator for bridge building
       if (activeAbility === 'bridge1way' && msg.cost) {
@@ -2675,8 +3054,9 @@ function hideReverseCostDisplay() {
         const sourceNode = nodes.get(edge.source);
         const targetNode = nodes.get(edge.target);
         if (sourceNode && targetNode) {
-          const midX = (sourceNode.x + targetNode.x) / 2;
-          const midY = (sourceNode.y + targetNode.y) / 2;
+          const midPoint = getEdgeMidpointWorld(record);
+          const midX = midPoint ? midPoint.x : (sourceNode.x + targetNode.x) / 2;
+          const midY = midPoint ? midPoint.y : (sourceNode.y + targetNode.y) / 2;
           const [screenX, screenY] = worldToScreen(midX, midY);
           
           createMoneyIndicator(
@@ -2698,7 +3078,7 @@ function hideReverseCostDisplay() {
     // Backend includes `cost` on the message only for the acting player
     if (activeAbility === 'bridge1way' && msg.cost) {
       activeAbility = null;
-      bridgeFirstNode = null;
+      clearBridgeSelection();
       hideBridgeCostDisplay();
     }
   }
@@ -2715,6 +3095,7 @@ function hideReverseCostDisplay() {
         const wasFlowing = existingEdge.flowing;
         existingEdge.on = edge.on;
         existingEdge.flowing = edge.flowing;
+        applyEdgeWarpData(existingEdge, edge.warp ?? edge, nodes.get(existingEdge.source), nodes.get(existingEdge.target));
         
         // Track flow start time for initialization animation
         if (!wasFlowing && existingEdge.flowing) {
@@ -2803,11 +3184,6 @@ function hideReverseCostDisplay() {
       juiceText.destroy();
       nodeJuiceTexts.delete(nodeId);
     }
-    const popLabel = popReadyLabels.get(nodeId);
-    if (popLabel) {
-      popLabel.destroy();
-      popReadyLabels.delete(nodeId);
-    }
   }
 
   function removeEdges(edgeIds) {
@@ -2831,55 +3207,6 @@ function hideReverseCostDisplay() {
       }
     });
     removeEdges(edgeIds);
-  }
-
-  function spawnPopBurst(nodeSnapshot) {
-    if (!sceneRef || !nodeSnapshot) return;
-    const [sx, sy] = worldToScreen(nodeSnapshot.x, nodeSnapshot.y);
-
-    const inner = sceneRef.add.circle(sx, sy, 6, 0xfff4aa, 0.55)
-      .setOrigin(0.5, 0.5)
-      .setDepth(1250);
-    const ring = sceneRef.add.circle(sx, sy, 10)
-      .setStrokeStyle(3, 0xffd36f, 0.95)
-      .setFillStyle(0xffd36f, 0)
-      .setDepth(1249);
-
-    sceneRef.tweens.add({
-      targets: inner,
-      scale: { from: 0.4, to: 1.7 },
-      alpha: { from: 0.65, to: 0 },
-      duration: 220,
-      ease: 'Cubic.easeOut',
-      onComplete: () => inner.destroy(),
-    });
-
-    sceneRef.tweens.add({
-      targets: ring,
-      scale: { from: 0.6, to: 2.4 },
-      alpha: { from: 0.9, to: 0 },
-      duration: 260,
-      ease: 'Cubic.easeOut',
-      onComplete: () => ring.destroy(),
-    });
-  }
-
-  function isNodePopReady(node) {
-    if (!node) return false;
-    if (gameMode !== 'pop') return false;
-    if (node.owner !== myPlayerId) return false;
-    const size = Number(node.size ?? 0);
-    return size >= (nodeMaxJuice - POP_READY_TOLERANCE);
-  }
-
-  function attemptPopNode(nodeId) {
-    const node = nodes.get(nodeId);
-    if (!isNodePopReady(node)) return false;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
-    if (phase !== 'playing') return false;
-    const token = localStorage.getItem('token');
-    ws.send(JSON.stringify({ type: 'popNode', nodeId, token }));
-    return true;
   }
 
   function handleNodeDestroyed(msg) {
@@ -2919,56 +3246,13 @@ function hideReverseCostDisplay() {
     // Reset destroy mode on successful node destruction
     if (activeAbility === 'destroy') {
       activeAbility = null;
-      bridgeFirstNode = null;
+      clearBridgeSelection();
     }
-  }
-
-  function handleNodePopped(msg) {
-    const nodeId = Number(msg.nodeId);
-    if (!Number.isFinite(nodeId)) return;
-
-    const nodeSnapshot = msg.nodeSnapshot || nodes.get(nodeId);
-
-    if (nodes.has(nodeId)) {
-      nodes.delete(nodeId);
-    }
-    cleanupNodeVisuals(nodeId);
-
-    if (Array.isArray(msg.removedEdges)) {
-      removeEdges(msg.removedEdges.map(Number));
-    } else {
-      fallbackRemoveEdgesForNode(nodeId);
-    }
-
-    if (msg.playerId === myPlayerId && Number.isFinite(msg.reward) && msg.reward > 0 && nodeSnapshot) {
-      const scale = view ? Math.min(view.scaleX, view.scaleY) : 1;
-      const radiusPx = calculateNodeRadius(nodeSnapshot, scale || 1);
-      const radiusWorld = (scale && scale > 0) ? radiusPx / scale : 0;
-      const worldOffset = persistentNumbers ? -(radiusWorld + 0.6) : 0;
-      createMoneyIndicator(
-        nodeSnapshot.x,
-        nodeSnapshot.y,
-        `+$${formatCost(msg.reward)}`,
-        0xffd700,
-        2000,
-        { worldOffset, floatDistance: 28 }
-      );
-      playCaptureDing();
-    }
-
-    spawnPopBurst(nodeSnapshot);
-    playPopBurst();
-
-    redrawStatic();
   }
 
   function handleDestroyError(msg) {
     // Show error message to the player
     showErrorMessage(msg.message || "Can't destroy this node!");
-  }
-
-  function handlePopError(msg) {
-    showErrorMessage(msg.message || 'Cannot pop this node right now');
   }
 
   function handleNodeCaptured(msg) {
@@ -3075,9 +3359,6 @@ function hideReverseCostDisplay() {
       // Hide toggles grid when menu is visible
       const togglesGrid = document.getElementById('inGameToggles');
       if (togglesGrid) togglesGrid.style.display = 'none';
-      popReadyLabels.forEach(label => {
-        if (label) label.setVisible(false);
-      });
       // Hide UI bars when menu is visible
       if (topUiBar) topUiBar.style.display = 'none';
       if (bottomUiBar) bottomUiBar.style.display = 'none';
@@ -3088,10 +3369,8 @@ function hideReverseCostDisplay() {
     if (topUiBar) topUiBar.style.display = 'block';
     if (bottomUiBar) bottomUiBar.style.display = 'block';
     
-    // Draw border box around play area
-    if (SHOW_PLAY_AREA_BORDER) {
-      drawPlayAreaBorder();
-    }
+    // Draw border box around play area (warp border handles inner toggle)
+    drawPlayAreaBorder();
     
     // Show gold display when graph is being drawn and we have nodes/game data
     if (goldDisplay && nodes.size > 0) {
@@ -3116,8 +3395,9 @@ function hideReverseCostDisplay() {
       drawEdge(e, s, t, id);
 
       // Edge flow labels at midpoint
-      const midX = (s.x + t.x) / 2;
-      const midY = (s.y + t.y) / 2;
+      const midPoint = getEdgeMidpointWorld(e);
+      const midX = midPoint ? midPoint.x : (s.x + t.x) / 2;
+      const midY = midPoint ? midPoint.y : (s.y + t.y) / 2;
       const [sx, sy] = worldToScreen(midX, midY);
       let textObj = edgeFlowTexts.get(id);
       if (persistentEdgeFlow && (e.lastTransfer || 0) > 0) {
@@ -3200,82 +3480,6 @@ function hideReverseCostDisplay() {
       if (juiceVal >= nodeMaxJuice - 1e-6) {
         graphicsNodes.lineStyle(4, 0x000000, 1);
         graphicsNodes.strokeCircle(nx, ny, r + 2);
-      }
-
-      if (gameMode === 'pop' && isNodePopReady(n) && phase === 'playing') {
-        const highlightRadius = Math.max(1, r);
-        
-        // When hovering and in bridge building mode (right-click), show normal highlights
-        const inBridgeMode = activeAbility === 'bridge1way';
-        const isHovering = hoveredNodeId === id;
-        
-        if (isHovering && !inBridgeMode) {
-          // "Ready to burst" effect: make bubble look more volatile
-          // Add a pulsing outer glow
-          const pulseTime = Date.now() / 300;
-          const pulseAlpha = 0.3 + Math.sin(pulseTime) * 0.15;
-          const pulseSize = highlightRadius + 2 + Math.sin(pulseTime * 1.5) * 1.5;
-          
-          graphicsNodes.fillStyle(0xffd700, pulseAlpha);
-          graphicsNodes.fillCircle(nx, ny, pulseSize);
-          
-          // Add unstable "wobble" highlights around the edge
-          for (let i = 0; i < 8; i++) {
-            const angle = (i / 8) * Math.PI * 2 + pulseTime * 0.5;
-            const offsetDist = highlightRadius * 0.8;
-            const wobbleX = nx + Math.cos(angle) * offsetDist;
-            const wobbleY = ny + Math.sin(angle) * offsetDist;
-            const wobbleSize = highlightRadius * 0.15;
-            graphicsNodes.fillStyle(0xffffff, 0.4 + Math.sin(pulseTime + i) * 0.2);
-            graphicsNodes.fillCircle(wobbleX, wobbleY, wobbleSize);
-          }
-        } else {
-          // Normal bubble sheen effect (not hovering or in bridge mode)
-          graphicsNodes.fillStyle(0xffffff, 0.16);
-          graphicsNodes.fillCircle(nx, ny, highlightRadius);
-
-          const sheenRadius = highlightRadius * 0.75;
-          graphicsNodes.fillStyle(0xffffff, 0.35);
-          graphicsNodes.fillCircle(nx, ny - highlightRadius * 0.35, sheenRadius);
-
-          graphicsNodes.fillStyle(0xffffff, 0.18);
-          graphicsNodes.fillCircle(nx + highlightRadius * 0.25, ny - highlightRadius * 0.2, highlightRadius * 0.28);
-        }
-
-        // Show dollar amount INSIDE the node
-        const labelText = `$${formatCost(popReward)}`;
-        let hint = popReadyLabels.get(id);
-        // Position text at the center of the node
-        const hintY = ny;
-        if (!hint) {
-          hint = sceneRef.add.text(nx, hintY, labelText, {
-            font: '14px monospace',
-            color: '#ffd700',
-            stroke: '#000000',
-            strokeThickness: 3,
-            align: 'center',
-          });
-          hint.setOrigin(0.5, 0.5);
-          hint.setDepth(1200);
-          popReadyLabels.set(id, hint);
-        } else {
-          if (hint.text !== labelText) hint.setText(labelText);
-          hint.setColor('#ffd700');
-          hint.setStroke('#000000', 3);
-          hint.setPosition(nx, hintY);
-        }
-        if (hint && !hint.visible) hint.setVisible(true);
-
-        // Only show ring highlight when in bridge building mode (right-click)
-        if (isHovering && inBridgeMode) {
-          graphicsNodes.lineStyle(4, 0xffeb8a, 0.95);
-          graphicsNodes.strokeCircle(nx, ny, highlightRadius + 6);
-          graphicsNodes.lineStyle(2, 0xffc04d, 0.9);
-          graphicsNodes.strokeCircle(nx, ny, highlightRadius + 11);
-        }
-      } else {
-        const hint = popReadyLabels.get(id);
-        if (hint && hint.visible) hint.setVisible(false);
       }
 
       // Hover effect: player's color border when eligible for starting node pick
@@ -3450,15 +3654,25 @@ function hideReverseCostDisplay() {
       }
     }
 
+    const warpViewActive = (gameMode === 'warp' || selectedMode === 'warp');
+    if (warpViewActive) {
+      const padX = (Math.max(1, maxX - minX)) * WARP_MARGIN_RATIO_X;
+      const padY = (Math.max(1, maxY - minY)) * WARP_MARGIN_RATIO_Y;
+      minX -= padX;
+      maxX += padX;
+      minY -= padY;
+      maxY += padY;
+    }
+
     const topBarHeight = (topUiBar && topUiBar.style.display !== 'none') ? (topUiBar.offsetHeight || 0) : 0;
     const bottomBarHeight = (bottomUiBar && bottomUiBar.style.display !== 'none') ? (bottomUiBar.offsetHeight || 0) : 0;
-    const baseTopPadding = 52;
-    const baseBottomPadding = 32;
-    const verticalMargin = 8;
+    const baseTopPadding = warpViewActive ? 0 : 52;
+    const baseBottomPadding = warpViewActive ? 0 : 32;
+    const verticalMargin = warpViewActive ? 2 : 8;
     const topPadding = Math.max(baseTopPadding, topBarHeight) + verticalMargin;
     const bottomPadding = Math.max(baseBottomPadding, bottomBarHeight) + verticalMargin;
-    const sidePadding = 40;
-    const rightReservedPx = 24; // space for gold number and margins
+    const sidePadding = warpViewActive ? 12 : 40;
+    const rightReservedPx = warpViewActive ? 12 : 24; // space for gold number and margins
     const extraSide = rightReservedPx / 2;
     const leftPadding = sidePadding + extraSide;
     const rightPadding = sidePadding + extraSide;
@@ -3487,6 +3701,8 @@ function hideReverseCostDisplay() {
     const minY = Number.isFinite(screen.minY) ? screen.minY : 0;
     const maxX = minX + (Number.isFinite(screen.width) ? screen.width : 100);
     const maxY = minY + (Number.isFinite(screen.height) ? screen.height : 100);
+    const boardWidth = Math.max(1, maxX - minX);
+    const boardHeight = Math.max(1, maxY - minY);
     
     // Convert corners to screen coordinates
     const [topLeftX, topLeftY] = worldToScreen(minX, minY);
@@ -3494,15 +3710,60 @@ function hideReverseCostDisplay() {
     const [bottomRightX, bottomRightY] = worldToScreen(maxX, maxY);
     const [bottomLeftX, bottomLeftY] = worldToScreen(minX, maxY);
     
-    // Draw border rectangle
-    graphicsEdges.lineStyle(4, 0x888888, 1); // Grey border, 4px thick
-    graphicsEdges.beginPath();
-    graphicsEdges.moveTo(topLeftX, topLeftY);
-    graphicsEdges.lineTo(topRightX, topRightY);
-    graphicsEdges.lineTo(bottomRightX, bottomRightY);
-    graphicsEdges.lineTo(bottomLeftX, bottomLeftY);
-    graphicsEdges.closePath();
-    graphicsEdges.strokePath();
+    // Draw border rectangle (optional)
+    if (SHOW_PLAY_AREA_BORDER) {
+      graphicsEdges.lineStyle(4, 0x888888, 1); // Grey border, 4px thick
+      graphicsEdges.beginPath();
+      graphicsEdges.moveTo(topLeftX, topLeftY);
+      graphicsEdges.lineTo(topRightX, topRightY);
+      graphicsEdges.lineTo(bottomRightX, bottomRightY);
+      graphicsEdges.lineTo(bottomLeftX, bottomLeftY);
+      graphicsEdges.closePath();
+      graphicsEdges.strokePath();
+    }
+
+    // Compute & draw warp border (purple) when active
+    if (gameMode === 'warp' || selectedMode === 'warp') {
+      const marginX = boardWidth * WARP_MARGIN_RATIO_X;
+      const marginY = boardHeight * WARP_MARGIN_RATIO_Y;
+      const warpMinX = minX - marginX;
+      const warpMaxX = maxX + marginX;
+      const warpMinY = minY - marginY;
+      const warpMaxY = maxY + marginY;
+
+      warpBoundsWorld = {
+        minX: warpMinX,
+        minY: warpMinY,
+        maxX: warpMaxX,
+        maxY: warpMaxY,
+        width: Math.max(1, warpMaxX - warpMinX),
+        height: Math.max(1, warpMaxY - warpMinY),
+      };
+
+      const [warpTopLeftX, warpTopLeftY] = worldToScreen(warpMinX, warpMinY);
+      const [warpTopRightX, warpTopRightY] = worldToScreen(warpMaxX, warpMinY);
+      const [warpBottomRightX, warpBottomRightY] = worldToScreen(warpMaxX, warpMaxY);
+      const [warpBottomLeftX, warpBottomLeftY] = worldToScreen(warpMinX, warpMaxY);
+
+      warpBoundsScreen = {
+        minX: Math.min(warpTopLeftX, warpBottomLeftX, warpTopRightX, warpBottomRightX),
+        maxX: Math.max(warpTopLeftX, warpBottomLeftX, warpTopRightX, warpBottomRightX),
+        minY: Math.min(warpTopLeftY, warpBottomLeftY, warpTopRightY, warpBottomRightY),
+        maxY: Math.max(warpTopLeftY, warpBottomLeftY, warpTopRightY, warpBottomRightY),
+      };
+
+      graphicsEdges.lineStyle(5, WARP_BORDER_COLOR, 0.92);
+      graphicsEdges.beginPath();
+      graphicsEdges.moveTo(warpTopLeftX, warpTopLeftY);
+      graphicsEdges.lineTo(warpTopRightX, warpTopRightY);
+      graphicsEdges.lineTo(warpBottomRightX, warpBottomRightY);
+      graphicsEdges.lineTo(warpBottomLeftX, warpBottomLeftY);
+      graphicsEdges.closePath();
+      graphicsEdges.strokePath();
+    } else {
+      warpBoundsWorld = null;
+      warpBoundsScreen = null;
+    }
   }
 
   function hexToInt(color) {
@@ -3582,11 +3843,424 @@ function hideReverseCostDisplay() {
     return false;
   }
 
+  function getGameCanvas() {
+    if (game && game.canvas) return game.canvas;
+    const domCanvas = document.querySelector('#game canvas');
+    return domCanvas || null;
+  }
+
+  function ensureVirtualCursorElement() {
+    if (virtualCursorEl) return virtualCursorEl;
+    const wrapper = document.createElement('div');
+    wrapper.id = 'virtualWarpCursor';
+    Object.assign(wrapper.style, {
+      position: 'fixed',
+      left: '0px',
+      top: '0px',
+      width: '18px',
+      height: '26px',
+      pointerEvents: 'none',
+      zIndex: 100000,
+      display: 'none',
+      transform: 'translate3d(-9999px, -9999px, 0)',
+      filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.45))',
+    });
+
+    const svgNS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNS, 'svg');
+    svg.setAttribute('viewBox', '0 0 18 26');
+    svg.setAttribute('width', '18');
+    svg.setAttribute('height', '26');
+
+    const path = document.createElementNS(svgNS, 'path');
+    path.setAttribute('d', 'M0 0 L0 20 L5 15 L9 25 L12 23 L8 13 L18 13 Z');
+    path.setAttribute('fill', VIRTUAL_CURSOR_COLOR);
+    path.setAttribute('stroke', '#2d1151');
+    path.setAttribute('stroke-width', '1.2');
+    path.setAttribute('stroke-linejoin', 'round');
+    svg.appendChild(path);
+
+    wrapper.appendChild(svg);
+    document.body.appendChild(wrapper);
+    virtualCursorEl = wrapper;
+    return virtualCursorEl;
+  }
+
+  function updateVirtualCursorVisual() {
+    const el = ensureVirtualCursorElement();
+    if (!pointerLockActive) {
+      el.style.display = 'none';
+      return;
+    }
+    el.style.display = 'block';
+    el.style.transform = `translate3d(${virtualCursorScreenX}px, ${virtualCursorScreenY}px, 0)`;
+  }
+
+  function updateMouseWorldFromVirtualCursor() {
+    const [wx, wy] = screenToWorld(virtualCursorScreenX, virtualCursorScreenY);
+    mouseWorldX = wx;
+    mouseWorldY = wy;
+    updateVirtualCursorVisual();
+  }
+
+  function syncVirtualCursorToEvent(ev) {
+    if (ev && !pointerLockActive) {
+      lastPointerClientX = ev.clientX;
+      lastPointerClientY = ev.clientY;
+      virtualCursorScreenX = ev.clientX;
+      virtualCursorScreenY = ev.clientY;
+    }
+    updateMouseWorldFromVirtualCursor();
+  }
+
+  function handleSecondaryPointer(ev) {
+    if (!ev) return;
+    ev.preventDefault();
+    const menuVisible = !document.getElementById('menu')?.classList.contains('hidden');
+    if (menuVisible) {
+      lastPointerDownButton = null;
+      return;
+    }
+    if (gameEnded) {
+      lastPointerDownButton = null;
+      return;
+    }
+    maybeEnableVirtualCursor(ev);
+    syncVirtualCursorToEvent(ev);
+
+    if (isReplayActive()) {
+      lastPointerDownButton = null;
+      return;
+    }
+
+    const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
+    const wx = mouseWorldX;
+    const wy = mouseWorldY;
+
+    if (handleBridgeBuilding(wx, wy, baseScale, true)) {
+      redrawStatic();
+      lastPointerDownButton = -1;
+      return;
+    }
+
+    const nodeId = pickNearestNode(wx, wy, 18 / baseScale);
+    if (nodeId != null) {
+      const node = nodes.get(nodeId);
+      if (node && activeAbility !== 'reverse') {
+        activeAbility = 'bridge1way';
+        bridgeFirstNode = nodeId;
+        hideReverseCostDisplay();
+        hideBridgeCostDisplay();
+        redrawStatic();
+        lastPointerDownButton = -1;
+        return;
+      }
+    }
+
+    const edgeId = pickEdgeNear(wx, wy, 14 / baseScale);
+    if (edgeId != null && ws && ws.readyState === WebSocket.OPEN) {
+      const edge = edges.get(edgeId);
+      if (edge) {
+        if (!canReverseEdge(edge)) {
+          const sourceNode = nodes.get(edge.source);
+          if (sourceNode && sourceNode.owner != null && sourceNode.owner !== myPlayerId) {
+            showErrorMessage('Pipe controlled by Opponent');
+          }
+        } else {
+          const sourceNode = nodes.get(edge.source);
+          const targetNode = nodes.get(edge.target);
+          if (sourceNode && targetNode) {
+            const cost = calculateBridgeCost(sourceNode, targetNode);
+            if (goldValue >= cost) {
+              const token = localStorage.getItem('token');
+              ws.send(JSON.stringify({ type: 'reverseEdge', edgeId, cost, token }));
+            } else {
+              showErrorMessage('Not enough money', 'money');
+            }
+          }
+        }
+      }
+    }
+
+    lastPointerDownButton = -1;
+  }
+
+  function shouldWarpCursor() {
+    if (!pointerLockActive) return false;
+    if (activeAbility !== 'bridge1way') return false;
+    if (!isWarpFrontendActive()) return false;
+    if (!warpBoundsScreen) return false;
+    const width = warpBoundsScreen.maxX - warpBoundsScreen.minX;
+    const height = warpBoundsScreen.maxY - warpBoundsScreen.minY;
+    return width > 0 && height > 0;
+  }
+
+  function applyWarpWrapToScreen(x, y) {
+    if (!shouldWarpCursor()) return { x, y };
+    const bounds = warpBoundsScreen;
+    const width = bounds.maxX - bounds.minX;
+    const height = bounds.maxY - bounds.minY;
+    let nextX = x;
+    let nextY = y;
+    const originalX = x;
+    const originalY = y;
+    let horizontalWrap = false;
+    let verticalWrap = false;
+    let wrapAxis = null;
+    let wrapDirection = null;
+
+    if (width > 0) {
+      if (originalX < bounds.minX) {
+        const delta = bounds.minX - nextX;
+        const wraps = Math.floor(delta / width) + 1;
+        nextX += wraps * width;
+        horizontalWrap = true;
+        wrapAxis = 'horizontal';
+        wrapDirection = 'leftToRight';
+      } else if (originalX > bounds.maxX) {
+        const delta = nextX - bounds.maxX;
+        const wraps = Math.floor(delta / width) + 1;
+        nextX -= wraps * width;
+        horizontalWrap = true;
+        wrapAxis = 'horizontal';
+        wrapDirection = 'rightToLeft';
+      }
+    }
+
+    if (height > 0) {
+      if (originalY < bounds.minY) {
+        const delta = bounds.minY - nextY;
+        const wraps = Math.floor(delta / height) + 1;
+        nextY += wraps * height;
+        verticalWrap = true;
+        if (wrapAxis) {
+          wrapAxis = 'mixed';
+          wrapDirection = null;
+        } else {
+          wrapAxis = 'vertical';
+          wrapDirection = 'topToBottom';
+        }
+      } else if (originalY > bounds.maxY) {
+        const delta = nextY - bounds.maxY;
+        const wraps = Math.floor(delta / height) + 1;
+        nextY -= wraps * height;
+        verticalWrap = true;
+        if (wrapAxis) {
+          wrapAxis = 'mixed';
+          wrapDirection = null;
+        } else {
+          wrapAxis = 'vertical';
+          wrapDirection = 'bottomToTop';
+        }
+      }
+    }
+
+    const wrapOccurred = horizontalWrap || verticalWrap;
+    const enforceLimit = bridgeFirstNode !== null;
+
+    if (wrapOccurred && enforceLimit) {
+      if (warpWrapUsed) {
+        const returningSameEdge = (
+          wrapAxis && wrapAxis !== 'mixed' &&
+          lastWarpAxis === wrapAxis &&
+          lastWarpDirection && wrapDirection &&
+          lastWarpDirection !== wrapDirection
+        );
+        if (returningSameEdge) {
+          warpWrapUsed = false;
+          lastWarpAxis = null;
+          lastWarpDirection = null;
+          wrapAxis = null;
+          wrapDirection = null;
+        } else {
+          const now = Date.now();
+          if (now - lastDoubleWarpWarningTime > 600) {
+            showErrorMessage('no double warping');
+            lastDoubleWarpWarningTime = now;
+          }
+          return clampCursorToWarpBounds(x, y);
+        }
+      }
+      if (!warpWrapUsed && wrapAxis !== null) {
+        warpWrapUsed = true;
+        lastWarpAxis = wrapAxis;
+        lastWarpDirection = wrapDirection;
+      }
+    }
+
+    return { x: nextX, y: nextY };
+  }
+
+  function clampCursorToViewport(x, y) {
+    const maxX = window.innerWidth - 1;
+    const maxY = window.innerHeight - 1;
+    return {
+      x: Math.max(0, Math.min(maxX, x)),
+      y: Math.max(0, Math.min(maxY, y)),
+    };
+  }
+
+  function clampCursorToWarpBounds(x, y) {
+    if (!warpBoundsScreen) return { x, y };
+    return {
+      x: Math.max(warpBoundsScreen.minX, Math.min(warpBoundsScreen.maxX, x)),
+      y: Math.max(warpBoundsScreen.minY, Math.min(warpBoundsScreen.maxY, y)),
+    };
+  }
+
+  function resolveVirtualUiTarget() {
+    if (!pointerLockActive) return null;
+    const element = document.elementFromPoint(virtualCursorScreenX, virtualCursorScreenY);
+    if (!element) return null;
+    if (virtualCursorEl && (element === virtualCursorEl || virtualCursorEl.contains(element))) {
+      return null;
+    }
+    const canvas = getGameCanvas();
+    if (canvas && (element === canvas || canvas.contains(element))) {
+      return null;
+    }
+    if (element.closest && element.closest('#game')) {
+      return null;
+    }
+
+    const toggle = element.closest ? element.closest('.toggle-switch') : null;
+    if (toggle) return toggle;
+
+    const button = element.closest ? element.closest('button') : null;
+    if (button) return button;
+
+    const interactive = element.closest ? element.closest('input, select, textarea, [role="button"]') : null;
+    return interactive || null;
+  }
+
+  function dispatchVirtualUiClick(target) {
+    if (!target) return;
+    try {
+      if (typeof target.focus === 'function') {
+        target.focus({ preventScroll: true });
+      }
+    } catch (err) {
+      /* ignore focus errors */
+    }
+
+    const syntheticClick = new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      clientX: virtualCursorScreenX,
+      clientY: virtualCursorScreenY,
+      view: window,
+    });
+    syntheticClick.__virtualCursor = true;
+    target.dispatchEvent(syntheticClick);
+  }
+
+  function isEventInsideGameCanvas(ev) {
+    const canvas = getGameCanvas();
+    if (!canvas || !ev) return false;
+    const rect = canvas.getBoundingClientRect();
+    return ev.clientX >= rect.left && ev.clientX <= rect.right && ev.clientY >= rect.top && ev.clientY <= rect.bottom;
+  }
+
+  function maybeEnableVirtualCursor(ev) {
+    if (!ev) return;
+    if (pointerLockActive) return;
+    if (!isEventInsideGameCanvas(ev)) return;
+    if (gameEnded) return;
+    const menuVisible = !document.getElementById('menu')?.classList.contains('hidden');
+    if (menuVisible) return;
+    if (gameMode !== 'warp' && selectedMode !== 'warp') return;
+    const canvas = getGameCanvas();
+    if (!canvas || typeof canvas.requestPointerLock !== 'function') return;
+    if (document.pointerLockElement === canvas) return;
+    lastPointerClientX = ev.clientX;
+    lastPointerClientY = ev.clientY;
+    virtualCursorScreenX = ev.clientX;
+    virtualCursorScreenY = ev.clientY;
+    updateMouseWorldFromVirtualCursor();
+    canvas.requestPointerLock();
+  }
+
+  function releaseVirtualCursor() {
+    if (document.pointerLockElement) {
+      document.exitPointerLock();
+    }
+    updateVirtualCursorVisual();
+  }
+
+  function handlePointerLockStateChange() {
+    const canvas = getGameCanvas();
+    const locked = document.pointerLockElement === canvas;
+    pointerLockActive = locked;
+    if (!locked && canvas) {
+      // Sync screen position to where the pointer reappears (best effort)
+      virtualCursorScreenX = lastPointerClientX;
+      virtualCursorScreenY = lastPointerClientY;
+    }
+    if (!locked) {
+      warpWrapUsed = false;
+      lastDoubleWarpWarningTime = 0;
+      lastWarpAxis = null;
+      lastWarpDirection = null;
+    }
+    updateMouseWorldFromVirtualCursor();
+  }
+
+  document.addEventListener('pointerlockchange', handlePointerLockStateChange);
+  document.addEventListener('pointerlockerror', handlePointerLockStateChange);
+
+  window.addEventListener('pointerdown', (ev) => {
+    pendingVirtualUiClickTarget = null;
+    const pointerType = ev.pointerType || 'mouse';
+    if (pointerType !== 'mouse') return;
+    lastPointerDownButton = ev.button;
+    if (ev.button === 2) {
+      handleSecondaryPointer(ev);
+      return;
+    }
+    if (ev.button === 0) {
+      if (pointerLockActive) {
+        const uiTarget = resolveVirtualUiTarget();
+        if (uiTarget) {
+          pendingVirtualUiClickTarget = uiTarget;
+          syncVirtualCursorToEvent(ev);
+          ev.preventDefault();
+          ev.stopPropagation();
+          return;
+        }
+      }
+      maybeEnableVirtualCursor(ev);
+      syncVirtualCursorToEvent(ev);
+    }
+  });
+
   // Input: during picking, click to claim a node once; during playing, edge interactions allowed
   window.addEventListener('click', (ev) => {
+    if (ev.__virtualCursor) {
+      return;
+    }
+    if (pendingVirtualUiClickTarget) {
+      const target = pendingVirtualUiClickTarget;
+      pendingVirtualUiClickTarget = null;
+      dispatchVirtualUiClick(target);
+      ev.preventDefault();
+      ev.stopPropagation();
+      ev.stopImmediatePropagation?.();
+      return;
+    }
+    if (lastPointerDownButton != null && lastPointerDownButton !== 0) {
+      lastPointerDownButton = null;
+      return;
+    }
+    lastPointerDownButton = null;
+    const menuVisible = !document.getElementById('menu')?.classList.contains('hidden');
+    if (menuVisible) return;
+    maybeEnableVirtualCursor(ev);
+    syncVirtualCursorToEvent(ev);
     if (isReplayActive()) return;
     if (gameEnded) return;
-    const [wx, wy] = screenToWorld(ev.clientX, ev.clientY);
+    const wx = mouseWorldX;
+    const wy = mouseWorldY;
     const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
     
     handleSingleClick(ev, wx, wy, baseScale);
@@ -3606,27 +4280,47 @@ function hideReverseCostDisplay() {
         if (bridgeFirstNode === null) {
           // Start bridge building from any node
           bridgeFirstNode = nodeId;
+          warpWrapUsed = false;
+          lastDoubleWarpWarningTime = 0;
+          lastWarpAxis = null;
+          lastWarpDirection = null;
           return true; // Handled
         } else if (bridgeFirstNode !== nodeId) {
           // Complete bridge building - second node can be any node
           const firstNode = nodes.get(bridgeFirstNode);
           if (!firstNode) {
-            bridgeFirstNode = null;
+            clearBridgeSelection();
             hideBridgeCostDisplay();
             return true;
           }
           const cost = calculateBridgeCost(firstNode, node);
           
           if (goldValue >= cost && ws && ws.readyState === WebSocket.OPEN) {
-            
+
             const token = localStorage.getItem('token');
-            ws.send(JSON.stringify({
+            const warpInfo = buildWarpInfoForBridge(firstNode, node);
+            const warpInfoPayload = warpInfo ? {
+              axis: warpInfo.axis,
+              segments: Array.isArray(warpInfo.segments)
+                ? warpInfo.segments.map((segment) => [
+                    Number(segment[0]),
+                    Number(segment[1]),
+                    Number(segment[2]),
+                    Number(segment[3])
+                  ])
+                : []
+            } : null;
+
+            const buildBridgePayload = {
               type: 'buildBridge',
               fromNodeId: bridgeFirstNode,
               toNodeId: nodeId,
               cost: cost,
+              warpInfo: warpInfoPayload,
               token: token
-            }));
+            };
+
+            ws.send(JSON.stringify(buildBridgePayload));
             // Don't reset bridge building state here - wait for server response
             return true; // Handled
           } else if (goldValue < cost) {
@@ -3636,7 +4330,7 @@ function hideReverseCostDisplay() {
           }
         } else {
           // Clicked same node, cancel selection
-          bridgeFirstNode = null;
+          clearBridgeSelection();
           hideBridgeCostDisplay();
           return true; // Handled
         }
@@ -3646,7 +4340,7 @@ function hideReverseCostDisplay() {
     // If we get here, it means we clicked on empty space, an edge, or an invalid node
     // Cancel bridge building
     activeAbility = null;
-    bridgeFirstNode = null;
+    clearBridgeSelection();
     hideBridgeCostDisplay();
     hideReverseCostDisplay();
     return true; // Handled
@@ -3718,10 +4412,6 @@ function hideReverseCostDisplay() {
       return; // Return after handling starting node pick
     }
 
-    if (nodeId != null && attemptPopNode(nodeId)) {
-      return;
-    }
-
     // Handle all other clicks (node flow targeting, edge clicks, etc.)
     if (ws && ws.readyState === WebSocket.OPEN) {
       const token = localStorage.getItem('token');
@@ -3762,58 +4452,7 @@ function hideReverseCostDisplay() {
 
   // Right-click: activate new pipe ability on node, complete bridge building, or reverse edge direction
   window.addEventListener('contextmenu', (ev) => {
-    if (isReplayActive()) return;
-    if (gameEnded) return;
-    const [wx, wy] = screenToWorld(ev.clientX, ev.clientY);
-    const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
-    
-    // Handle bridge building mode first
-    if (handleBridgeBuilding(wx, wy, baseScale, true)) {
-      ev.preventDefault();
-      return; // Bridge building was handled
-    }
-    
-    // Check if we're right-clicking on a node to start bridge building
-    const nodeId = pickNearestNode(wx, wy, 18 / baseScale);
-    if (nodeId != null) {
-      const node = nodes.get(nodeId);
-      if (node && activeAbility !== 'reverse') {
-        ev.preventDefault();
-        activeAbility = 'bridge1way';
-        bridgeFirstNode = nodeId;
-        hideReverseCostDisplay();
-        hideBridgeCostDisplay();
-        redrawStatic();
-        return;
-      }
-    }
-    
-    // Fall back to edge reversal if not on a valid node or not in bridge building mode
-    const edgeId = pickEdgeNear(wx, wy, 14 / baseScale);
-    if (edgeId != null && ws && ws.readyState === WebSocket.OPEN) {
-      ev.preventDefault();
-      const edge = edges.get(edgeId);
-      if (edge) {
-        if (!canReverseEdge(edge)) {
-          const sourceNode = nodes.get(edge.source);
-          if (sourceNode && sourceNode.owner != null && sourceNode.owner !== myPlayerId) {
-            showErrorMessage('Pipe controlled by Opponent');
-          }
-        } else {
-          const sourceNode = nodes.get(edge.source);
-          const targetNode = nodes.get(edge.target);
-          if (sourceNode && targetNode) {
-            const cost = calculateBridgeCost(sourceNode, targetNode);
-            if (goldValue >= cost) {
-              const token = localStorage.getItem('token');
-              ws.send(JSON.stringify({ type: 'reverseEdge', edgeId, cost, token }));
-            } else {
-              showErrorMessage('Not enough money', 'money');
-            }
-          }
-        }
-      }
-    }
+    ev.preventDefault();
   });
 
   // Keyboard shortcuts: only support Escape to cancel transient modes
@@ -3824,15 +4463,42 @@ function hideReverseCostDisplay() {
     if (ev.key.toLowerCase() === 'escape') {
       if (activeAbility) {
         activeAbility = null;
-        bridgeFirstNode = null;
+        clearBridgeSelection();
         hideBridgeCostDisplay();
         hideReverseCostDisplay();
+      }
+      if (pointerLockActive) {
+        releaseVirtualCursor();
       }
     }
   });
 
   // Mouse move: handle hover effects
   window.addEventListener('mousemove', (ev) => {
+    if (pointerLockActive) {
+      const movementX = Number.isFinite(ev.movementX) ? ev.movementX : (Number.isFinite(ev.mozMovementX) ? ev.mozMovementX : (Number.isFinite(ev.webkitMovementX) ? ev.webkitMovementX : 0));
+      const movementY = Number.isFinite(ev.movementY) ? ev.movementY : (Number.isFinite(ev.mozMovementY) ? ev.mozMovementY : (Number.isFinite(ev.webkitMovementY) ? ev.webkitMovementY : 0));
+      const allowWarp = shouldWarpCursor();
+      if (allowWarp) {
+        const wrapped = applyWarpWrapToScreen(virtualCursorScreenX + movementX, virtualCursorScreenY + movementY);
+        virtualCursorScreenX = wrapped.x;
+        virtualCursorScreenY = wrapped.y;
+      } else {
+        const clamped = clampCursorToViewport(virtualCursorScreenX + movementX, virtualCursorScreenY + movementY);
+        virtualCursorScreenX = clamped.x;
+        virtualCursorScreenY = clamped.y;
+      }
+      lastPointerClientX = virtualCursorScreenX;
+      lastPointerClientY = virtualCursorScreenY;
+    } else {
+      lastPointerClientX = ev.clientX;
+      lastPointerClientY = ev.clientY;
+      virtualCursorScreenX = ev.clientX;
+      virtualCursorScreenY = ev.clientY;
+    }
+
+    updateMouseWorldFromVirtualCursor();
+
     if (replayMode) {
       if (hoveredNodeId !== null || hoveredEdgeId !== null) {
         hoveredNodeId = null;
@@ -3846,10 +4512,8 @@ function hideReverseCostDisplay() {
     const menuVisible = !document.getElementById('menu')?.classList.contains('hidden');
     if (menuVisible) return; // Don't handle hover when menu is visible
     
-    const [wx, wy] = screenToWorld(ev.clientX, ev.clientY);
-    mouseWorldX = wx;
-    mouseWorldY = wy;
-    
+    const wx = mouseWorldX;
+    const wy = mouseWorldY;
     const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
     
     let needsRedraw = false;
@@ -3935,18 +4599,18 @@ function hideReverseCostDisplay() {
     if (activeAbility === abilityName) {
       // Deactivate
       activeAbility = null;
-      bridgeFirstNode = null;
+      clearBridgeSelection();
       hideBridgeCostDisplay();
       hideReverseCostDisplay();
     } else if (abilityName === 'bridge1way') {
       // Activate bridge building
       activeAbility = abilityName;
-      bridgeFirstNode = null;
+      clearBridgeSelection();
       hideReverseCostDisplay();
     } else if (abilityName === 'destroy') {
       // Activate destroy mode
       activeAbility = abilityName;
-      bridgeFirstNode = null; // reuse for destroy node selection
+      clearBridgeSelection(); // reuse for destroy node selection
       hideBridgeCostDisplay();
       hideReverseCostDisplay();
     }
@@ -4166,6 +4830,7 @@ function hideReverseCostDisplay() {
     if (isReplayActive()) {
       stopReplaySession();
     }
+    releaseVirtualCursor();
     replayMode = false;
     replayStartPending = false;
     replaySessionActive = false;
@@ -4241,7 +4906,7 @@ function hideReverseCostDisplay() {
     if (progressBarInner) progressBarInner.style.justifyContent = 'flex-start';
 
     activeAbility = null;
-    bridgeFirstNode = null;
+    clearBridgeSelection();
     hideBridgeCostDisplay();
     hideReverseCostDisplay();
     clearMoneyIndicators();
@@ -4397,13 +5062,14 @@ function hideReverseCostDisplay() {
     let bestId = null;
     let bestD2 = maxD2;
     for (const [id, e] of edges.entries()) {
-      const a = nodes.get(e.source);
-      const b = nodes.get(e.target);
-      if (!a || !b) continue;
-      const d2 = pointToSegmentDistanceSquared(wx, wy, a.x, a.y, b.x, b.y);
-      if (d2 <= bestD2) {
-        bestId = id;
-        bestD2 = d2;
+      const segments = getEdgeWarpSegments(e);
+      if (!segments.length) continue;
+      for (const seg of segments) {
+        const d2 = pointToSegmentDistanceSquared(wx, wy, seg.sx, seg.sy, seg.ex, seg.ey);
+        if (d2 <= bestD2) {
+          bestId = id;
+          bestD2 = d2;
+        }
       }
     }
     return bestId;
@@ -4425,54 +5091,68 @@ function hideReverseCostDisplay() {
   }
 
   function drawBridgePreview(e, sNode, tNode) {
-    // Similar to drawEdge but draws in gold for preview
-    // Bridge preview always goes from sNode (first selected) to tNode (mouse position)
-    const from = sNode;
-    const to = tNode;
-    
-    // Offset start/end by node radius so edges don't overlap nodes visually
     const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
-    const fromR = Math.max(1, calculateNodeRadius(from, baseScale)) + 1;
-    const toR = Math.max(1, calculateNodeRadius(to, baseScale)) + 1;
-    const [sx0, sy0] = worldToScreen(from.x, from.y);
-    const [tx0, ty0] = worldToScreen(to.x, to.y);
+    const path = computeWarpBridgeSegments(sNode, tNode);
+    if (!path || !Array.isArray(path.segments) || !path.segments.length) {
+      return;
+    }
+
+    // Check if the player can afford this bridge (using warp-aware cost)
+    const cost = calculateBridgeCost(sNode, tNode);
+    const canAfford = goldValue >= cost;
+    const previewColor = canAfford ? ownerToSecondaryColor(myPlayerId) : 0x000000;
+
+    for (const segment of path.segments) {
+      drawBridgePreviewSegment(segment, previewColor, baseScale);
+    }
+  }
+
+  function endpointRadius(endpoint, baseScale) {
+    if (!endpoint || !endpoint.node) return 0;
+    return Math.max(1, calculateNodeRadius(endpoint.node, baseScale)) + 1;
+  }
+
+  function drawBridgePreviewSegment(segment, color, baseScale) {
+    if (!segment) return;
+    const start = segment.start;
+    const end = segment.end;
+    if (!start || !end) return;
+
+    const [sx0, sy0] = worldToScreen(start.x, start.y);
+    const [tx0, ty0] = worldToScreen(end.x, end.y);
     const dx0 = tx0 - sx0;
     const dy0 = ty0 - sy0;
     const len0 = Math.max(1, Math.hypot(dx0, dy0));
     const ux0 = dx0 / len0;
     const uy0 = dy0 / len0;
-    const sx = sx0 + ux0 * fromR;
-    const sy = sy0 + uy0 * fromR;
-    const tx = tx0 - ux0 * toR;
-    const ty = ty0 - uy0 * toR;
+
+    const startRadius = endpointRadius(start, baseScale);
+    const endRadius = endpointRadius(end, baseScale);
+
+    const sx = sx0 + ux0 * startRadius;
+    const sy = sy0 + uy0 * startRadius;
+    const tx = tx0 - ux0 * endRadius;
+    const ty = ty0 - uy0 * endRadius;
 
     const dx = tx - sx;
     const dy = ty - sy;
-    const len = Math.max(1, Math.hypot(dx, dy));
+    const len = Math.hypot(dx, dy);
+    if (!Number.isFinite(len) || len < 2) return;
+
     const ux = dx / len;
     const uy = dy / len;
     const angle = Math.atan2(uy, ux);
 
-    // Check if the player can afford this bridge
-    const cost = calculateBridgeCost(from, to);
-    const canAfford = goldValue >= cost;
-    
-    // Use black when unaffordable, secondary color when affordable
-    const previewColor = canAfford ? ownerToSecondaryColor(myPlayerId) : 0x000000;
-
-    // All edges are now one-way: chain of triangles pointing to target
     const triH = 16;
     const triW = 12;
-    const packedSpacing = triH; // packed: tip touches base of next
+    const packedSpacing = triH;
     const packedCount = Math.max(1, Math.floor(len / packedSpacing));
-    
-    // Calculate actual spacing to ensure last triangle tip touches node edge
     const actualSpacing = len / packedCount;
-    
+
     for (let i = 0; i < packedCount; i++) {
       const cx = sx + (i + 0.5) * actualSpacing * ux;
       const cy = sy + (i + 0.5) * actualSpacing * uy;
-      drawPreviewTriangle(cx, cy, triW, triH, angle, previewColor);
+      drawPreviewTriangle(cx, cy, triW, triH, angle, color);
     }
   }
 
@@ -4497,33 +5177,17 @@ function hideReverseCostDisplay() {
     const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
     const fromR = Math.max(1, calculateNodeRadius(from, baseScale)) + 1;
     const toR = Math.max(1, calculateNodeRadius(to, baseScale)) + 1;
-    const [sx0, sy0] = worldToScreen(from.x, from.y);
-    const [tx0, ty0] = worldToScreen(to.x, to.y);
-    const dx0 = tx0 - sx0;
-    const dy0 = ty0 - sy0;
-    const len0 = Math.max(1, Math.hypot(dx0, dy0));
-    const ux0 = dx0 / len0;
-    const uy0 = dy0 / len0;
-    const sx = sx0 + ux0 * fromR;
-    const sy = sy0 + uy0 * fromR;
-    const tx = tx0 - ux0 * toR;
-    const ty = ty0 - uy0 * toR;
+    const screenPath = buildEdgeScreenPath(e, from, to, fromR, toR);
+    if (!screenPath.length) return;
 
-    const dx = tx - sx;
-    const dy = ty - sy;
-    const len = Math.max(1, Math.hypot(dx, dy));
-    const ux = dx / len;
-    const uy = dy / len;
-    const angle = Math.atan2(uy, ux);
+    const totalLength = screenPath.reduce((sum, seg) => sum + seg.length, 0);
+    if (totalLength <= 0) return;
 
-    // All edges are now one-way: chain of triangles pointing from source to target
+    // All edges are single direction: chain of triangles along the path
     const triH = 16;
     const triW = 12;
-    const packedSpacing = triH; // packed: tip touches base of next
-    const packedCount = Math.max(1, Math.floor(len / packedSpacing));
-    
-    // Calculate actual spacing to ensure last triangle tip touches node edge
-    const actualSpacing = len / packedCount;
+    const packedCount = Math.max(1, Math.floor(totalLength / triH));
+    const actualSpacing = totalLength / packedCount;
     
     const canLeftClick = (from && from.owner === myPlayerId) && !e.building;
     const canReverse = canReverseEdge(e);
@@ -4540,15 +5204,28 @@ function hideReverseCostDisplay() {
         hoverAllowed = true;
       }
     }
+    const buildingProgress = e.building
+      ? Math.max(0, Math.min(1, (e.buildTicksElapsed || 0) / Math.max(1, e.buildTicksRequired || 1)))
+      : 1;
+    const trianglesToDraw = e.building
+      ? Math.max(1, Math.floor(packedCount * buildingProgress))
+      : packedCount;
 
-    // If edge is building: show progressive triangle addition animation from source to target
-    const buildingProgress = e.building ? Math.max(0, Math.min(1, (e.buildTicksElapsed || 0) / Math.max(1, e.buildTicksRequired || 1))) : 1;
-    const visibleTriangles = Math.max(1, Math.floor(packedCount * buildingProgress));
-
-    for (let i = 0; i < (e.building ? visibleTriangles : packedCount); i++) {
-      const cx = sx + (i + 0.5) * actualSpacing * ux;
-      const cy = sy + (i + 0.5) * actualSpacing * uy;
-      drawTriangle(cx, cy, triW, triH, angle, e, from, hoverColor, hoverAllowed, i, packedCount);
+    for (let i = 0; i < trianglesToDraw; i++) {
+      const targetDistance = (i + 0.5) * actualSpacing;
+      let remaining = targetDistance;
+      let segment = screenPath[0];
+      for (let s = 0; s < screenPath.length; s++) {
+        const seg = screenPath[s];
+        if (remaining <= seg.length || s === screenPath.length - 1) {
+          segment = seg;
+          break;
+        }
+        remaining -= seg.length;
+      }
+      const cx = segment.sx + segment.ux * remaining;
+      const cy = segment.sy + segment.uy * remaining;
+      drawTriangle(cx, cy, triW, triH, segment.angle, e, from, hoverColor, hoverAllowed, i, packedCount);
     }
   }
 

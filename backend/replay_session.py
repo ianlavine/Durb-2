@@ -363,6 +363,13 @@ class ReplaySession:
                 if success and state:
                     edge = state.edges.get(edge_id)
                     if edge:
+                        warp_payload = {
+                            "axis": edge.warp_axis,
+                            "segments": [
+                                [sx, sy, ex, ey]
+                                for sx, sy, ex, ey in (edge.warp_segments or [])
+                            ],
+                        }
                         message = {
                             "type": "edgeReversed",
                             "edge": {
@@ -373,6 +380,9 @@ class ReplaySession:
                                 "forward": True,
                                 "on": edge.on,
                                 "flowing": edge.flowing,
+                                "warp": warp_payload,
+                                "warpAxis": warp_payload["axis"],
+                                "warpSegments": warp_payload["segments"],
                             },
                             "replay": True,
                         }
@@ -383,9 +393,30 @@ class ReplaySession:
             from_node = _coerce_int(payload.get("fromNodeId"), -1)
             to_node = _coerce_int(payload.get("toNodeId"), -1)
             cost = _coerce_float(payload.get("cost", 0.0), 0.0)
+            warp_axis = payload.get("warpAxis")
+            warp_segments = payload.get("warpSegments")
+            warp_info = None
+            if warp_axis is not None or warp_segments is not None:
+                warp_info = {
+                    "axis": warp_axis,
+                    "segments": warp_segments,
+                }
             if from_node >= 0 and to_node >= 0:
-                success, new_edge, _, _ = self.engine.handle_build_bridge(token, from_node, to_node, cost)
+                success, new_edge, _, _ = self.engine.handle_build_bridge(
+                    token,
+                    from_node,
+                    to_node,
+                    cost,
+                    warp_info=warp_info,
+                )
                 if success and new_edge:
+                    warp_payload = {
+                        "axis": new_edge.warp_axis,
+                        "segments": [
+                            [sx, sy, ex, ey]
+                            for sx, sy, ex, ey in (new_edge.warp_segments or [])
+                        ],
+                    }
                     message = {
                         "type": "newEdge",
                         "edge": {
@@ -399,6 +430,9 @@ class ReplaySession:
                             "building": bool(getattr(new_edge, "building", False)),
                             "buildTicksRequired": int(getattr(new_edge, "build_ticks_required", 0)),
                             "buildTicksElapsed": int(getattr(new_edge, "build_ticks_elapsed", 0)),
+                            "warp": warp_payload,
+                            "warpAxis": warp_payload["axis"],
+                            "warpSegments": warp_payload["segments"],
                         },
                         "replay": True,
                     }
@@ -468,25 +502,6 @@ class ReplaySession:
                         message["nodeSnapshot"] = removal_info.get("node")
                     if removal_info and removal_info.get("playerId") is not None:
                         message["playerId"] = removal_info.get("playerId")
-                    await self._send_json(message)
-        elif event_type == "popNode":
-            node_id = _coerce_int(payload.get("nodeId"), -1)
-            if node_id >= 0:
-                success, _, removal_info = self.engine.handle_pop_node(token, node_id)
-                if success:
-                    message = {
-                        "type": "nodePopped",
-                        "nodeId": node_id,
-                        "replay": True,
-                        "removedEdges": removal_info.get("removedEdges", []) if removal_info else [],
-                    }
-                    if removal_info:
-                        if removal_info.get("node"):
-                            message["nodeSnapshot"] = removal_info.get("node")
-                        if removal_info.get("reward") is not None:
-                            message["reward"] = removal_info.get("reward")
-                        if removal_info.get("playerId") is not None:
-                            message["playerId"] = removal_info.get("playerId")
                     await self._send_json(message)
         elif event_type == "quitGame":
             winner = self.engine.handle_quit_game(token)

@@ -15,9 +15,8 @@ MAX_FRIEND_PLAYERS = 4
 TICK_INTERVAL_SECONDS: float = 0.1
 
 # Game modes
-GAME_MODES: Tuple[str, ...] = ("basic", "pop")
+GAME_MODES: Tuple[str, ...] = ("basic", "warp")
 DEFAULT_GAME_MODE: str = GAME_MODES[0]
-POP_NODE_REWARD: float = 10.0
 
 
 # Gameplay flow tuning
@@ -32,7 +31,7 @@ RESERVE_TRANSFER_RATIO: float = 0.007
 # Economy tuning
 GOLD_REWARD_FOR_NEUTRAL_CAPTURE_BY_MODE: Dict[str, float] = {
     "basic": 10.0,
-    "pop": 5.0,
+    "warp": 10.0,
 }
 GOLD_REWARD_FOR_NEUTRAL_CAPTURE: float = GOLD_REWARD_FOR_NEUTRAL_CAPTURE_BY_MODE[DEFAULT_GAME_MODE]
 GOLD_REWARD_FOR_ENEMY_CAPTURE: float = 0.0
@@ -50,6 +49,10 @@ UNOWNED_NODE_BASE_JUICE: float = 50.0
 BRIDGE_BASE_COST: float = 0.0
 BRIDGE_COST_PER_UNIT_DISTANCE: float = 1.5
 
+# Warp geometry (mirror frontend)
+WARP_MARGIN_RATIO_X: float = 0.06
+WARP_MARGIN_RATIO_Y: float = 0.10
+
 
 def normalize_game_mode(value: str) -> str:
     """Return a supported game mode, treating legacy names as aliases."""
@@ -58,6 +61,8 @@ def normalize_game_mode(value: str) -> str:
     lowered = value.strip().lower()
     if lowered == "passive":  # legacy alias
         lowered = "basic"
+    if lowered == "pop":  # legacy alias now mapped to warp
+        lowered = "warp"
     return lowered if lowered in GAME_MODES else DEFAULT_GAME_MODE
 
 
