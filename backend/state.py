@@ -58,6 +58,7 @@ class GraphState:
         # Game mode (e.g., 'basic', 'warp')
         self.mode: str = DEFAULT_GAME_MODE
         self.neutral_capture_reward: float = get_neutral_capture_reward(self.mode)
+        self.bridge_cost_per_unit: float = BRIDGE_COST_PER_UNIT_DISTANCE
 
         # Replay helpers
         self.tick_count: int = 0
@@ -294,7 +295,7 @@ class GraphState:
             "settings": {
                 "nodeMaxJuice": NODE_MAX_JUICE,
                 "bridgeBaseCost": BRIDGE_BASE_COST,
-                "bridgeCostPerUnit": BRIDGE_COST_PER_UNIT_DISTANCE,
+                "bridgeCostPerUnit": self.bridge_cost_per_unit,
                 "neutralCaptureReward": neutral_reward,
             },
             "phase": self.phase,

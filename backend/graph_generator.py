@@ -4,7 +4,9 @@ Eliminates duplication and provides consistent graph generation.
 """
 import asyncio
 from typing import Dict, List, Tuple, Any
+
 from . import generate_graph as gen_graph
+from .constants import DEFAULT_GAME_MODE, normalize_game_mode
 
 
 class GraphGenerator:
@@ -15,8 +17,35 @@ class GraphGenerator:
         self.default_width = 220
         self.default_height = 90
         self.default_margin = 0
-    
-    async def generate_async(self, width: int = None, height: int = None, margin: int = None) -> Tuple[List, List]:
+        self.mode_configs = {
+            "basic": {
+                "edge_func": gen_graph.generate_planar_edges,
+                "desired_edges": gen_graph.DESIRED_EDGE_COUNT,
+            },
+            "warp": {
+                "edge_func": gen_graph.generate_planar_edges,
+                "desired_edges": gen_graph.DESIRED_EDGE_COUNT,
+            },
+            "sparse": {
+                "edge_func": gen_graph.generate_sparse_edges,
+                "desired_edges": None,
+            },
+        }
+
+    def _resolve_mode(self, mode: str = None) -> str:
+        requested_mode = mode or DEFAULT_GAME_MODE
+        normalized = normalize_game_mode(requested_mode)
+        if normalized not in self.mode_configs:
+            return DEFAULT_GAME_MODE
+        return normalized
+
+    async def generate_async(
+        self,
+        width: int = None,
+        height: int = None,
+        margin: int = None,
+        mode: str = None,
+    ) -> Tuple[List, List]:
         """
         Generate a graph asynchronously to avoid blocking the event loop.
         Returns: (nodes, edges)
@@ -24,23 +53,38 @@ class GraphGenerator:
         w = width or self.default_width
         h = height or self.default_height
         m = margin or self.default_margin
-        
+        resolved_mode = self._resolve_mode(mode)
+
         # Run generation in thread pool to avoid blocking
-        nodes, edges = await asyncio.to_thread(self._generate_sync, w, h, m)
+        nodes, edges = await asyncio.to_thread(self._generate_sync, w, h, m, resolved_mode)
         return nodes, edges
     
-    def _generate_sync(self, width: int, height: int, margin: int) -> Tuple[List, List]:
+    def _generate_sync(self, width: int, height: int, margin: int, mode: str) -> Tuple[List, List]:
         """Synchronous graph generation."""
+        config = self.mode_configs.get(mode, self.mode_configs[DEFAULT_GAME_MODE])
         nodes = gen_graph.generate_node_positions(gen_graph.NODE_COUNT, width, height, margin)
-        edges = gen_graph.generate_planar_edges(nodes, gen_graph.DESIRED_EDGE_COUNT, gen_graph.ONE_WAY_PERCENT)
-        
+        edge_func = config["edge_func"]
+        desired_edges = config.get("desired_edges")
+        if desired_edges is None:
+            edges = edge_func(nodes, None, gen_graph.ONE_WAY_PERCENT)
+        else:
+            edges = edge_func(nodes, desired_edges, gen_graph.ONE_WAY_PERCENT)
+
         # Remove isolated nodes after graph generation
         nodes, edges = gen_graph.remove_isolated_nodes(nodes, edges)
         gen_graph.apply_layout_scaling(nodes, width, height)
-        
+
+        print(f"{len(nodes)} , {len(edges)}")
+
         return nodes, edges
-    
-    def generate_sync(self, width: int = None, height: int = None, margin: int = None) -> Tuple[List, List]:
+
+    def generate_sync(
+        self,
+        width: int = None,
+        height: int = None,
+        margin: int = None,
+        mode: str = None,
+    ) -> Tuple[List, List]:
         """
         Generate a graph synchronously.
         Returns: (nodes, edges)
@@ -48,8 +92,9 @@ class GraphGenerator:
         w = width or self.default_width
         h = height or self.default_height
         m = margin or self.default_margin
-        
-        return self._generate_sync(w, h, m)
+        resolved_mode = self._resolve_mode(mode)
+
+        return self._generate_sync(w, h, m, resolved_mode)
     
     def nodes_edges_to_dict(self, nodes: List, edges: List, width: int = None, height: int = None) -> Dict[str, Any]:
         """
@@ -77,20 +122,30 @@ class GraphGenerator:
             ],
         }
     
-    async def generate_game_data_async(self, width: int = None, height: int = None) -> Dict[str, Any]:
+    async def generate_game_data_async(
+        self,
+        width: int = None,
+        height: int = None,
+        mode: str = None,
+    ) -> Dict[str, Any]:
         """
         Generate complete game data dictionary asynchronously.
         Returns the full data structure ready for build_state_from_dict.
         """
-        nodes, edges = await self.generate_async(width, height)
+        nodes, edges = await self.generate_async(width, height, mode=mode)
         return self.nodes_edges_to_dict(nodes, edges, width, height)
     
-    def generate_game_data_sync(self, width: int = None, height: int = None) -> Dict[str, Any]:
+    def generate_game_data_sync(
+        self,
+        width: int = None,
+        height: int = None,
+        mode: str = None,
+    ) -> Dict[str, Any]:
         """
         Generate complete game data dictionary synchronously.
         Returns the full data structure ready for build_state_from_dict.
         """
-        nodes, edges = self.generate_sync(width, height)
+        nodes, edges = self.generate_sync(width, height, mode=mode)
         return self.nodes_edges_to_dict(nodes, edges, width, height)
 
 
