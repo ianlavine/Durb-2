@@ -872,6 +872,17 @@ class MessageRouter:
                     if not bot_game_manager.bot_player or token != bot_game_manager.bot_player.bot_token:
                         edge = bot_game_engine.state.edges.get(int(edge_id)) if bot_game_engine.state else None
                         if edge:
+                            actual_cost = cost
+                            if bot_game_engine.state and getattr(bot_game_engine.state, "pending_edge_reversal", None):
+                                actual_cost = bot_game_engine.state.pending_edge_reversal.get("cost", cost)
+                            warp_segments = [
+                                [sx, sy, ex, ey]
+                                for sx, sy, ex, ey in (edge.warp_segments or [])
+                            ]
+                            warp_payload = {
+                                "axis": edge.warp_axis,
+                                "segments": warp_segments,
+                            }
                             message = {
                                 "type": "edgeReversed",
                                 "edge": {
@@ -882,10 +893,16 @@ class MessageRouter:
                                     "forward": True,
                                     "on": edge.on,
                                     "flowing": edge.flowing,
+                                    "warp": warp_payload,
+                                    "warpAxis": warp_payload["axis"],
+                                    "warpSegments": warp_segments,
                                 },
-                                "cost": cost,
+                                "cost": actual_cost,
                             }
                             await self._send_safe(websocket, json.dumps(message))
+
+                        if bot_game_engine.state and hasattr(bot_game_engine.state, "pending_edge_reversal"):
+                            bot_game_engine.state.pending_edge_reversal = None
 
         elif msg_type == "buildBridge":
             from_node_id = msg.get("fromNodeId")
