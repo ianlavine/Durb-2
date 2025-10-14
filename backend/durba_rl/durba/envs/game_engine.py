@@ -1,0 +1,864 @@
+"""
+Game Engine - Core game logic separated from server implementation.
+Handles game state management, validation, and game rules.
+"""
+import math
+import time
+from typing import Any, Dict, List, Optional, Tuple
+from .constants import (
+    BRIDGE_BASE_COST,
+    BRIDGE_COST_PER_UNIT_DISTANCE,
+    DEFAULT_GAME_MODE,
+    NODE_MAX_JUICE,
+    POP_NODE_REWARD,
+    get_neutral_capture_reward,
+    normalize_game_mode,
+)
+from .graph_generator import graph_generator
+from .models import Edge, Node, Player
+from .state import GraphState, build_state_from_dict
+
+
+class GameValidationError(Exception):
+    """Raised when a game action fails validation."""
+    pass
+
+
+class GameEngine:
+    """Core game engine handling game logic, validation, and state management."""
+    
+    def __init__(self):
+        self.state: Optional[GraphState] = None
+        self.screen: Dict[str, float] = {"width": 275.0, "height": 108.0, "minX": 0.0, "minY": -18.0, "margin": 0}
+        
+        # Player management
+        self.token_to_player_id: Dict[str, int] = {}
+        self.player_id_to_token: Dict[int, str] = {}
+        self.player_meta: Dict[int, Dict[str, object]] = {}
+        self.game_active: bool = False
+
+    def start_game(
+        self,
+        player_slots: List[Dict[str, Any]],
+        mode: str = DEFAULT_GAME_MODE,
+    ) -> None:
+        """Initialize a new game with the provided player configuration."""
+        data = graph_generator.generate_game_data_sync()
+        self.state, self.screen = build_state_from_dict(data)
+
+        self.token_to_player_id.clear()
+        self.player_id_to_token.clear()
+        self.player_meta.clear()
+
+        if not self.state:
+            raise RuntimeError("Failed to create game state")
+
+        self.state.phase = "picking"
+        normalized_mode = normalize_game_mode(mode)
+        self.state.mode = normalized_mode
+        self.state.neutral_capture_reward = get_neutral_capture_reward(normalized_mode)
+        self.state.eliminated_players.clear()
+        self.state.pending_eliminations = []
+
+        for slot in player_slots:
+            player_id = slot["player_id"]
+            token = slot["token"]
+            color = slot.get("color", "#ffffff")
+            secondary_colors = list(slot.get("secondary_colors", []))
+            auto_expand = bool(slot.get("auto_expand", False))
+            guest_name = str(slot.get("guest_name", "") or "").strip()
+
+            player = Player(id=player_id, color=color, secondary_colors=secondary_colors, name=guest_name)
+            self.state.add_player(player)
+
+            self.token_to_player_id[token] = player_id
+            self.player_id_to_token[player_id] = token
+            self.player_meta[player_id] = {
+                "color": color,
+                "secondary_colors": secondary_colors,
+                "guest_name": guest_name,
+            }
+            self.state.player_auto_expand[player_id] = auto_expand
+
+        self.game_active = True
+
+    def is_game_active(self) -> bool:
+        """Check if a game is currently active."""
+        return self.game_active and self.state is not None and len(self.token_to_player_id) >= 2
+    
+    def _try_start_play_phase(self) -> None:
+        """Transition from picking to playing once everyone has chosen a starting node."""
+        if not self.state or self.state.phase != "picking":
+            return
+
+        if not self.state.players:
+            return
+
+        all_picked = all(
+            self.state.players_who_picked.get(pid, False)
+            for pid in self.state.players.keys()
+        )
+        if not all_picked:
+            return
+
+        self.state.phase = "playing"
+        self.state.start_game_timer(time.time())
+        self.state.process_pending_auto_expands()
+
+        for player_id, auto_enabled in self.state.player_auto_expand.items():
+            if auto_enabled:
+                self._check_auto_expand_opportunities(player_id)
+
+    def create_new_game(self) -> Tuple[GraphState, Dict[str, int]]:
+        """Create a new single-player game for testing/development."""
+        data = graph_generator.generate_game_data_sync()
+        new_state, screen = build_state_from_dict(data)
+        
+        # Ensure Player 1 exists
+        if 1 not in new_state.players:
+            new_state.add_player(Player(id=1, color="#ffcc00"))
+
+        new_state.eliminated_players.clear()
+        new_state.pending_eliminations = []
+        new_state.mode = DEFAULT_GAME_MODE
+        new_state.neutral_capture_reward = get_neutral_capture_reward(DEFAULT_GAME_MODE)
+
+        self.state = new_state
+        self.screen = screen
+        self.token_to_player_id.clear()
+        self.player_id_to_token.clear()
+        self.player_meta.clear()
+        return new_state, screen
+    
+    def get_player_id(self, token: str) -> Optional[int]:
+        """Get player ID from token."""
+        return self.token_to_player_id.get(token)
+    
+    def validate_game_active(self) -> None:
+        """Validate that a game is currently active."""
+        if not self.state:
+            raise GameValidationError("No game in progress")
+    
+    def validate_player(self, token: str) -> int:
+        """Validate player token and return player ID."""
+        if not token:
+            raise GameValidationError("Invalid token")
+        
+        player_id = self.token_to_player_id.get(token)
+        if player_id is None:
+            raise GameValidationError("Invalid player")
+        
+        return player_id
+    
+    def validate_phase(self, required_phase: str) -> None:
+        """Validate that the game is in the required phase."""
+        if not self.state:
+            raise GameValidationError("No game state")
+        
+        if getattr(self.state, "phase", "picking") != required_phase:
+            raise GameValidationError(f"Not in {required_phase} phase")
+    
+    def validate_player_can_act(self, player_id: int) -> None:
+        """Validate that a player can perform actions (has picked starting node)."""
+        if not self.state:
+            raise GameValidationError("No game state")
+        
+        # Player can act if they have picked their starting node
+        if not self.state.players_who_picked.get(player_id, False):
+            raise GameValidationError("Must pick starting node first")
+
+        if player_id in self.state.eliminated_players:
+            raise GameValidationError("Player eliminated")
+    
+    def validate_node_exists(self, node_id: int) -> Node:
+        """Validate that a node exists and return it."""
+        if not self.state:
+            raise GameValidationError("No game state")
+        
+        node = self.state.nodes.get(node_id)
+        if node is None:
+            raise GameValidationError("Invalid node")
+        
+        return node
+    
+    def validate_edge_exists(self, edge_id: int) -> Edge:
+        """Validate that an edge exists and return it."""
+        if not self.state:
+            raise GameValidationError("No game state")
+        
+        edge = self.state.edges.get(edge_id)
+        if edge is None:
+            raise GameValidationError("Invalid edge")
+        
+        return edge
+    
+    def validate_player_owns_node(self, node: Node, player_id: int) -> None:
+        """Validate that a player owns a specific node."""
+        if node.owner != player_id:
+            raise GameValidationError("You must own this node")
+    
+    def validate_sufficient_gold(self, player_id: int, cost: float) -> None:
+        """Validate that a player has sufficient gold."""
+        if not self.state:
+            raise GameValidationError("No game state")
+        
+        player_gold = self.state.player_gold.get(player_id, 0.0)
+        if player_gold < cost:
+            raise GameValidationError("Not enough gold")
+    
+    def handle_node_click(self, token: str, node_id: int) -> bool:
+        """
+        Handle a node click - can be for picking starting node or other purposes.
+        Returns True if the action was successful.
+        """
+        try:
+            self.validate_game_active()
+            player_id = self.validate_player(token)
+            node = self.validate_node_exists(node_id)
+
+            if self.state and player_id in self.state.eliminated_players:
+                raise GameValidationError("Player eliminated")
+            
+            # Check if this is for picking a starting node (node is unowned and player hasn't picked yet)
+            if node.owner is None and not self.state.players_who_picked.get(player_id):
+                # This is a starting node pick - give gold reward for capturing unowned node
+                reward = get_neutral_capture_reward(self.state.mode)
+                self.state.neutral_capture_reward = reward
+                self.state.player_gold[player_id] = self.state.player_gold.get(player_id, 0.0) + reward
+                node.owner = player_id
+                self.state.players_who_picked[player_id] = True
+                
+                # Check for auto-expand if enabled
+                if self.state.player_auto_expand.get(player_id, False):
+                    self.state._auto_expand_from_node(node_id, player_id)
+
+                # Store the capture event for frontend notification
+                if not hasattr(self.state, 'pending_node_captures'):
+                    self.state.pending_node_captures = []
+                self.state.pending_node_captures.append({
+                    'nodeId': node_id,
+                    'reward': reward,
+                    'player_id': player_id
+                })
+
+                # Transition to playing state if everyone has picked
+                self._try_start_play_phase()
+
+                return True
+            
+            # For all other cases (already picked, node already owned, etc.), 
+            # let the normal node click logic handle it in other handlers
+            return False
+            
+        except GameValidationError:
+            return False
+    
+    def handle_edge_click(self, token: str, edge_id: int) -> bool:
+        """
+        Handle an edge click to toggle flow.
+        Returns True if the action was successful.
+        """
+        try:
+            self.validate_game_active()
+            player_id = self.validate_player(token)
+            
+            # Allow edge clicks if player has picked starting node
+            self.validate_player_can_act(player_id)
+            
+            edge = self.validate_edge_exists(edge_id)
+            
+            # Toggle behavior - only toggle the 'on' property
+            # The 'flowing' property will be updated automatically each tick
+            if edge.on:
+                edge.on = False
+            else:
+                # Check if player owns the source node
+                source_node = self.validate_node_exists(edge.source_node_id)
+                
+                if source_node.owner == player_id:
+                    edge.on = True
+                else:
+                    raise GameValidationError("You must own the source node")
+            
+            return True
+            
+        except GameValidationError:
+            return False
+    
+    def handle_reverse_edge(self, token: str, edge_id: int, cost: float = 1.0) -> bool:
+        """
+        Handle reversing an edge direction.
+        Returns True if the action was successful.
+        """
+        try:
+            self.validate_game_active()
+            player_id = self.validate_player(token)
+            
+            # Allow reverse edge if player has picked starting node
+            self.validate_player_can_act(player_id)
+                
+            edge = self.validate_edge_exists(edge_id)
+            
+            # Get both nodes
+            source_node = self.validate_node_exists(edge.source_node_id)
+            target_node = self.validate_node_exists(edge.target_node_id)
+
+            # Updated eligibility rules: source node must be neutral or owned by the player
+            source_owner = source_node.owner
+            if source_owner is not None and source_owner != player_id:
+                raise GameValidationError("Pipe controlled by opponent")
+            
+            
+            # Calculate the actual reversal cost based on edge length
+            actual_cost = self.calculate_bridge_cost(source_node, target_node)
+
+            # Validate gold using the server-side calculation
+            self.validate_sufficient_gold(player_id, actual_cost)
+            
+            # Reverse the edge by swapping source and target
+            edge.source_node_id, edge.target_node_id = edge.target_node_id, edge.source_node_id
+            
+            # Only turn on if the new source node is owned by the swapping player
+            new_source_node = self.validate_node_exists(edge.source_node_id)
+            if new_source_node.owner == player_id:
+                edge.on = True
+            else:
+                # Edge is swapped but not turned on since player doesn't own new source
+                edge.on = False
+            
+            # Deduct gold using verified cost
+            self.state.player_gold[player_id] = max(0.0, self.state.player_gold[player_id] - actual_cost)
+
+            # Store the edge reversal event for frontend notification
+            self.state.pending_edge_reversal = {
+                'edgeId': edge_id,
+                'cost': actual_cost
+            }
+
+            # Basic mismatch logging (could be extended to real logging system)
+            #if cost and abs(cost - actual_cost) > 0.51:
+            #    print(
+            #        f"[reverse] cost mismatch: client reported {cost}, server calculated {actual_cost}"
+            #    )
+
+            return True
+
+        except GameValidationError:
+            return False
+    
+    def _normalization_scale(self) -> float:
+        """Return a uniform scale factor so distance math stays orientation-neutral."""
+        width = max(1.0, float(self.screen.get("width", 100)))
+        height = max(1.0, float(self.screen.get("height", 100)))
+        largest_span = max(width, height)
+        return 100.0 / largest_span if largest_span > 0 else 1.0
+
+    def calculate_bridge_cost(self, from_node: Node, to_node: Node) -> float:
+        """Calculate the gold cost for a bridge using normalized coordinates."""
+        scale = self._normalization_scale()
+        dx = (to_node.x - from_node.x) * scale
+        dy = (to_node.y - from_node.y) * scale
+        distance = math.hypot(dx, dy)
+        if distance <= 0:
+            return 0
+
+        total_cost = BRIDGE_BASE_COST + distance * BRIDGE_COST_PER_UNIT_DISTANCE
+        return int(round(total_cost))
+
+    def handle_build_bridge(self, token: str, from_node_id: int, to_node_id: int, 
+                          client_reported_cost: float) -> Tuple[bool, Optional[Edge], float, Optional[str]]:
+        """
+        Handle building a bridge between two nodes.
+        Returns: (success, new_edge, actual_cost, error_message)
+        """
+        try:
+            self.validate_game_active()
+            player_id = self.validate_player(token)
+            
+            # Allow bridge building if player has picked starting node
+            self.validate_player_can_act(player_id)
+            
+            # Validate nodes
+            from_node = self.validate_node_exists(from_node_id)
+            to_node = self.validate_node_exists(to_node_id)
+            
+            if from_node_id == to_node_id:
+                raise GameValidationError("Cannot connect node to itself")
+            
+            # Calculate and validate gold using server-side formula
+            actual_cost = self.calculate_bridge_cost(from_node, to_node)
+            self.validate_sufficient_gold(player_id, actual_cost)
+            
+            # Check if edge already exists
+            if self._edge_exists_between_nodes(from_node_id, to_node_id):
+                raise GameValidationError("Edge already exists between these nodes")
+            
+            # Check for intersections
+            if self._edges_would_intersect(from_node, to_node):
+                raise GameValidationError("Bridge would intersect existing edge")
+            
+            # Create the edge (always one-way from source to target)
+            new_edge_id = max(self.state.edges.keys(), default=0) + 1
+            
+            new_edge_should_be_on = from_node.owner == player_id
+
+            new_edge = Edge(
+                id=new_edge_id,
+                source_node_id=from_node_id,
+                target_node_id=to_node_id,
+                on=False,
+                flowing=False,  # Will be set to True by _update_edge_flowing_status when built and conditions are met
+                build_ticks_required=max(1, int(math.hypot(to_node.x - from_node.x, to_node.y - from_node.y) * 0.3)),
+                build_ticks_elapsed=0,
+                building=True,
+            )
+            
+            # Add to state
+            self.state.edges[new_edge_id] = new_edge
+            from_node.attached_edge_ids.append(new_edge_id)
+            to_node.attached_edge_ids.append(new_edge_id)
+            
+            # Deduct gold using verified cost
+            self.state.player_gold[player_id] = max(0.0, self.state.player_gold[player_id] - actual_cost)
+
+            # Record the intended on-state so it can be applied when build completes
+            if new_edge_should_be_on:
+                # Mark that once building finishes, this edge should turn on
+                setattr(new_edge, 'post_build_turn_on', True)
+
+            # Basic mismatch logging (could be extended to real logging system)
+            if client_reported_cost and abs(client_reported_cost - actual_cost) > 0.51:
+                print(
+                    f"[bridge] cost mismatch: client reported {client_reported_cost}, server calculated {actual_cost}"
+                )
+            
+            return True, new_edge, actual_cost, None
+            
+        except GameValidationError as e:
+            return False, None, 0.0, str(e)
+    
+    def handle_quit_game(self, token: str) -> Optional[int]:
+        """
+        Handle a player quitting the game.
+        Returns the winner's player ID, or None if no game active.
+        """
+        if not self.state or token not in self.token_to_player_id:
+            return None
+        
+        player_id = self.token_to_player_id[token]
+
+        self._eliminate_player(player_id)
+
+        active_players = [pid for pid in self.state.players.keys() if pid not in self.state.eliminated_players]
+        if len(active_players) == 1:
+            winner_id = active_players[0]
+            self._end_game()
+            return winner_id
+
+        return None
+
+    def handle_disconnect(self, token: str) -> Optional[int]:
+        """
+        Handle a player disconnect after grace period.
+        Returns the winner's player ID, or None if no game active.
+        """
+        if not self.state or token not in self.token_to_player_id:
+            return None
+        
+        player_id = self.token_to_player_id[token]
+        if player_id in self.state.eliminated_players:
+            return None
+
+        self._eliminate_player(player_id)
+
+        active_players = [pid for pid in self.state.players.keys() if pid not in self.state.eliminated_players]
+        if len(active_players) == 1:
+            winner_id = active_players[0]
+            self._end_game()
+            return winner_id
+
+        return None
+    
+    def _end_game(self) -> None:
+        """End the current game and reset state."""
+        self.token_to_player_id.clear()
+        self.player_id_to_token.clear()
+        self.player_meta.clear()
+        self.game_active = False
+
+    def _deactivate_player_edges(self, player_id: int) -> None:
+        """Force all edges controlled by the player to remain off."""
+        if not self.state:
+            return
+
+        for edge in self.state.edges.values():
+            source_node = self.state.nodes.get(edge.source_node_id)
+            if source_node and source_node.owner == player_id:
+                edge.on = False
+                edge.flowing = False
+
+    def _eliminate_player(self, player_id: int) -> None:
+        """Mark a player as eliminated, disable auto actions, and shut off edges."""
+        if not self.state:
+            return
+
+        if player_id in self.state.eliminated_players:
+            return
+
+        self.state.eliminated_players.add(player_id)
+        self.state.pending_eliminations.append(player_id)
+        self.state.player_auto_expand[player_id] = False
+        if hasattr(self.state, 'pending_auto_expand_nodes'):
+            self.state.pending_auto_expand_nodes.pop(player_id, None)
+        self._deactivate_player_edges(player_id)
+
+    def _edge_exists_between_nodes(self, node_id1: int, node_id2: int) -> bool:
+        """Check if an edge already exists between two nodes."""
+        if not self.state:
+            return False
+        
+        for edge in self.state.edges.values():
+            if ((edge.source_node_id == node_id1 and edge.target_node_id == node_id2) or
+                (edge.source_node_id == node_id2 and edge.target_node_id == node_id1)):
+                return True
+        return False
+    
+    def _edges_would_intersect(self, from_node: Node, to_node: Node) -> bool:
+        """Check if a new edge would intersect existing edges."""
+        if not self.state:
+            return False
+        
+        x1, y1 = from_node.x, from_node.y
+        x2, y2 = to_node.x, to_node.y
+        
+        for edge in self.state.edges.values():
+            source_node = self.state.nodes.get(edge.source_node_id)
+            target_node = self.state.nodes.get(edge.target_node_id)
+            if source_node is None or target_node is None:
+                continue
+            
+            x3, y3 = source_node.x, source_node.y
+            x4, y4 = target_node.x, target_node.y
+            
+            # Skip if edges share a node
+            if (from_node.id == source_node.id or from_node.id == target_node.id or 
+                to_node.id == source_node.id or to_node.id == target_node.id):
+                continue
+            
+            if self._line_segments_intersect(x1, y1, x2, y2, x3, y3, x4, y4):
+                return True
+        
+        return False
+    
+    def _line_segments_intersect(self, x1, y1, x2, y2, x3, y3, x4, y4) -> bool:
+        """Check if two line segments intersect."""
+        def orientation(px, py, qx, qy, rx, ry):
+            val = (qy - py) * (rx - qx) - (qx - px) * (ry - qy)
+            if abs(val) < 1e-10:
+                return 0
+            return 1 if val > 0 else 2
+        
+        def on_segment(px, py, qx, qy, rx, ry):
+            return (qx <= max(px, rx) and qx >= min(px, rx) and
+                    qy <= max(py, ry) and qy >= min(py, ry))
+        
+        o1 = orientation(x1, y1, x2, y2, x3, y3)
+        o2 = orientation(x1, y1, x2, y2, x4, y4)
+        o3 = orientation(x3, y3, x4, y4, x1, y1)
+        o4 = orientation(x3, y3, x4, y4, x2, y2)
+        
+        # General case
+        if o1 != o2 and o3 != o4:
+            return True
+        
+        # Special cases for collinear points
+        if (o1 == 0 and on_segment(x1, y1, x3, y3, x2, y2) or
+            o2 == 0 and on_segment(x1, y1, x4, y4, x2, y2) or
+            o3 == 0 and on_segment(x3, y3, x1, y1, x4, y4) or
+            o4 == 0 and on_segment(x3, y3, x2, y2, x4, y4)):
+            return True
+        
+        return False
+    
+    def simulate_tick(self, tick_interval_seconds: float) -> Optional[int]:
+        """
+        Simulate one game tick and return winner ID if game ended.
+        """
+        if not self.state or not self.game_active:
+            return None
+        
+        # Transition from picking to playing when ready and block simulation until then
+        self._try_start_play_phase()
+        if self.state.phase != "playing":
+            return None
+
+        self.state.simulate_tick(tick_interval_seconds)
+
+        for eliminated_id in list(self.state.eliminated_players):
+            self._deactivate_player_edges(eliminated_id)
+
+        # Check for node count victory (2/3 rule)
+        winner_id = self.state.check_node_count_victory()
+        if winner_id is not None:
+            self._end_game()
+            return winner_id
+        
+        # Check for zero nodes loss condition
+        winner_id = self.state.check_zero_nodes_loss()
+        if winner_id is not None:
+            self._end_game()
+            return winner_id
+        
+        # Check for timer expiration
+        winner_id = self.state.check_timer_expiration(time.time())
+        if winner_id is not None:
+            self._end_game()
+            return winner_id
+        
+        return None
+    
+    def handle_local_targeting(self, token: str, target_node_id: int) -> bool:
+        """
+        Handle local targeting - just turn on edges flowing directly into the target node.
+        This is the simplified targeting behavior when the targeting toggle is OFF.
+        Returns True if the action was successful.
+        """
+        try:
+            self.validate_game_active()
+            player_id = self.validate_player(token)
+            self.validate_player_can_act(player_id)
+            target_node = self.validate_node_exists(target_node_id)
+            
+            # Find all edges that flow into the target node and are owned by the player
+            edges_activated = False
+            for edge in self.state.edges.values():
+                if edge.target_node_id == target_node_id:
+                    source_node = self.state.nodes.get(edge.source_node_id)
+                    if source_node and source_node.owner == player_id:
+                        # Turn on this edge
+                        edge.on = True
+                        edges_activated = True
+            
+            return edges_activated
+            
+        except GameValidationError:
+            return False
+    
+    def handle_redirect_energy(self, token: str, target_node_id: int) -> bool:
+        """
+        Redirect energy flow towards a target node by optimizing edge states.
+        This algorithm turns on/off edges to maximize energy flow to the target node.
+        Returns True if the action was successful.
+        """
+        try:
+            self.validate_game_active()
+            player_id = self.validate_player(token)
+            self.validate_player_can_act(player_id)
+            target_node = self.validate_node_exists(target_node_id)
+            
+            # Get all nodes owned by the player
+            player_nodes = [node for node in self.state.nodes.values() 
+                          if node.owner == player_id]
+            
+            if not player_nodes:
+                raise GameValidationError("You don't own any nodes")
+            
+            # Check if the target node can receive flow from any player nodes
+            can_reach_target = False
+            for edge in self.state.edges.values():
+                if edge.target_node_id == target_node_id:
+                    source_node = self.state.nodes.get(edge.source_node_id)
+                    if source_node and source_node.owner == player_id:
+                        can_reach_target = True
+                        break
+            
+            if not can_reach_target:
+                raise GameValidationError("No path to target node")
+            
+            # Algorithm: Maximize flow to target node
+            self._optimize_energy_flow_to_target(player_id, target_node_id)
+            
+            return True
+            
+        except GameValidationError:
+            return False
+    
+    def handle_destroy_node(
+        self,
+        token: str,
+        node_id: int,
+        cost: float = 3.0,
+    ) -> Tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
+        """
+        Handle destroying a node owned by the player.
+        Returns: (success, error_message)
+        """
+        try:
+            self.validate_game_active()
+            player_id = self.validate_player(token)
+            self.validate_player_can_act(player_id)
+            
+            # Validate node
+            node = self.validate_node_exists(node_id)
+            self.validate_player_owns_node(node, player_id)
+            
+            # Validate gold
+            self.validate_sufficient_gold(player_id, cost)
+            
+            removal_info = self.state.remove_node_and_edges(node_id)
+            if not removal_info:
+                raise GameValidationError("Invalid node")
+
+            # Deduct gold
+            self.state.player_gold[player_id] = max(0.0, self.state.player_gold[player_id] - cost)
+
+            payload = dict(removal_info)
+            payload["playerId"] = player_id
+            return True, None, payload
+            
+        except GameValidationError as e:
+            return False, str(e), None
+
+    def handle_pop_node(
+        self,
+        token: str,
+        node_id: int,
+        reward: float = POP_NODE_REWARD,
+    ) -> Tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
+        """Handle popping a full node in Pop mode to gain gold and remove the node."""
+        try:
+            self.validate_game_active()
+            if not self.state or self.state.mode != "pop":
+                raise GameValidationError("Pop action unavailable")
+
+            player_id = self.validate_player(token)
+            self.validate_player_can_act(player_id)
+
+            node = self.validate_node_exists(node_id)
+            self.validate_player_owns_node(node, player_id)
+
+            if node.juice < NODE_MAX_JUICE - 1e-3:
+                raise GameValidationError("Node is not ready to pop")
+
+            removal_info = self.state.remove_node_and_edges(node_id)
+            if not removal_info:
+                raise GameValidationError("Invalid node")
+
+            current_gold = self.state.player_gold.get(player_id, 0.0)
+            reward_amount = max(0.0, reward)
+            self.state.player_gold[player_id] = current_gold + reward_amount
+
+            payload = dict(removal_info)
+            payload["playerId"] = player_id
+            payload["reward"] = reward_amount
+            return True, None, payload
+
+        except GameValidationError as e:
+            return False, str(e), None
+    
+    def _optimize_energy_flow_to_target(self, player_id: int, target_node_id: int) -> None:
+        """
+        Optimize energy flow to maximize flow towards the target node using shortest paths.
+        Algorithm:
+        1. Start from target node and work backwards
+        2. For each node, find the shortest path to target through player-owned edges
+        3. Each node should only send energy through ONE optimal outgoing edge
+        4. Turn off all other outgoing edges from that node
+        """
+        from collections import deque, defaultdict
+        
+        # Build reverse adjacency list (who can send TO each node)
+        incoming_edges = defaultdict(list)
+        outgoing_edges = defaultdict(list)
+        
+        for edge in self.state.edges.values():
+            source_node = self.state.nodes.get(edge.source_node_id)
+            if source_node and source_node.owner == player_id:
+                incoming_edges[edge.target_node_id].append(edge)
+                outgoing_edges[edge.source_node_id].append(edge)
+        
+        # BFS backwards from target to find shortest paths
+        distances = {target_node_id: 0}
+        best_next_hop = {}  # node_id -> edge_id (the ONE edge this node should use)
+        queue = deque([target_node_id])
+        
+        while queue:
+            current_node_id = queue.popleft()
+            current_distance = distances[current_node_id]
+            
+            # Look at all edges that can send TO the current node
+            for edge in incoming_edges[current_node_id]:
+                source_node_id = edge.source_node_id
+                
+                # If we haven't visited this source node, or we found a shorter path
+                if source_node_id not in distances or distances[source_node_id] > current_distance + 1:
+                    distances[source_node_id] = current_distance + 1
+                    best_next_hop[source_node_id] = edge.id
+                    queue.append(source_node_id)
+        
+        # Now set edge states based on the optimal paths
+        for edge in self.state.edges.values():
+            source_node = self.state.nodes.get(edge.source_node_id)
+            
+            # Only modify edges where player owns the source node
+            if not source_node or source_node.owner != player_id:
+                continue
+            
+            # Special case: Turn off ALL outgoing edges from the target node
+            # (we want energy flowing INTO the target, not OUT of it)
+            if edge.source_node_id == target_node_id:
+                edge.on = False
+            # If this node has a path to target and this is the optimal edge
+            elif (edge.source_node_id in best_next_hop and 
+                  best_next_hop[edge.source_node_id] == edge.id):
+                # This is the ONE edge this node should use
+                edge.on = True
+            else:
+                # Turn off all other edges from nodes that can reach target
+                if edge.source_node_id in best_next_hop:
+                    edge.on = False
+                # For nodes that can't reach target, leave their edges as-is
+                # (they might be defending other areas)
+    
+    def handle_toggle_auto_expand(self, token: str) -> bool:
+        """
+        Handle toggling the auto-expand setting for a player.
+        Returns True if the action was successful.
+        """
+        try:
+            self.validate_game_active()
+            player_id = self.validate_player(token)
+
+            if self.state and player_id in self.state.eliminated_players:
+                raise GameValidationError("Player eliminated")
+            
+            # Allow toggling auto-expand even before picking starting node
+            # (just validate that player exists and game is active)
+            
+            # Toggle the setting
+            new_state = self.state.toggle_auto_expand(player_id)
+            
+            # If auto-expand was just turned ON, immediately check for expansion opportunities
+            if new_state:
+                self._check_auto_expand_opportunities(player_id)
+            
+            return True
+            
+        except GameValidationError:
+            return False
+    
+    def _check_auto_expand_opportunities(self, player_id: int) -> None:
+        """
+        Check all owned nodes for auto-expand opportunities and turn on edges to unowned nodes.
+        This is called when auto-expand is turned on to immediately check existing owned nodes.
+        """
+        if not self.state:
+            return
+        
+        # Find all nodes owned by this player
+        owned_nodes = [node_id for node_id, node in self.state.nodes.items() 
+                      if node.owner == player_id]
+        
+        # For each owned node, check for auto-expand opportunities
+        for node_id in owned_nodes:
+            self.state._auto_expand_from_node(node_id, player_id)
