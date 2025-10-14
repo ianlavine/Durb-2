@@ -1,0 +1,20 @@
+# Core RL & AI libraries
+stable-baselines3==2.7.0
+sb3_contrib==2.7.0
+gymnasium==1.2.1
+torch==2.8.0+cu129
+torchvision==0.23.0+cu129
+
+# Graph Neural Network (GNN) support
+torch-geometric==2.6.1
+torch_scatter==2.1.2+pt28cu129
+torch_sparse==0.6.18+pt28cu129
+torch_cluster==1.6.3+pt28cu129
+torch_spline_conv==1.2.2+pt28cu129
+
+# Visualization & debugging
+matplotlib==3.10.6
+tensorboard==2.20.0
+
+# Game & rendering
+pygame==2.6.1
