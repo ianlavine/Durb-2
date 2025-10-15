@@ -6,7 +6,6 @@ from .constants import (
     DEFAULT_GAME_MODE,
     GOLD_REWARD_FOR_ENEMY_CAPTURE,
     GOLD_REWARD_FOR_NEUTRAL_CAPTURE_BY_MODE,
-    NODE_MAX_JUICE,
     NODE_MIN_JUICE,
     PASSIVE_GOLD_PER_SECOND,
     PASSIVE_GOLD_PER_TICK,
@@ -14,6 +13,7 @@ from .constants import (
     PRODUCTION_RATE_PER_NODE,
     STARTING_GOLD,
     get_neutral_capture_reward,
+    get_node_max_juice,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - import only for type checking
@@ -79,6 +79,7 @@ class GameReplayRecorder:
                     "juice": node.juice,
                     "owner": node.owner,
                     "attachedEdges": list(node.attached_edge_ids),
+                    "pendingGold": getattr(node, "pending_gold", 0.0),
                 }
             )
 
@@ -156,7 +157,7 @@ class GameReplayRecorder:
         current_reward = get_neutral_capture_reward(current_mode)
 
         constants_payload = {
-            "NODE_MAX_JUICE": NODE_MAX_JUICE,
+            "NODE_MAX_JUICE": get_node_max_juice(current_mode),
             "NODE_MIN_JUICE": NODE_MIN_JUICE,
             "PASSIVE_GOLD_PER_SECOND": PASSIVE_GOLD_PER_SECOND,
             "PASSIVE_GOLD_PER_TICK": PASSIVE_GOLD_PER_TICK,

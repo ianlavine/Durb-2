@@ -10,8 +10,9 @@ from .constants import (
     GOLD_REWARD_FOR_ENEMY_CAPTURE,
     INTAKE_TRANSFER_RATIO,
     MAX_TRANSFER_RATIO,
-    NODE_MAX_JUICE,
     NODE_MIN_JUICE,
+    OVERFLOW_JUICE_TO_GOLD_RATIO,
+    OVERFLOW_PENDING_GOLD_PAYOUT,
     PASSIVE_GOLD_PER_TICK,
     PASSIVE_INCOME_ENABLED,
     PRODUCTION_RATE_PER_NODE,
@@ -19,6 +20,7 @@ from .constants import (
     STARTING_GOLD,
     UNOWNED_NODE_BASE_JUICE,
     get_neutral_capture_reward,
+    get_node_max_juice,
     normalize_game_mode,
 )
 from .models import Edge, Node, Player
@@ -46,6 +48,7 @@ class GraphState:
         # Track eliminated players so they can remain as spectators
         self.eliminated_players: Set[int] = set()
         self.pending_eliminations: List[int] = []
+        self.pending_overflow_payouts: List[Dict[str, Any]] = []
         
         # Timer system
         self.game_start_time: Optional[float] = None
@@ -233,8 +236,16 @@ class GraphState:
         }
 
     def to_init_message(self, screen: Dict[str, int], tick_interval: float, current_time: float = 0.0) -> Dict:
+        node_max = getattr(self, "node_max_juice", get_node_max_juice(self.mode))
         nodes_arr = [
-            [nid, round(n.x, 3), round(n.y, 3), round(n.juice, 3), (n.owner if n.owner is not None else None)]
+            [
+                nid,
+                round(n.x, 3),
+                round(n.y, 3),
+                round(n.juice, 3),
+                (n.owner if n.owner is not None else None),
+                round(getattr(n, "pending_gold", 0.0), 3),
+            ]
             for nid, n in self.nodes.items()
         ]
         edges_arr = [
@@ -293,7 +304,7 @@ class GraphState:
             "edges": edges_arr,
             "players": players_arr,
             "settings": {
-                "nodeMaxJuice": NODE_MAX_JUICE,
+                "nodeMaxJuice": node_max,
                 "bridgeBaseCost": BRIDGE_BASE_COST,
                 "bridgeCostPerUnit": self.bridge_cost_per_unit,
                 "neutralCaptureReward": neutral_reward,
@@ -323,7 +334,12 @@ class GraphState:
             1 if getattr(e, 'building', False) else 0,
         ] for eid, e in self.edges.items()]  # Always forward now
         nodes_arr = [
-            [nid, round(n.juice, 3), (n.owner if n.owner is not None else None)]
+            [
+                nid,
+                round(n.juice, 3),
+                (n.owner if n.owner is not None else None),
+                round(getattr(n, "pending_gold", 0.0), 3),
+            ]
             for nid, n in self.nodes.items()
         ]
         counts = self.get_player_node_counts()
@@ -367,6 +383,8 @@ class GraphState:
         2. For friendly flows: target node is not full (juice < NODE_MAX_JUICE)
         3. For attacking flows: always flow when on (regardless of target capacity)
         """
+        node_max = getattr(self, "node_max_juice", get_node_max_juice(self.mode))
+        is_overflow_mode = normalize_game_mode(self.mode) == "overflow"
         for edge in self.edges.values():
             # Handle bridge build gating: while building, edge cannot be on/flowing
             if getattr(edge, 'building', False):
@@ -394,7 +412,9 @@ class GraphState:
             elif (source_node.owner is not None and 
                   (target_node.owner is None or target_node.owner == source_node.owner)):
                 # This is a friendly flow - it can only flow if target is not full
-                if target_node.juice >= NODE_MAX_JUICE:
+                if is_overflow_mode:
+                    edge.flowing = True
+                elif target_node.juice >= node_max:
                     edge.flowing = False
                 else:
                     edge.flowing = True
@@ -426,6 +446,11 @@ class GraphState:
 
         # Update flowing status for all edges based on target node capacity
         self._update_edge_flowing_status()
+
+        node_max = getattr(self, "node_max_juice", get_node_max_juice(self.mode))
+        is_overflow_mode = normalize_game_mode(self.mode) == "overflow"
+        if self.pending_overflow_payouts:
+            self.pending_overflow_payouts.clear()
 
         # Passive gold income for active players ($1 every 3 seconds)
         if (
@@ -512,13 +537,14 @@ class GraphState:
 
             is_friendly_flow = (from_node.owner is not None and to_node.owner == from_node.owner)
             if is_friendly_flow:
-                current_target = to_node.juice + size_delta[to_id]
-                current_target = max(NODE_MIN_JUICE, min(NODE_MAX_JUICE, current_target))
-                available_capacity = max(0.0, NODE_MAX_JUICE - current_target)
-                if available_capacity <= 0:
-                    actual_transfer = 0.0
-                else:
-                    actual_transfer = min(actual_transfer, available_capacity)
+                if not is_overflow_mode:
+                    current_target = to_node.juice + size_delta[to_id]
+                    current_target = max(NODE_MIN_JUICE, min(node_max, current_target))
+                    available_capacity = max(0.0, node_max - current_target)
+                    if available_capacity <= 0:
+                        actual_transfer = 0.0
+                    else:
+                        actual_transfer = min(actual_transfer, available_capacity)
 
             if actual_transfer <= 0:
                 continue
@@ -547,7 +573,36 @@ class GraphState:
         # Apply deltas and clamp
         for nid, delta in size_delta.items():
             node = self.nodes[nid]
-            node.juice = max(NODE_MIN_JUICE, min(NODE_MAX_JUICE, node.juice + delta))
+            updated_amount = max(NODE_MIN_JUICE, node.juice + delta)
+            if is_overflow_mode and node.owner is not None:
+                overflow_amount = max(0.0, updated_amount - node_max)
+                if overflow_amount > 0:
+                    pending_gold = getattr(node, "pending_gold", 0.0)
+                    pending_gold += overflow_amount / OVERFLOW_JUICE_TO_GOLD_RATIO
+                    updated_amount -= overflow_amount
+
+                    payout_threshold = OVERFLOW_PENDING_GOLD_PAYOUT
+                    payouts = 0
+                    epsilon = 1e-6
+                    while pending_gold + epsilon >= payout_threshold:
+                        pending_gold -= payout_threshold
+                        payouts += 1
+
+                    if payouts and node.owner is not None:
+                        gold_award = payouts * OVERFLOW_PENDING_GOLD_PAYOUT
+                        self.player_gold[node.owner] = self.player_gold.get(node.owner, 0.0) + gold_award
+                        self.pending_overflow_payouts.append({
+                            "nodeId": nid,
+                            "amount": gold_award,
+                            "player_id": node.owner,
+                        })
+
+                    pending_gold = max(0.0, pending_gold)
+                    node.pending_gold = pending_gold
+
+                node.juice = max(NODE_MIN_JUICE, min(node_max, updated_amount))
+            else:
+                node.juice = max(NODE_MIN_JUICE, min(node_max, updated_amount))
 
         # Apply pending ownership changes and award gold for capturing unowned nodes
         for nid, new_owner in pending_ownership.items():

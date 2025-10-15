@@ -133,14 +133,15 @@
   let currentTargetSetTime = null; // Animation time when target was last set
   
   let selectedPlayerCount = 2;
-  let selectedMode = 'warp';
-  let gameMode = 'warp';
+  let selectedMode = 'overflow';
+  let gameMode = 'overflow';
   let modeButtons = [];
-  const MODE_LABELS = { basic: 'Basic', warp: 'Original', sparse: 'Sparse' };
+  const MODE_LABELS = { basic: 'Basic', warp: 'Original', sparse: 'Sparse', overflow: 'Ring' };
+  const OVERFLOW_PENDING_GOLD_THRESHOLD = 5;
 
   function isWarpLike(mode) {
     const normalized = normalizeMode(mode);
-    return normalized === 'warp' || normalized === 'sparse';
+    return normalized === 'warp' || normalized === 'sparse' || normalized === 'overflow';
   }
 
   // Money transparency system
@@ -293,6 +294,51 @@
       { freq: 780, type: 'sine', attack: 0.005, decay: 0.12, volume: 0.14, delay: 0.00 },
       { freq: 1170, type: 'sine', attack: 0.005, decay: 0.12, volume: 0.11, delay: 0.05 },
     ]);
+  }
+  function playChaChing() {
+    if (!soundEnabled) return;
+    ensureAudio();
+    if (!audioCtx) return;
+    const now = audioCtx.currentTime;
+
+    // Main coin strike with a quick frequency sweep
+    const strikeOsc = audioCtx.createOscillator();
+    const strikeGain = audioCtx.createGain();
+    strikeOsc.type = 'square';
+    strikeOsc.frequency.setValueAtTime(2000, now);
+    strikeOsc.frequency.exponentialRampToValueAtTime(900, now + 0.22);
+    strikeGain.gain.setValueAtTime(0.0001, now);
+    strikeGain.gain.exponentialRampToValueAtTime(0.28, now + 0.012);
+    strikeGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.28);
+    strikeOsc.connect(strikeGain);
+    strikeGain.connect(globalGain);
+    strikeOsc.start(now);
+    strikeOsc.stop(now + 0.3);
+
+    // Sparkle overtone for metallic sheen
+    const sparkleOsc = audioCtx.createOscillator();
+    const sparkleGain = audioCtx.createGain();
+    sparkleOsc.type = 'triangle';
+    sparkleOsc.frequency.setValueAtTime(3200, now + 0.03);
+    sparkleOsc.frequency.exponentialRampToValueAtTime(1800, now + 0.22);
+    sparkleGain.gain.setValueAtTime(0.0001, now + 0.03);
+    sparkleGain.gain.exponentialRampToValueAtTime(0.16, now + 0.05);
+    sparkleGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.26);
+    sparkleOsc.connect(sparkleGain);
+    sparkleGain.connect(globalGain);
+    sparkleOsc.start(now + 0.03);
+    sparkleOsc.stop(now + 0.28);
+
+    // Quick, filtered noise burst to emulate clinking coins
+    playNoiseBurst({
+      duration: 0.12,
+      volume: 0.12,
+      filterType: 'highpass',
+      filterFreq: 2500,
+      q: 1.5,
+      attack: 0.002,
+      decay: 0.12,
+    });
   }
   function playLoseNodeWarning() {
     // Intentionally silent for now; keeping function for future use
@@ -2361,6 +2407,7 @@ function clearBridgeSelection() {
       else if (msg.type === 'nodeDestroyed') handleNodeDestroyed(msg);
       else if (msg.type === 'destroyError') handleDestroyError(msg);
       else if (msg.type === 'nodeCaptured') handleNodeCaptured(msg);
+      else if (msg.type === 'nodeOverflowPayout') handleNodeOverflowPayout(msg);
       else if (msg.type === 'lobbyTimeout') handleLobbyTimeout();
       else if (msg.type === 'postgame') handlePostgame(msg);
       else if (msg.type === 'postgameRematchUpdate') handlePostgameRematchUpdate(msg);
@@ -2468,8 +2515,14 @@ function clearBridgeSelection() {
 
     if (Array.isArray(msg.nodes)) {
       for (const arr of msg.nodes) {
-        const [id, x, y, size, owner] = arr;
-        nodes.set(id, { x, y, size, owner });
+        const [id, x, y, size, owner, pendingGold = 0] = arr;
+        nodes.set(id, {
+          x,
+          y,
+          size,
+          owner,
+          pendingGold: Number(pendingGold) || 0,
+        });
       }
     }
 
@@ -2882,12 +2935,14 @@ function clearBridgeSelection() {
       gameMode = normalizeMode(msg.mode);
     }
     if (Array.isArray(msg.nodes)) {
-      msg.nodes.forEach(([id, size, owner]) => {
+      msg.nodes.forEach((entry) => {
+        const [id, size, owner, pendingGold = 0] = entry;
         const node = nodes.get(id);
         if (node) {
           const oldOwner = node.owner;
           node.size = size;
           node.owner = owner;
+          node.pendingGold = Number(pendingGold) || 0;
           if (oldOwner !== owner) {
             // Enemy capture sound: you captured from someone else
             if (owner === myPlayerId && oldOwner != null && oldOwner !== myPlayerId) {
@@ -3291,6 +3346,25 @@ function clearBridgeSelection() {
     }
   }
 
+  function handleNodeOverflowPayout(msg) {
+    if (!msg || typeof msg.nodeId === 'undefined') return;
+    const nodeId = Number(msg.nodeId);
+    const amount = Number(msg.amount);
+    if (!Number.isFinite(nodeId) || !Number.isFinite(amount) || amount <= 0) return;
+    const node = nodes.get(nodeId);
+    if (!node) return;
+    const offsetX = 2;
+    const offsetY = -2;
+    createMoneyIndicator(
+      node.x + offsetX,
+      node.y + offsetY,
+      `+$${formatCost(amount)}`,
+      0xffd700,
+      2000
+    );
+    playChaChing();
+  }
+
   function showErrorMessage(message, variant = 'error') {
     // Create or update error message element
     let errorMsg = document.getElementById('errorMessage');
@@ -3376,6 +3450,7 @@ function clearBridgeSelection() {
     
     // Draw border box around play area (warp border handles inner toggle)
     drawPlayAreaBorder();
+    const overflowMode = normalizeMode(gameMode) === 'overflow';
     
     // Show gold display when graph is being drawn and we have nodes/game data
     if (goldDisplay && nodes.size > 0) {
@@ -3482,9 +3557,24 @@ function clearBridgeSelection() {
       
       // Max-size thick black border
       const juiceVal = (n.size || 0);
-      if (juiceVal >= nodeMaxJuice - 1e-6) {
-        graphicsNodes.lineStyle(4, 0x000000, 1);
-        graphicsNodes.strokeCircle(nx, ny, r + 2);
+      const isFull = juiceVal >= nodeMaxJuice - 1e-6;
+      if (isFull) {
+        if (overflowMode && n.owner != null) {
+          const pendingGold = Math.max(0, Number(n.pendingGold) || 0);
+          const progress = Math.min(1, pendingGold / OVERFLOW_PENDING_GOLD_THRESHOLD);
+          if (progress > 0) {
+            const ringRadius = r + 2;
+            const startAngle = -Math.PI / 2;
+            const endAngle = startAngle + progress * Math.PI * 2;
+            graphicsNodes.lineStyle(4, 0xffd700, 1);
+            graphicsNodes.beginPath();
+            graphicsNodes.arc(nx, ny, ringRadius, startAngle, endAngle, false);
+            graphicsNodes.strokePath();
+          }
+        } else if (!overflowMode) {
+          graphicsNodes.lineStyle(4, 0x000000, 1);
+          graphicsNodes.strokeCircle(nx, ny, r + 2);
+        }
       }
 
       // Hover effect: player's color border when eligible for starting node pick
@@ -3593,7 +3683,8 @@ function clearBridgeSelection() {
           y: mouseWorldY,
           juice: 8.0, // mirror the neutral-node baseline for preview sizing
           size: 8.0,
-          owner: null
+          owner: null,
+          pendingGold: 0,
         };
         
         // Create a temporary edge object for preview

@@ -9,11 +9,11 @@ from .constants import (
     BRIDGE_BASE_COST,
     BRIDGE_COST_PER_UNIT_DISTANCE,
     DEFAULT_GAME_MODE,
-    NODE_MAX_JUICE,
     WARP_MARGIN_RATIO_X,
     WARP_MARGIN_RATIO_Y,
     get_bridge_cost_per_unit,
     get_neutral_capture_reward,
+    get_node_max_juice,
     normalize_game_mode,
 )
 from .graph_generator import graph_generator
@@ -58,6 +58,7 @@ class GameEngine:
 
         self.state.phase = "picking"
         self.state.mode = normalized_mode
+        self.state.node_max_juice = get_node_max_juice(normalized_mode)
         self.state.neutral_capture_reward = get_neutral_capture_reward(normalized_mode)
         self.state.bridge_cost_per_unit = get_bridge_cost_per_unit(normalized_mode)
         self.state.eliminated_players.clear()
@@ -126,6 +127,7 @@ class GameEngine:
         new_state.eliminated_players.clear()
         new_state.pending_eliminations = []
         new_state.mode = DEFAULT_GAME_MODE
+        new_state.node_max_juice = get_node_max_juice(DEFAULT_GAME_MODE)
         new_state.neutral_capture_reward = get_neutral_capture_reward(DEFAULT_GAME_MODE)
         new_state.bridge_cost_per_unit = get_bridge_cost_per_unit(DEFAULT_GAME_MODE)
 
@@ -366,7 +368,7 @@ class GameEngine:
         if not self.state:
             return False
         current_mode = normalize_game_mode(getattr(self.state, "mode", DEFAULT_GAME_MODE))
-        return current_mode in {"warp", "sparse"}
+        return current_mode in {"warp", "sparse", "overflow"}
 
     def _compute_warp_bounds(self) -> Optional[Dict[str, float]]:
         if not self._is_warp_mode_active():

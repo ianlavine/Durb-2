@@ -10,7 +10,13 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple, TYPE_CHECKING
 
 import websockets
 
-from .constants import STARTING_GOLD, TICK_INTERVAL_SECONDS
+from .constants import (
+    DEFAULT_GAME_MODE,
+    STARTING_GOLD,
+    TICK_INTERVAL_SECONDS,
+    get_node_max_juice,
+    normalize_game_mode,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .message_handlers import MessageRouter
@@ -86,6 +92,7 @@ def build_engine_from_replay(
             y=float(raw.get("y", 0.0)),
             juice=float(raw.get("juice", 0.0)),
             owner=(raw.get("owner") if raw.get("owner") is not None else None),
+            pending_gold=float(raw.get("pendingGold", 0.0) or 0.0),
         )
         nodes.append(node)
 
@@ -112,6 +119,9 @@ def build_engine_from_replay(
     state.pending_eliminations = []
     state.eliminated_players.clear()
     state.game_duration = _coerce_float(replay.get("durationSeconds", state.game_duration), state.game_duration)
+    replay_mode = normalize_game_mode(replay.get("mode", DEFAULT_GAME_MODE))
+    state.mode = replay_mode
+    state.node_max_juice = get_node_max_juice(replay_mode)
 
     constants_raw = replay.get("constants")
     constants = constants_raw if isinstance(constants_raw, dict) else {}
@@ -322,6 +332,7 @@ class ReplaySession:
             tick_message["replay"] = True
             await self._send_json(tick_message)
             await self._flush_pending_captures()
+            await self._flush_pending_overflow_payouts()
 
             if winner is not None:
                 await self._announce_winner(winner)
@@ -351,6 +362,7 @@ class ReplaySession:
                 success = self.engine.handle_node_click(token, node_id)
                 if success:
                     await self._flush_pending_captures()
+                    await self._flush_pending_overflow_payouts()
         elif event_type == "toggleEdge":
             edge_id = _coerce_int(payload.get("edgeId"), -1)
             if edge_id >= 0:
@@ -515,6 +527,7 @@ class ReplaySession:
             return
 
         await self._flush_pending_captures()
+        await self._flush_pending_overflow_payouts()
 
     async def _flush_pending_captures(self) -> None:
         state = self.engine.state
@@ -533,6 +546,24 @@ class ReplaySession:
             }
             await self._send_json(message)
         state.pending_node_captures = []
+
+    async def _flush_pending_overflow_payouts(self) -> None:
+        state = self.engine.state
+        if not state:
+            return
+        payouts = getattr(state, "pending_overflow_payouts", None)
+        if not payouts:
+            return
+        for payout in list(payouts):
+            message = {
+                "type": "nodeOverflowPayout",
+                "nodeId": payout.get("nodeId"),
+                "amount": payout.get("amount"),
+                "playerId": payout.get("player_id"),
+                "replay": True,
+            }
+            await self._send_json(message)
+        state.pending_overflow_payouts = []
 
     async def _send_init(self) -> None:
         state = self.engine.state
