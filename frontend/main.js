@@ -136,8 +136,8 @@
   let selectedMode = 'overflow';
   let gameMode = 'overflow';
   let modeButtons = [];
-  const MODE_LABELS = { basic: 'Basic', warp: 'Original', sparse: 'Sparse', overflow: 'Ring' };
-  const OVERFLOW_PENDING_GOLD_THRESHOLD = 5;
+  const MODE_LABELS = { basic: 'Basic', warp: 'OG', sparse: 'Sparse', overflow: 'Ring' };
+  const OVERFLOW_PENDING_GOLD_THRESHOLD = 10;
 
   function isWarpLike(mode) {
     const normalized = normalizeMode(mode);

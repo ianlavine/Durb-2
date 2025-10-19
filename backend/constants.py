@@ -28,14 +28,14 @@ NODE_MAX_JUICE_BY_MODE: Dict[str, float] = {
     "overflow": 300.0,
 }
 NODE_MAX_JUICE: float = NODE_MAX_JUICE_BY_MODE[DEFAULT_GAME_MODE]
-PRODUCTION_RATE_PER_NODE: float = 0.7
+PRODUCTION_RATE_PER_NODE: float = 0.5
 MAX_TRANSFER_RATIO: float = 0.95
 INTAKE_TRANSFER_RATIO: float = 0.75
 RESERVE_TRANSFER_RATIO: float = 0.007
 
 # Overflow tuning
-OVERFLOW_JUICE_TO_GOLD_RATIO: float = 60.0  # 60 juice -> 1 pending gold
-OVERFLOW_PENDING_GOLD_PAYOUT: float = 5.0   # payout after 5 pending gold -> $5
+OVERFLOW_JUICE_TO_GOLD_RATIO: float = 30.0  # 60 juice -> 1 pending gold
+OVERFLOW_PENDING_GOLD_PAYOUT: float = 10.0   # payout after 5 pending gold -> $5
 
 
 # Economy tuning
@@ -63,7 +63,7 @@ BRIDGE_COST_PER_UNIT_DISTANCE_BY_MODE: Dict[str, float] = {
     "basic": 1.5,
     "warp": 1.5,
     "sparse": 1.0,
-    "overflow": 1.5,
+    "overflow": 1.0,
 }
 BRIDGE_COST_PER_UNIT_DISTANCE: float = BRIDGE_COST_PER_UNIT_DISTANCE_BY_MODE[DEFAULT_GAME_MODE]
 
