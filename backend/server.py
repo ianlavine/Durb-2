@@ -195,6 +195,25 @@ class WebSocketServer:
                                     await self.message_router._send_safe(capturing_websocket, json.dumps(capture_msg))
                     state.pending_node_captures = []
 
+                if hasattr(state, "pending_overflow_payouts") and state.pending_overflow_payouts:
+                    for payout_data in state.pending_overflow_payouts:
+                        payout_player_id = payout_data.get("player_id")
+                        if payout_player_id is None:
+                            continue
+                        payout_token = engine.player_id_to_token.get(payout_player_id)
+                        if not payout_token:
+                            continue
+                        payout_ws = game_info.get("clients", {}).get(payout_token)
+                        if not payout_ws:
+                            continue
+                        payout_msg = {
+                            "type": "nodeOverflowPayout",
+                            "nodeId": payout_data.get("nodeId"),
+                            "amount": payout_data.get("amount", 0.0),
+                        }
+                        await self.message_router._send_safe(payout_ws, json.dumps(payout_msg))
+                    state.pending_overflow_payouts = []
+
                 tick_msg = state.to_tick_message(now)
                 await self.message_router._broadcast_to_game(game_info, tick_msg)
 
@@ -237,6 +256,27 @@ class WebSocketServer:
                                     )
                                     await self._broadcast_to_specific([capturing_websocket], capture_msg)
                     state.pending_node_captures = []
+
+                if state and hasattr(state, "pending_overflow_payouts") and state.pending_overflow_payouts:
+                    for payout_data in state.pending_overflow_payouts:
+                        payout_player_id = payout_data.get("player_id")
+                        if payout_player_id is None:
+                            continue
+                        payout_token = bot_game_engine.player_id_to_token.get(payout_player_id)
+                        if not payout_token:
+                            continue
+                        payout_ws = self.server_context.get("bot_game_clients", {}).get(payout_token)
+                        if not payout_ws:
+                            continue
+                        payout_msg = json.dumps(
+                            {
+                                "type": "nodeOverflowPayout",
+                                "nodeId": payout_data.get("nodeId"),
+                                "amount": payout_data.get("amount", 0.0),
+                            }
+                        )
+                        await self._broadcast_to_specific([payout_ws], payout_msg)
+                    state.pending_overflow_payouts = []
 
                 if state:
                     tick_payload = json.dumps(state.to_tick_message(now))

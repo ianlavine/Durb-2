@@ -8,7 +8,7 @@ from collections import deque
 from typing import Dict, List, Optional, Set, Tuple
 
 from .game_engine import GameEngine
-from .constants import BRIDGE_COST_PER_UNIT_DISTANCE, NODE_MAX_JUICE
+from .constants import BRIDGE_COST_PER_UNIT_DISTANCE
 
 class BotTemplate:
 
