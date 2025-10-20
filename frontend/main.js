@@ -155,12 +155,6 @@
   let reviewDropdownButton = null;
   let postgameNotice = null;
   let lobbyBackButton = null;
-  let guestNameInputEl = null;
-  let guestNameConfirmBtn = null;
-  let menuGuestNameConfirmed = false;
-  const GUEST_NAME_KEY = 'guestName';
-  let savedGuestName = sanitizeGuestName(localStorage.getItem(GUEST_NAME_KEY) || '');
-  menuGuestNameConfirmed = savedGuestName.length > 0;
   let playFriendsBtn = null;
   let playBotBtnEl = null;
   let currentPostgameGroupId = null;
@@ -1332,12 +1326,12 @@
     const normalized = normalizeMode(nextMode);
     if (!options.force && selectedMode === normalized) {
       updateModeButtonsUI();
-      updatePlayBotAvailability(menuGuestNameConfirmed && savedGuestName.length > 0);
+      updatePlayBotAvailability(true);
       return selectedMode;
     }
     selectedMode = normalized;
     updateModeButtonsUI();
-    updatePlayBotAvailability(menuGuestNameConfirmed && savedGuestName.length > 0);
+    updatePlayBotAvailability(true);
     const infoPanel = document.getElementById('modeInfoPanel');
     const infoButton = document.getElementById('modeInfoButton');
     if (infoPanel && infoButton) {
@@ -1626,30 +1620,6 @@ function clearBridgeSelection() {
     const buttonContainer = document.querySelector('.button-container');
     const playerCountButtons = document.querySelectorAll('.player-count-option');
     modeButtons = Array.from(document.querySelectorAll('.mode-option'));
-    guestNameInputEl = document.getElementById('guestNameInput');
-    guestNameConfirmBtn = document.getElementById('guestNameConfirm');
-    if (guestNameInputEl) {
-      savedGuestName = sanitizeGuestName(savedGuestName);
-      guestNameInputEl.value = savedGuestName;
-      menuGuestNameConfirmed = savedGuestName.length > 0;
-      guestNameInputEl.addEventListener('input', handleGuestNameInput);
-      guestNameInputEl.addEventListener('keydown', (evt) => {
-        if (evt.key === 'Enter') {
-          evt.preventDefault();
-          confirmGuestName();
-        }
-      });
-    } else {
-      savedGuestName = '';
-      menuGuestNameConfirmed = false;
-    }
-    if (guestNameConfirmBtn) {
-      guestNameConfirmBtn.addEventListener('click', () => {
-        confirmGuestName();
-      });
-    }
-    updateGuestNameUI();
-
     if (playerCountButtons && playerCountButtons.length) {
       playerCountButtons.forEach((btn) => {
         btn.addEventListener('click', () => {
@@ -1680,9 +1650,7 @@ function clearBridgeSelection() {
         modeInfoPanel.setAttribute('aria-hidden', 'true');
         modeInfoButton.setAttribute('aria-expanded', 'false');
       };
-
-      modeInfoButton.addEventListener('click', (event) => {
-        event.stopPropagation();
+      const toggleModePanel = () => {
         const isVisible = modeInfoPanel.style.display === 'block';
         if (isVisible) {
           hideModePanel();
@@ -1690,6 +1658,19 @@ function clearBridgeSelection() {
           modeInfoPanel.style.display = 'block';
           modeInfoPanel.setAttribute('aria-hidden', 'false');
           modeInfoButton.setAttribute('aria-expanded', 'true');
+        }
+      };
+
+      modeInfoButton.addEventListener('click', (event) => {
+        event.stopPropagation();
+        toggleModePanel();
+      });
+
+      modeInfoButton.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ' || event.key === 'Spacebar') {
+          event.preventDefault();
+          event.stopPropagation();
+          toggleModePanel();
         }
       });
 
@@ -1704,14 +1685,8 @@ function clearBridgeSelection() {
     }
     
     if (playFriendsBtn) {
+      playFriendsBtn.disabled = false;
       playFriendsBtn.addEventListener('click', () => {
-        if (!menuGuestNameConfirmed || !savedGuestName) {
-          if (guestNameInputEl) {
-            guestNameInputEl.classList.add('invalid');
-            guestNameInputEl.focus();
-          }
-          return;
-        }
         if (isReplayActive()) {
           setReplayStatus('Stop the current replay before joining a lobby.', 'warn');
           return;
@@ -1731,7 +1706,6 @@ function clearBridgeSelection() {
             token: localStorage.getItem('token') || null,
             autoExpand: persistentAutoExpand,
             playerCount: selectedPlayerCount,
-            guestName: savedGuestName,
             mode: selectedMode,
           }));
         }
@@ -1739,14 +1713,8 @@ function clearBridgeSelection() {
     }
 
     if (playBotBtnEl) {
+      updatePlayBotAvailability(true);
       playBotBtnEl.addEventListener('click', () => {
-        if (!menuGuestNameConfirmed || !savedGuestName) {
-          if (guestNameInputEl) {
-            guestNameInputEl.classList.add('invalid');
-            guestNameInputEl.focus();
-          }
-          return;
-        }
         if (isReplayActive()) {
           setReplayStatus('Stop the current replay before starting a bot match.', 'warn');
           return;
@@ -1763,7 +1731,6 @@ function clearBridgeSelection() {
             type: 'startBotGame',
             difficulty: 'hard',
             autoExpand: persistentAutoExpand,
-            guestName: savedGuestName,
             mode: selectedMode,
           }));
         }
@@ -4731,16 +4698,6 @@ function clearBridgeSelection() {
     quitButton.textContent = (gameEnded || myEliminated) ? 'Quit' : 'Forfeit';
   }
 
-  function sanitizeGuestName(raw) {
-    if (raw == null) return '';
-    let text = String(raw);
-    text = text.replace(/[\u0000-\u001f\u007f]/g, '');
-    text = text.replace(/\s+/g, ' ');
-    text = text.trim();
-    if (text.length > 24) text = text.slice(0, 24);
-    return text;
-  }
-
   function showLobby() {
     const lobby = document.getElementById('lobby');
     if (lobby) lobby.style.display = 'block';
@@ -4754,53 +4711,6 @@ function clearBridgeSelection() {
   function setLobbyStatus(message) {
     const lobby = document.getElementById('lobby');
     if (lobby) lobby.textContent = message || '';
-  }
-
-  function updateGuestNameUI(options = {}) {
-    if (!guestNameInputEl || !guestNameConfirmBtn) return;
-    const trimmed = sanitizeGuestName(guestNameInputEl.value);
-    const hasValue = trimmed.length > 0;
-    const matchesSaved = hasValue && trimmed === savedGuestName && savedGuestName.length > 0;
-
-    if (options.forceInvalid && !hasValue) {
-      guestNameInputEl.classList.add('invalid');
-    } else if (menuGuestNameConfirmed) {
-      guestNameInputEl.classList.remove('invalid');
-    } else if (!hasValue) {
-      guestNameInputEl.classList.remove('invalid');
-    }
-
-    guestNameConfirmBtn.disabled = !hasValue;
-    guestNameConfirmBtn.classList.toggle('confirmed', menuGuestNameConfirmed && matchesSaved);
-
-    setPlayButtonsEnabled(menuGuestNameConfirmed && savedGuestName.length > 0);
-  }
-
-  function handleGuestNameInput() {
-    menuGuestNameConfirmed = false;
-    if (guestNameInputEl) guestNameInputEl.classList.remove('invalid');
-    updateGuestNameUI();
-  }
-
-  function confirmGuestName() {
-    if (!guestNameInputEl) return;
-    const trimmed = sanitizeGuestName(guestNameInputEl.value);
-    if (!trimmed) {
-      updateGuestNameUI({ forceInvalid: true });
-      return;
-    }
-
-    guestNameInputEl.value = trimmed;
-    savedGuestName = trimmed;
-    menuGuestNameConfirmed = true;
-    guestNameInputEl.classList.remove('invalid');
-    localStorage.setItem(GUEST_NAME_KEY, trimmed);
-    updateGuestNameUI();
-  }
-
-  function setPlayButtonsEnabled(enabled) {
-    if (playFriendsBtn) playFriendsBtn.disabled = !enabled;
-    updatePlayBotAvailability(enabled);
   }
 
   function ensurePlayerStats(id) {
@@ -4943,7 +4853,6 @@ function clearBridgeSelection() {
 
     hideLobby();
     setLobbyStatus('');
-    updateGuestNameUI();
     if (menu) menu.classList.remove('hidden');
     if (homeButtons) homeButtons.style.display = 'flex';
     if (playBtnEl) playBtnEl.style.display = 'block';

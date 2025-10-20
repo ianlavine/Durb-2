@@ -46,69 +46,6 @@
         text-align: center;
         margin-top: clamp(20px, 4vh, 40px);
       }
-      .menu-guest-name {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        width: 100%;
-        max-width: 520px;
-      }
-      .menu-guest-name-input {
-        flex: 1 1 auto;
-        min-width: 0;
-        padding: 12px 16px;
-        border-radius: 12px;
-        border: 2px solid #cfcfcf;
-        background: rgba(15, 15, 15, 0.85);
-        color: #f3f3f3;
-        font-size: 20px;
-        font-family: "Fira Code", "Source Code Pro", monospace;
-        transition: border-color 0.15s ease, box-shadow 0.15s ease;
-      }
-      .menu-guest-name-input::placeholder {
-        color: #8b8b8b;
-      }
-      .menu-guest-name-input:focus {
-        outline: none;
-        border-color: #f0f0f0;
-        box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.12);
-      }
-      .menu-guest-name-input.invalid {
-        border-color: #ff6b6b;
-        box-shadow: 0 0 0 3px rgba(255, 107, 107, 0.25);
-      }
-      .menu-guest-name-confirm {
-        width: 56px;
-        height: 56px;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        border-radius: 50%;
-        border: none;
-        background: linear-gradient(135deg, #d9d9d9, #f6f6f6);
-        color: #3a3a3a;
-        font-size: 32px;
-        cursor: pointer;
-        box-shadow: 0 10px 22px rgba(0,0,0,0.35);
-        transition: transform 0.12s ease, filter 0.16s ease, background 0.25s ease;
-      }
-      .menu-guest-name-confirm:hover:not(:disabled) {
-        filter: brightness(1.05);
-        transform: translateY(-2px);
-      }
-      .menu-guest-name-confirm:active:not(:disabled) {
-        transform: scale(0.92);
-      }
-      .menu-guest-name-confirm:disabled {
-        opacity: 0.45;
-        cursor: default;
-        box-shadow: none;
-        filter: grayscale(0.6);
-      }
-      .menu-guest-name-confirm.confirmed {
-        background: linear-gradient(135deg, #ffffff, #dcdcdc);
-        color: #1a1a1a;
-      }
       #playBtn:hover, #playBotBtn:hover { filter: brightness(1.1); }
       .button-container {
         display: flex;
@@ -484,7 +421,7 @@
       .selection-row {
         display: flex;
         flex-wrap: wrap;
-        justify-content: center;
+        justify-content: flex-start;
         align-items: flex-start;
         gap: 20px;
         width: 100%;
@@ -504,6 +441,22 @@
         text-align: center;
       }
 
+      .player-count-selector {
+        display: inline-grid;
+        align-items: center;
+        justify-items: center;
+        text-align: center;
+      }
+
+      .player-count-selector .selector-label {
+        justify-self: start;
+        margin-left: 55px;
+      }
+
+      .player-count-selector .player-count-options {
+        justify-self: start;
+      }
+
       @media (max-width: 640px) {
         .player-count-selector,
         .mode-selector {
@@ -521,30 +474,25 @@
       .mode-label-row {
         display: flex;
         align-items: center;
-        justify-content: center;
+        justify-content: flex-start;
         gap: 6px;
       }
 
       .mode-info {
-        width: 26px;
-        height: 26px;
-        border-radius: 50%;
-        border: 1px solid #888888;
-        background: rgba(45,45,45,0.9);
-        color: #f5f5f5;
-        font-size: 15px;
         font-family: monospace;
+        font-size: 18px;
+        color: #f5f5f5;
         display: inline-flex;
         align-items: center;
         justify-content: center;
         cursor: pointer;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.35);
-        transition: transform 0.12s ease, background 0.2s ease, color 0.2s ease;
+        line-height: 1;
+        transition: color 0.2s ease, transform 0.1s ease;
       }
 
       .mode-info:hover {
         transform: translateY(-1px);
-        background: rgba(70,70,70,0.95);
+        color: #ffffff;
       }
 
       .mode-info:focus-visible {
@@ -556,7 +504,7 @@
         display: flex;
         gap: 10px;
         flex-wrap: wrap;
-        justify-content: center;
+        justify-content: flex-start;
       }
 
       .mode-options {
@@ -746,7 +694,7 @@
           <div class="mode-selector">
             <div class="mode-label-row">
               <span class="selector-label">Mode</span>
-              <button id="modeInfoButton" class="mode-info" type="button" aria-label="Explain game modes" aria-controls="modeInfoPanel" aria-expanded="false">ⓘ</button>
+              <span id="modeInfoButton" class="mode-info" role="button" tabindex="0" aria-label="Explain game modes" aria-controls="modeInfoPanel" aria-expanded="false">ⓘ</span>
             </div>
             <div class="mode-options">
               <button class="mode-option" data-mode="warp">OG</button>
@@ -761,10 +709,6 @@
         </div>
         <button id="playBtn">PLAY FRIENDS</button>
         <button id="playBotBtn">PLAY BOT</button>
-        <div class="menu-guest-name" id="menuGuestNameRow">
-          <input id="guestNameInput" class="menu-guest-name-input" type="text" maxlength="24" autocomplete="off" spellcheck="false" placeholder="Choose guest name" />
-          <button id="guestNameConfirm" class="menu-guest-name-confirm" title="Confirm guest name" aria-label="Confirm guest name">✔</button>
-        </div>
         <div class="replay-uploader" id="replayPanel">
           <div class="replay-header" id="replayHeader">
             <span>Replay Upload</span>
