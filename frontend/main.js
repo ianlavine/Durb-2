@@ -61,6 +61,10 @@
   let reverseCostDisplay = null; // current reverse edge cost display text object
   let lastReverseCostPosition = null; // last position where reverse cost was displayed
 
+  const DOUBLE_CLICK_DELAY_MS = 220;
+  let pendingSingleClickTimeout = null;
+  let pendingSingleClickData = null;
+
   // Bridge costs - dynamically loaded from backend settings
   let BRIDGE_BASE_COST = 0;
   let BRIDGE_COST_PER_UNIT = 1.5;
@@ -136,12 +140,12 @@
   let selectedMode = 'overflow';
   let gameMode = 'overflow';
   let modeButtons = [];
-  const MODE_LABELS = { basic: 'Basic', warp: 'OG', sparse: 'Sparse', overflow: 'Ring' };
+  const MODE_LABELS = { basic: 'Basic', warp: 'OG', sparse: 'Sparse', overflow: 'Ring', nuke: 'Nuke' };
   const OVERFLOW_PENDING_GOLD_THRESHOLD = 10;
 
   function isWarpLike(mode) {
     const normalized = normalizeMode(mode);
-    return normalized === 'warp' || normalized === 'sparse' || normalized === 'overflow';
+    return normalized === 'warp' || normalized === 'sparse' || normalized === 'overflow' || normalized === 'nuke';
   }
 
   // Money transparency system
@@ -1301,6 +1305,14 @@
     return Object.prototype.hasOwnProperty.call(MODE_LABELS, lowered) ? lowered : 'basic';
   }
 
+  function isRingModeActive() {
+    return normalizeMode(gameMode) === 'overflow';
+  }
+
+  function isNukeModeActive() {
+    return normalizeMode(gameMode) === 'nuke';
+  }
+
   function formatModeText(mode) {
     return MODE_LABELS[normalizeMode(mode)] || MODE_LABELS.basic;
   }
@@ -2373,6 +2385,7 @@ function clearBridgeSelection() {
       else if (msg.type === 'reverseEdgeError') handleReverseEdgeError(msg);
       else if (msg.type === 'nodeDestroyed') handleNodeDestroyed(msg);
       else if (msg.type === 'destroyError') handleDestroyError(msg);
+      else if (msg.type === 'nukeError') handleNukeError(msg);
       else if (msg.type === 'nodeCaptured') handleNodeCaptured(msg);
       else if (msg.type === 'nodeOverflowPayout') handleNodeOverflowPayout(msg);
       else if (msg.type === 'lobbyTimeout') handleLobbyTimeout();
@@ -3282,6 +3295,10 @@ function clearBridgeSelection() {
     showErrorMessage(msg.message || "Can't destroy this node!");
   }
 
+  function handleNukeError(msg) {
+    showErrorMessage(msg.message || "Can't nuke this node!");
+  }
+
   function handleNodeCaptured(msg) {
     // Show reward indicator when a node is captured
     if (msg.nodeId && msg.reward) {
@@ -3417,7 +3434,7 @@ function clearBridgeSelection() {
     
     // Draw border box around play area (warp border handles inner toggle)
     drawPlayAreaBorder();
-    const overflowMode = normalizeMode(gameMode) === 'overflow';
+    const overflowMode = ['overflow', 'nuke'].includes(normalizeMode(gameMode));
     
     // Show gold display when graph is being drawn and we have nodes/game data
     if (goldDisplay && nodes.size > 0) {
@@ -3854,6 +3871,8 @@ function clearBridgeSelection() {
 
   function canReverseEdge(edge) {
     if (!edge) return false;
+
+    if (isNukeModeActive()) return false;
     
     const sourceNode = nodes.get(edge.source);
     if (!sourceNode) return false;
@@ -4025,9 +4044,13 @@ function clearBridgeSelection() {
       const edge = edges.get(edgeId);
       if (edge) {
         if (!canReverseEdge(edge)) {
-          const sourceNode = nodes.get(edge.source);
-          if (sourceNode && sourceNode.owner != null && sourceNode.owner !== myPlayerId) {
-            showErrorMessage('Pipe controlled by Opponent');
+          if (isNukeModeActive()) {
+            showErrorMessage('Edge reversal disabled in Nuke mode');
+          } else {
+            const sourceNode = nodes.get(edge.source);
+            if (sourceNode && sourceNode.owner != null && sourceNode.owner !== myPlayerId) {
+              showErrorMessage('Pipe controlled by Opponent');
+            }
           }
         } else {
           const sourceNode = nodes.get(edge.source);
@@ -4231,7 +4254,10 @@ function clearBridgeSelection() {
     if (!isEventInsideGameCanvas(ev)) return;
     if (gameEnded) return;
     const menuVisible = !document.getElementById('menu')?.classList.contains('hidden');
-    if (menuVisible) return;
+    if (menuVisible) {
+      cancelPendingSingleClick();
+      return;
+    }
     if (!isWarpLike(gameMode) && !isWarpLike(selectedMode)) return;
     const canvas = getGameCanvas();
     if (!canvas || typeof canvas.requestPointerLock !== 'function') return;
@@ -4300,6 +4326,7 @@ function clearBridgeSelection() {
   // Input: during picking, click to claim a node once; during playing, edge interactions allowed
   window.addEventListener('click', (ev) => {
     if (ev.__virtualCursor) {
+      cancelPendingSingleClick();
       return;
     }
     if (pendingVirtualUiClickTarget) {
@@ -4309,10 +4336,12 @@ function clearBridgeSelection() {
       ev.preventDefault();
       ev.stopPropagation();
       ev.stopImmediatePropagation?.();
+      cancelPendingSingleClick();
       return;
     }
     if (lastPointerDownButton != null && lastPointerDownButton !== 0) {
       lastPointerDownButton = null;
+      cancelPendingSingleClick();
       return;
     }
     lastPointerDownButton = null;
@@ -4320,12 +4349,32 @@ function clearBridgeSelection() {
     if (menuVisible) return;
     maybeEnableVirtualCursor(ev);
     syncVirtualCursorToEvent(ev);
-    if (isReplayActive()) return;
-    if (gameEnded) return;
+    if (isReplayActive()) {
+      cancelPendingSingleClick();
+      return;
+    }
+    if (gameEnded) {
+      cancelPendingSingleClick();
+      return;
+    }
     const wx = mouseWorldX;
     const wy = mouseWorldY;
     const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
-    
+
+    if (isNukeModeActive() && ev.button === 0) {
+      if (ev.detail >= 2) {
+        cancelPendingSingleClick();
+        const nuked = attemptNodeNuke(wx, wy, baseScale);
+        if (!nuked) {
+          handleSingleClick(ev, wx, wy, baseScale);
+        }
+      } else {
+        scheduleSingleClickExecution(ev, wx, wy, baseScale);
+      }
+      return;
+    }
+
+    cancelPendingSingleClick();
     handleSingleClick(ev, wx, wy, baseScale);
   });
 
@@ -4407,6 +4456,52 @@ function clearBridgeSelection() {
     hideBridgeCostDisplay();
     hideReverseCostDisplay();
     return true; // Handled
+  }
+
+  function cancelPendingSingleClick() {
+    if (pendingSingleClickTimeout !== null) {
+      clearTimeout(pendingSingleClickTimeout);
+      pendingSingleClickTimeout = null;
+    }
+    pendingSingleClickData = null;
+  }
+
+  function scheduleSingleClickExecution(ev, wx, wy, baseScale) {
+    cancelPendingSingleClick();
+    pendingSingleClickData = { ev, wx, wy, baseScale };
+    pendingSingleClickTimeout = window.setTimeout(() => {
+      const data = pendingSingleClickData;
+      pendingSingleClickTimeout = null;
+      pendingSingleClickData = null;
+      if (!data) return;
+      handleSingleClick(data.ev, data.wx, data.wy, data.baseScale);
+    }, DOUBLE_CLICK_DELAY_MS);
+  }
+
+  function attemptNodeNuke(wx, wy, baseScale) {
+    if (!isNukeModeActive()) return false;
+    if (isReplayActive()) return false;
+    if (myEliminated || gameEnded) return false;
+
+    const nodeId = pickNearestNode(wx, wy, 18 / baseScale);
+    if (nodeId == null) return false;
+
+    const node = nodes.get(nodeId);
+    if (!node) return false;
+    if (node.owner !== myPlayerId) {
+      showErrorMessage('Can only nuke your own nodes');
+      return false;
+    }
+
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+
+    const token = localStorage.getItem('token');
+    ws.send(JSON.stringify({
+      type: 'nukeNode',
+      nodeId,
+      token
+    }));
+    return true;
   }
 
   function handleSingleClick(ev, wx, wy, baseScale) {

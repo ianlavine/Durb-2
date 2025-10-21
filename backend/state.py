@@ -384,7 +384,7 @@ class GraphState:
         3. For attacking flows: always flow when on (regardless of target capacity)
         """
         node_max = getattr(self, "node_max_juice", get_node_max_juice(self.mode))
-        is_overflow_mode = normalize_game_mode(self.mode) == "overflow"
+        is_overflow_mode = normalize_game_mode(self.mode) in {"overflow", "nuke"}
         for edge in self.edges.values():
             # Handle bridge build gating: while building, edge cannot be on/flowing
             if getattr(edge, 'building', False):
@@ -448,7 +448,7 @@ class GraphState:
         self._update_edge_flowing_status()
 
         node_max = getattr(self, "node_max_juice", get_node_max_juice(self.mode))
-        is_overflow_mode = normalize_game_mode(self.mode) == "overflow"
+        is_overflow_mode = normalize_game_mode(self.mode) in {"overflow", "nuke"}
         if self.pending_overflow_payouts:
             self.pending_overflow_payouts.clear()
 

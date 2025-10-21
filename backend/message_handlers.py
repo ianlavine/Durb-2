@@ -52,6 +52,7 @@ class MessageRouter:
             "redirectEnergy": self.handle_redirect_energy,
             "localTargeting": self.handle_local_targeting,
             "destroyNode": self.handle_destroy_node,
+            "nukeNode": self.handle_nuke_node,
             "quitGame": self.handle_quit_game,
             "toggleAutoExpand": self.handle_toggle_auto_expand,
             "newGame": self.handle_new_game,
@@ -650,6 +651,54 @@ class MessageRouter:
             },
         )
 
+    async def handle_nuke_node(
+        self,
+        websocket: websockets.WebSocketServerProtocol,
+        msg: Dict[str, Any],
+        server_context: Dict[str, Any],
+    ) -> None:
+        token = msg.get("token")
+        node_id = msg.get("nodeId")
+        if token is None or node_id is None:
+            return
+
+        game_info = self._get_game_info(token, server_context)
+        if not game_info:
+            return
+
+        engine = game_info["engine"]
+        success, error_msg, removal_info = engine.handle_nuke_node(token, int(node_id))
+        if not success:
+            await self._send_safe(
+                websocket,
+                json.dumps({"type": "nukeError", "message": error_msg or "Can't nuke this node"}),
+            )
+            return
+
+        player_id = engine.get_player_id(token)
+        removal_payload: Dict[str, Any] = {
+            "type": "nodeDestroyed",
+            "nodeId": int(node_id),
+            "playerId": player_id,
+            "removedEdges": removal_info.get("removedEdges", []) if removal_info else [],
+            "reason": "nuke",
+            "cost": 0,
+        }
+        if removal_info and removal_info.get("node"):
+            removal_payload["nodeSnapshot"] = removal_info.get("node")
+
+        await self._broadcast_to_game(game_info, removal_payload)
+
+        self._record_game_event(
+            game_info,
+            token,
+            "nukeNode",
+            {
+                "nodeId": int(node_id),
+                "removedEdges": removal_info.get("removedEdges", []) if removal_info else [],
+            },
+        )
+
     async def handle_quit_game(
         self,
         websocket: websockets.WebSocketServerProtocol,
@@ -950,6 +999,30 @@ class MessageRouter:
             target_node_id = msg.get("targetNodeId")
             if target_node_id is not None:
                 bot_game_engine.handle_local_targeting(token, int(target_node_id))
+
+        elif msg_type == "nukeNode":
+            node_id = msg.get("nodeId")
+            if node_id is not None:
+                success, error_msg, removal_info = bot_game_engine.handle_nuke_node(token, int(node_id))
+                if not success:
+                    await self._send_safe(
+                        websocket,
+                        json.dumps({"type": "nukeError", "message": error_msg or "Can't nuke this node"}),
+                    )
+                else:
+                    player_id = bot_game_engine.get_player_id(token)
+                    payload: Dict[str, Any] = {
+                        "type": "nodeDestroyed",
+                        "nodeId": int(node_id),
+                        "playerId": player_id,
+                        "removedEdges": removal_info.get("removedEdges", []) if removal_info else [],
+                        "reason": "nuke",
+                        "cost": 0,
+                    }
+                    if removal_info and removal_info.get("node"):
+                        payload["nodeSnapshot"] = removal_info.get("node")
+
+                    await self._send_safe(websocket, json.dumps(payload))
 
         elif msg_type == "destroyNode":
             node_id = msg.get("nodeId")

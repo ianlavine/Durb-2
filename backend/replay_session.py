@@ -515,6 +515,24 @@ class ReplaySession:
                     if removal_info and removal_info.get("playerId") is not None:
                         message["playerId"] = removal_info.get("playerId")
                     await self._send_json(message)
+        elif event_type == "nukeNode":
+            node_id = _coerce_int(payload.get("nodeId"), -1)
+            if node_id >= 0:
+                success, _, removal_info = self.engine.handle_nuke_node(token, node_id)
+                if success:
+                    message = {
+                        "type": "nodeDestroyed",
+                        "nodeId": node_id,
+                        "replay": True,
+                        "removedEdges": removal_info.get("removedEdges", []) if removal_info else [],
+                        "reason": "nuke",
+                        "cost": 0,
+                    }
+                    if removal_info and removal_info.get("node"):
+                        message["nodeSnapshot"] = removal_info.get("node")
+                    if removal_info and removal_info.get("playerId") is not None:
+                        message["playerId"] = removal_info.get("playerId")
+                    await self._send_json(message)
         elif event_type == "quitGame":
             winner = self.engine.handle_quit_game(token)
             if winner is not None:

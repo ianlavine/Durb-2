@@ -302,10 +302,14 @@ class GameEngine:
         try:
             self.validate_game_active()
             player_id = self.validate_player(token)
-            
+
             # Allow reverse edge if player has picked starting node
             self.validate_player_can_act(player_id)
-                
+
+            current_mode = normalize_game_mode(getattr(self.state, "mode", DEFAULT_GAME_MODE))
+            if current_mode == "nuke":
+                raise GameValidationError("Edge reversal disabled in Nuke mode")
+
             edge = self.validate_edge_exists(edge_id)
             
             # Get both nodes
@@ -368,7 +372,7 @@ class GameEngine:
         if not self.state:
             return False
         current_mode = normalize_game_mode(getattr(self.state, "mode", DEFAULT_GAME_MODE))
-        return current_mode in {"warp", "sparse", "overflow"}
+        return current_mode in {"warp", "sparse", "overflow", "nuke"}
 
     def _compute_warp_bounds(self) -> Optional[Dict[str, float]]:
         if not self._is_warp_mode_active():
@@ -1075,6 +1079,36 @@ class GameEngine:
             payload["playerId"] = player_id
             return True, None, payload
             
+        except GameValidationError as e:
+            return False, str(e), None
+
+    def handle_nuke_node(
+        self,
+        token: str,
+        node_id: int,
+    ) -> Tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
+        """Handle nuking a node in Nuke mode (removes node and attached edges)."""
+
+        try:
+            self.validate_game_active()
+            current_mode = normalize_game_mode(getattr(self.state, "mode", DEFAULT_GAME_MODE))
+            if current_mode != "nuke":
+                raise GameValidationError("Nukes are only available in Nuke mode")
+
+            player_id = self.validate_player(token)
+            self.validate_player_can_act(player_id)
+
+            node = self.validate_node_exists(node_id)
+            self.validate_player_owns_node(node, player_id)
+
+            removal_info = self.state.remove_node_and_edges(node_id)
+            if not removal_info:
+                raise GameValidationError("Invalid node")
+
+            payload = dict(removal_info)
+            payload["playerId"] = player_id
+            return True, None, payload
+
         except GameValidationError as e:
             return False, str(e), None
 
