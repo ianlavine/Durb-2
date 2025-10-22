@@ -1,0 +1,341 @@
+import json
+import math
+import random
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Set
+from .models import Node, Edge
+
+
+SEED: Optional[int] = 39
+NODE_COUNT: int = 60
+DESIRED_EDGE_COUNT: int = 55
+ONE_WAY_PERCENT: float = 0.5
+
+# Layout scaling (extra stretch toward top-right)
+WIDTH_SCALE: float = 1  # widen 25%, anchored on left edge
+HEIGHT_SCALE: float = 1.1  # extend 20% upward while keeping bottom fixed
+
+SCREEN_WIDTH: Optional[int] = None
+SCREEN_HEIGHT: Optional[int] = None
+SCREEN_MARGIN: int = 40
+
+OUTPUT_PATH: str = "graph.json"
+
+
+# Node and Edge classes are now imported from models.py
+
+
+def try_get_screen_size() -> Tuple[int, int]:
+    # Deprecated for runtime server usage. Keep for CLI fallback.
+    if SCREEN_WIDTH is not None and SCREEN_HEIGHT is not None:
+        return SCREEN_WIDTH, SCREEN_HEIGHT
+    return 1920, 1080
+
+
+def generate_node_positions(num_nodes: int, width: float, height: float, margin: int) -> List[Node]:
+    usable_w = max(1, width - 2 * margin)
+    usable_h = max(1, height - 2 * margin)
+    aspect = usable_w / usable_h
+    cols = max(1, math.ceil(math.sqrt(num_nodes * aspect)))
+    rows = max(1, math.ceil(num_nodes / cols))
+    cell_w = usable_w / cols
+    cell_h = usable_h / rows
+    nodes: List[Node] = []
+    index = 0
+    random_jitter_w = cell_w * 0.3
+    random_jitter_h = cell_h * 0.3
+    for r in range(rows):
+        for c in range(cols):
+            if index >= num_nodes:
+                break
+            cx = margin + (c + 0.5) * cell_w
+            cy = margin + (r + 0.5) * cell_h
+            x = cx + random.uniform(-random_jitter_w, random_jitter_w)
+            y = cy + random.uniform(-random_jitter_h, random_jitter_h)
+            nodes.append(Node(id=index, x=x, y=y, juice=8.0, cur_intake=0.0))
+            index += 1
+        if index >= num_nodes:
+            break
+    return nodes
+
+
+def _orientation(ax: float, ay: float, bx: float, by: float, cx: float, cy: float) -> int:
+    val = (by - ay) * (cx - bx) - (bx - ax) * (cy - by)
+    if abs(val) < 1e-9:
+        return 0
+    return 1 if val > 0 else 2
+
+
+def _on_segment(ax: float, ay: float, bx: float, by: float, cx: float, cy: float) -> bool:
+    return min(ax, bx) - 1e-9 <= cx <= max(ax, bx) + 1e-9 and min(ay, by) - 1e-9 <= cy <= max(ay, by) + 1e-9
+
+
+def segments_intersect(p1: Tuple[float, float], p2: Tuple[float, float], q1: Tuple[float, float], q2: Tuple[float, float]) -> bool:
+    ax, ay = p1
+    bx, by = p2
+    cx, cy = q1
+    dx, dy = q2
+    o1 = _orientation(ax, ay, bx, by, cx, cy)
+    o2 = _orientation(ax, ay, bx, by, dx, dy)
+    o3 = _orientation(cx, cy, dx, dy, ax, ay)
+    o4 = _orientation(cx, cy, dx, dy, bx, by)
+    if o1 != o2 and o3 != o4:
+        return True
+    if o1 == 0 and _on_segment(ax, ay, bx, by, cx, cy):
+        return True
+    if o2 == 0 and _on_segment(ax, ay, bx, by, dx, dy):
+        return True
+    if o3 == 0 and _on_segment(cx, cy, dx, dy, ax, ay):
+        return True
+    if o4 == 0 and _on_segment(cx, cy, dx, dy, bx, by):
+        return True
+    return False
+
+
+def generate_planar_edges(nodes: List[Node], desired_edges: int, one_way_percent: float) -> List[Edge]:
+    coords = [(n.x, n.y) for n in nodes]
+    candidates: List[Tuple[float, int, int]] = []
+    num_nodes = len(nodes)
+    for i in range(num_nodes):
+        xi, yi = coords[i]
+        for j in range(i + 1, num_nodes):
+            xj, yj = coords[j]
+            d2 = (xi - xj) * (xi - xj) + (yi - yj) * (yi - yj)
+            candidates.append((d2, i, j))
+    candidates.sort(key=lambda t: t[0])
+    edges: List[Edge] = []
+    existing_segments: List[Tuple[Tuple[float, float], Tuple[float, float]]] = []
+    def would_cross(i: int, j: int) -> bool:
+        p1 = (nodes[i].x, nodes[i].y)
+        p2 = (nodes[j].x, nodes[j].y)
+        for (q1, q2) in existing_segments:
+            if (q1 == p1) or (q1 == p2) or (q2 == p1) or (q2 == p2):
+                continue
+            if segments_intersect(p1, p2, q1, q2):
+                return True
+        return False
+    taken_pairs = set()
+    for _, i, j in candidates:
+        if len(edges) >= desired_edges:
+            break
+        pair = (i, j) if i < j else (j, i)
+        if pair in taken_pairs:
+            continue
+        if would_cross(i, j):
+            continue
+        taken_pairs.add(pair)
+        is_one_way = random.random() < max(0.0, min(1.0, one_way_percent))
+        if is_one_way:
+            if random.random() < 0.5:
+                source, target = i, j
+            else:
+                source, target = j, i
+            edges.append(Edge(id=len(edges), source_node_id=source, target_node_id=target))
+        else:
+            edges.append(Edge(id=len(edges), source_node_id=i, target_node_id=j))
+        existing_segments.append(((nodes[i].x, nodes[i].y), (nodes[j].x, nodes[j].y)))
+    return edges
+
+
+def generate_sparse_edges(nodes: List[Node], _: Optional[int], one_way_percent: float) -> List[Edge]:
+    """Connect isolated nodes to their nearest non-crossing neighbor and ensure ≥40 edges."""
+    num_nodes = len(nodes)
+    if num_nodes == 0:
+        return []
+
+    coords = [(n.x, n.y) for n in nodes]
+    candidate_lists: List[List[Tuple[float, int]]] = []
+    global_candidates: List[Tuple[float, int, int]] = []
+    for i in range(num_nodes):
+        xi, yi = coords[i]
+        local_candidates: List[Tuple[float, int]] = []
+        for j in range(num_nodes):
+            if i == j:
+                continue
+            xj, yj = coords[j]
+            d2 = (xi - xj) * (xi - xj) + (yi - yj) * (yi - yj)
+            local_candidates.append((d2, j))
+            if i < j:
+                global_candidates.append((d2, i, j))
+        local_candidates.sort(key=lambda t: t[0])
+        candidate_lists.append(local_candidates)
+    global_candidates.sort(key=lambda t: t[0])
+
+    edges: List[Edge] = []
+    existing_segments: List[Tuple[Tuple[float, float], Tuple[float, float]]] = []
+    taken_pairs: Set[Tuple[int, int]] = set()
+    connected_nodes: Set[int] = set()
+    MIN_EDGE_COUNT = 40
+
+    def would_cross(i: int, j: int) -> bool:
+        p1 = (nodes[i].x, nodes[i].y)
+        p2 = (nodes[j].x, nodes[j].y)
+        for (q1, q2) in existing_segments:
+            if (q1 == p1) or (q1 == p2) or (q2 == p1) or (q2 == p2):
+                continue
+            if segments_intersect(p1, p2, q1, q2):
+                return True
+        return False
+
+    def add_edge(i: int, j: int) -> bool:
+        pair = (i, j) if i < j else (j, i)
+        if pair in taken_pairs:
+            return False
+        if would_cross(i, j):
+            return False
+
+        taken_pairs.add(pair)
+        is_one_way = random.random() < max(0.0, min(1.0, one_way_percent))
+        if is_one_way:
+            if random.random() < 0.5:
+                source, target = i, j
+            else:
+                source, target = j, i
+        else:
+            source, target = i, j
+
+        edges.append(Edge(id=len(edges), source_node_id=source, target_node_id=target))
+        existing_segments.append(((nodes[i].x, nodes[i].y), (nodes[j].x, nodes[j].y)))
+        connected_nodes.add(i)
+        connected_nodes.add(j)
+        return True
+
+    for i in range(num_nodes):
+        if i in connected_nodes:
+            continue
+        for _, j in candidate_lists[i]:
+            if add_edge(i, j):
+                break
+
+    if len(edges) < MIN_EDGE_COUNT:
+        for _, i, j in global_candidates:
+            if len(edges) >= MIN_EDGE_COUNT:
+                break
+            add_edge(i, j)
+
+    return edges
+
+
+def remove_isolated_nodes(nodes: List[Node], edges: List[Edge]) -> Tuple[List[Node], List[Edge]]:
+    """Remove nodes that have no edges and reassign IDs to maintain continuity."""
+    if not nodes or not edges:
+        return nodes, edges
+    
+    # Find nodes that are connected to at least one edge
+    connected_node_ids = set()
+    for edge in edges:
+        connected_node_ids.add(edge.source_node_id)
+        connected_node_ids.add(edge.target_node_id)
+    
+    # Filter out isolated nodes
+    connected_nodes = [node for node in nodes if node.id in connected_node_ids]
+    
+    # If no nodes were removed, return original lists
+    if len(connected_nodes) == len(nodes):
+        return nodes, edges
+    
+    # Create mapping from old node IDs to new node IDs
+    old_to_new_id = {}
+    new_nodes = []
+    for new_id, node in enumerate(connected_nodes):
+        old_to_new_id[node.id] = new_id
+        new_nodes.append(Node(id=new_id, x=node.x, y=node.y, juice=node.juice, cur_intake=0.0))
+    
+    # Update edge IDs and node references
+    new_edges = []
+    for new_edge_id, edge in enumerate(edges):
+        new_source = old_to_new_id[edge.source_node_id]
+        new_target = old_to_new_id[edge.target_node_id]
+        new_edges.append(Edge(id=new_edge_id, source_node_id=new_source, target_node_id=new_target))
+    
+    return new_nodes, new_edges
+
+
+def apply_layout_scaling(nodes: List[Node], base_width: float, base_height: float) -> Tuple[float, float, float, float]:
+    """Stretch the layout to the right and upward while keeping left/bottom anchored."""
+    if not nodes:
+        return 0.0, 0.0, 0.0, 0.0
+
+    original_min_x = min(node.x for node in nodes)
+    original_max_y = max(node.y for node in nodes)
+
+    for node in nodes:
+        node.x = original_min_x + (node.x - original_min_x) * WIDTH_SCALE
+        node.y = original_max_y - (original_max_y - node.y) * HEIGHT_SCALE
+
+    min_x = min(node.x for node in nodes)
+    max_x = max(node.x for node in nodes)
+    min_y = min(node.y for node in nodes)
+    max_y = max(node.y for node in nodes)
+    return min_x, max_x, min_y, max_y
+
+
+def build_screen_metadata(min_x: float, max_x: float, min_y: float, max_y: float) -> Dict[str, float]:
+    width_span = max_x - min_x
+    height_span = max_y - min_y
+    return {
+        "width": round(width_span, 3),
+        "height": round(height_span, 3),
+        "minX": round(min_x, 3),
+        "minY": round(min_y, 3),
+        "margin": 0,
+    }
+
+
+def main() -> None:
+    if SEED is not None:
+        random.seed(SEED)
+    # Default to a wide 220x90 coordinate space so the map stretches horizontally
+    width, height = 220, 90
+    nodes = generate_node_positions(NODE_COUNT, width, height, 0)
+    edges = generate_planar_edges(nodes, DESIRED_EDGE_COUNT, ONE_WAY_PERCENT)
+
+    # Remove isolated nodes after graph generation
+    nodes, edges = remove_isolated_nodes(nodes, edges)
+
+    min_x, max_x, min_y, max_y = apply_layout_scaling(nodes, width, height)
+    screen_meta = build_screen_metadata(min_x, max_x, min_y, max_y)
+
+    data = {
+        "screen": screen_meta,
+        "nodes": [{"id": n.id, "x": round(n.x, 3), "y": round(n.y, 3)} for n in nodes],
+        "edges": [
+            {"id": e.id, "source": e.source_node_id, "target": e.target_node_id, "bidirectional": False}
+            for e in edges
+        ],
+    }
+    with open(Path(__file__).resolve().parent.parent / OUTPUT_PATH, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    print("Wrote graph.json")
+
+
+if __name__ == "__main__":
+    main()
+
+def generate_graph_to_path(width: int, height: int, output_path: Path) -> None:
+    """Generate a graph using the provided screen width/height and write to output_path.
+
+    This avoids using tkinter for screen detection and is safe to call off the main thread.
+    """
+    if SEED is not None:
+        random.seed(SEED)
+    nodes = generate_node_positions(NODE_COUNT, width, height, 0)
+    edges = generate_planar_edges(nodes, DESIRED_EDGE_COUNT, ONE_WAY_PERCENT)
+
+    # Remove isolated nodes after graph generation
+    nodes, edges = remove_isolated_nodes(nodes, edges)
+
+    min_x, max_x, min_y, max_y = apply_layout_scaling(nodes, width, height)
+    screen_meta = build_screen_metadata(min_x, max_x, min_y, max_y)
+
+    data = {
+        "screen": screen_meta,
+        "nodes": [{"id": n.id, "x": round(n.x, 3), "y": round(n.y, 3)} for n in nodes],
+        "edges": [
+            {"id": e.id, "source": e.source_node_id, "target": e.target_node_id, "bidirectional": False}
+            for e in edges
+        ],
+    }
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
