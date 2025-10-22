@@ -62,7 +62,7 @@
   let lastReverseCostPosition = null; // last position where reverse cost was displayed
 
   const DOUBLE_CLICK_DELAY_MS = 220;
-  const EDGE_REMOVAL_STEP_DURATION = 0.3; // seconds per triangle removal step
+  const EDGE_REMOVAL_STEP_DURATION = 0.2; // seconds per triangle removal step
   let pendingSingleClickTimeout = null;
   let pendingSingleClickData = null;
 
