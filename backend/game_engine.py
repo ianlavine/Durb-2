@@ -350,12 +350,6 @@ class GameEngine:
                 'cost': actual_cost
             }
 
-            # Basic mismatch logging (could be extended to real logging system)
-            if cost and abs(cost - actual_cost) > 0.51:
-                print(
-                    f"[reverse] cost mismatch: client reported {cost}, server calculated {actual_cost}"
-                )
-
             return True
 
         except GameValidationError:
@@ -688,6 +682,7 @@ class GameEngine:
         to_node_id: int,
         client_reported_cost: float,
         warp_info: Optional[Dict[str, Any]] = None,
+        pipe_type: str = "normal",
     ) -> Tuple[bool, Optional[Edge], float, Optional[str], List[int]]:
         """
         Handle building a bridge between two nodes.
@@ -701,10 +696,18 @@ class GameEngine:
             self.validate_player_can_act(player_id)
 
             current_mode = normalize_game_mode(getattr(self.state, "mode", DEFAULT_GAME_MODE))
+            is_cross_mode = current_mode == "cross"
+
+            normalized_pipe_type = "gold" if (pipe_type or "").lower() == "gold" else "normal"
+            if not is_cross_mode:
+                normalized_pipe_type = "normal"
 
             # Validate nodes
             from_node = self.validate_node_exists(from_node_id)
             to_node = self.validate_node_exists(to_node_id)
+
+            if normalized_pipe_type == "gold" and from_node.owner != player_id:
+                raise GameValidationError("Must control Brass Pipes")
 
             if from_node_id == to_node_id:
                 raise GameValidationError("Cannot connect node to itself")
@@ -735,6 +738,8 @@ class GameEngine:
 
             # Calculate and validate gold using server-side formula
             actual_cost = self.calculate_bridge_cost(from_node, to_node, segments_override=candidate_segments)
+            if is_cross_mode and normalized_pipe_type == "gold":
+                actual_cost *= 2
             self.validate_sufficient_gold(player_id, actual_cost)
 
             # Check if edge already exists
@@ -744,11 +749,26 @@ class GameEngine:
             # Check for intersections (cross mode converts them into removals)
             intersecting_edges = self._find_intersecting_edges(from_node, to_node, candidate_segments)
             if intersecting_edges:
-                if current_mode == "cross":
-                    removed_edges = self._remove_edges(intersecting_edges)
-                else:
+                if current_mode != "cross":
                     raise GameValidationError("Bridge would intersect existing edge")
-            
+
+                removable_edges: List[int] = []
+                blocking_edges: List[int] = []
+                for intersect_id in intersecting_edges:
+                    existing_edge = self.state.edges.get(intersect_id) if self.state else None
+                    existing_type = getattr(existing_edge, "pipe_type", "normal") if existing_edge else "normal"
+                    if normalized_pipe_type == "gold" and existing_type != "gold":
+                        removable_edges.append(intersect_id)
+                    else:
+                        blocking_edges.append(intersect_id)
+
+                if blocking_edges:
+                    if normalized_pipe_type == "gold":
+                        raise GameValidationError("Cannot cross golden pipe")
+                    raise GameValidationError("Only golden pipes can cross others")
+
+                removed_edges = self._remove_edges(removable_edges)
+
             # Create the edge (always one-way from source to target)
             new_edge_id = max(self.state.edges.keys(), default=0) + 1
             
@@ -765,6 +785,7 @@ class GameEngine:
                 id=new_edge_id,
                 source_node_id=from_node_id,
                 target_node_id=to_node_id,
+                pipe_type=normalized_pipe_type,
                 on=False,
                 flowing=False,  # Will be set to True by _update_edge_flowing_status when built and conditions are met
                 build_ticks_required=max(1, int(total_world_distance * 0.3)),
@@ -784,14 +805,9 @@ class GameEngine:
 
             # Record the intended on-state so it can be applied when build completes
             if new_edge_should_be_on:
-                # Mark that once building finishes, this edge should turn on
+                # Mark that once building finishes, this edge should turn on, as long as ownership stays the same
                 setattr(new_edge, 'post_build_turn_on', True)
-
-            # Basic mismatch logging (could be extended to real logging system)
-            if client_reported_cost and abs(client_reported_cost - actual_cost) > 0.51:
-                print(
-                    f"[bridge] cost mismatch: client reported {client_reported_cost}, server calculated {actual_cost}"
-                )
+                setattr(new_edge, 'post_build_turn_on_owner', player_id)
 
             return True, new_edge, actual_cost, None, removed_edges
             

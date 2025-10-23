@@ -258,6 +258,7 @@ class GraphState:
                 int(getattr(e, 'build_ticks_required', 0)),
                 int(getattr(e, 'build_ticks_elapsed', 0)),
                 1 if getattr(e, 'building', False) else 0,
+                1 if getattr(e, 'pipe_type', 'normal') == 'gold' else 0,
             ]
             for eid, e in self.edges.items()
         ]
@@ -332,6 +333,7 @@ class GraphState:
             int(getattr(e, 'build_ticks_required', 0)),
             int(getattr(e, 'build_ticks_elapsed', 0)),
             1 if getattr(e, 'building', False) else 0,
+            1 if getattr(e, 'pipe_type', 'normal') == 'gold' else 0,
         ] for eid, e in self.edges.items()]  # Always forward now
         nodes_arr = [
             [
@@ -440,9 +442,16 @@ class GraphState:
             if getattr(e, 'building', False):
                 continue
             if getattr(e, 'post_build_turn_on', False):
-                # Apply intended on-state once
-                e.on = True
+                expected_owner = getattr(e, 'post_build_turn_on_owner', None)
+                source_node = self.nodes.get(e.source_node_id)
+                if expected_owner is None and source_node:
+                    expected_owner = source_node.owner
+                if source_node and expected_owner is not None and source_node.owner == expected_owner:
+                    # Apply intended on-state once if ownership still matches
+                    e.on = True
                 setattr(e, 'post_build_turn_on', False)
+                if hasattr(e, 'post_build_turn_on_owner'):
+                    delattr(e, 'post_build_turn_on_owner')
 
         # Update flowing status for all edges based on target node capacity
         self._update_edge_flowing_status()
@@ -475,8 +484,9 @@ class GraphState:
         # Production for owned nodes
         for node in self.nodes.values():
             if node.owner is not None:
-                base_rate = PRODUCTION_RATE_PER_NODE
-                size_delta[node.id] += base_rate
+                if is_overflow_mode and node.juice >= node_max - 1e-6:
+                    continue
+                size_delta[node.id] += PRODUCTION_RATE_PER_NODE
 
         # Reset last_transfer for all edges at the start of the tick
         for e in self.edges.values():
@@ -732,6 +742,9 @@ def load_graph(graph_path: Path) -> Tuple[GraphState, Dict[str, int]]:
         warp_axis = e.get("warpAxis") if isinstance(e, dict) else None
         warp_segments = e.get("warpSegments") if isinstance(e, dict) else None
         edge = Edge(id=e["id"], source_node_id=e["source"], target_node_id=e["target"])
+        pipe_type = e.get("pipeType") if isinstance(e, dict) else None
+        if isinstance(pipe_type, str) and pipe_type.lower() == "gold":
+            edge.pipe_type = "gold"
         if isinstance(warp_axis, str):
             edge.warp_axis = warp_axis
         if isinstance(warp_segments, list):
@@ -757,8 +770,11 @@ def build_state_from_dict(data: Dict) -> Tuple[GraphState, Dict[str, int]]:
         Node(id=n["id"], x=n["x"], y=n["y"], juice=UNOWNED_NODE_BASE_JUICE, cur_intake=0.0)
         for n in nodes_raw
     ]
-    edges: List[Edge] = [
-        Edge(id=e["id"], source_node_id=e["source"], target_node_id=e["target"])
-        for e in edges_raw
-    ]
+    edges: List[Edge] = []
+    for e in edges_raw:
+        edge = Edge(id=e["id"], source_node_id=e["source"], target_node_id=e["target"])
+        pipe_type = e.get("pipeType") if isinstance(e, dict) else None
+        if isinstance(pipe_type, str) and pipe_type.lower() == "gold":
+            edge.pipe_type = "gold"
+        edges.append(edge)
     return GraphState(nodes, edges), screen

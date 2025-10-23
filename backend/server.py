@@ -45,13 +45,11 @@ class WebSocketServer:
                     try:
                         msg = json.loads(raw)
                         await self.message_router.route_message(websocket, msg, self.server_context)
-                    except Exception as e:
-                        # Log error but continue processing other messages
-                        print(f"Error processing message: {e}")
+                    except Exception:
                         continue
-            except websockets.exceptions.ConnectionClosed as exc:
+            except websockets.exceptions.ConnectionClosed:
                 # Expected for abrupt client disconnects; cleanup happens in finally block
-                print(f"Client connection closed: {exc}")
+                pass
         finally:
             await self._handle_disconnect(websocket)
 
@@ -62,21 +60,6 @@ class WebSocketServer:
 
         ws_to_token = self.server_context.get("ws_to_token", {})
         token = ws_to_token.get(websocket)
-
-        close_code = getattr(websocket, "close_code", None)
-        close_reason = getattr(websocket, "close_reason", "")
-        try:
-            ws_exception = websocket.exception()
-        except Exception:
-            ws_exception = None
-
-        print(
-            "=== WS_DISCONNECT === "
-            f"token={token} "
-            f"code={close_code} "
-            f"reason={close_reason!r} "
-            f"exception={ws_exception}"
-        )
 
         token = ws_to_token.pop(websocket, None)
 
@@ -343,4 +326,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("Shutting down.")
+        pass

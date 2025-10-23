@@ -25,9 +25,9 @@ NODE_MAX_JUICE_BY_MODE: Dict[str, float] = {
     "basic": 500.0,
     "warp": 500.0,
     "sparse": 500.0,
-    "overflow": 300.0,
-    "nuke": 300.0,
-    "cross": 300.0,
+    "overflow": 200.0,
+    "nuke": 200.0,
+    "cross": 200.0,
 }
 NODE_MAX_JUICE: float = NODE_MAX_JUICE_BY_MODE[DEFAULT_GAME_MODE]
 PRODUCTION_RATE_PER_NODE: float = 0.5
@@ -36,8 +36,8 @@ INTAKE_TRANSFER_RATIO: float = 0.75
 RESERVE_TRANSFER_RATIO: float = 0.007
 
 # Overflow tuning
-OVERFLOW_JUICE_TO_GOLD_RATIO: float = 30.0  # 60 juice -> 1 pending gold
-OVERFLOW_PENDING_GOLD_PAYOUT: float = 10.0   # payout after 5 pending gold -> $5
+OVERFLOW_JUICE_TO_GOLD_RATIO: float = 20.0  # 20 juice -> 1 pending gold
+OVERFLOW_PENDING_GOLD_PAYOUT: float = 10.0   # payout after 10 pending gold -> $10
 
 
 # Economy tuning
@@ -54,7 +54,7 @@ GOLD_REWARD_FOR_ENEMY_CAPTURE: float = 0.0
 PASSIVE_INCOME_ENABLED: bool = False
 PASSIVE_GOLD_PER_TICK: float = 1.0 / 30.0
 PASSIVE_GOLD_PER_SECOND: float = PASSIVE_GOLD_PER_TICK / TICK_INTERVAL_SECONDS
-STARTING_GOLD: float = 0.0
+STARTING_GOLD: float = 200.0
 
 
 # Node sizing

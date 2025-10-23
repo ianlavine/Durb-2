@@ -30,6 +30,7 @@ class Edge:
     id: int
     source_node_id: int
     target_node_id: int
+    pipe_type: str = "normal"  # 'normal' or 'gold'; gold only exists in cross mode
     # All edges are now one-way only, from source to target
     on: bool = False
     flowing: bool = False
