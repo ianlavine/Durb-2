@@ -257,8 +257,8 @@ class MessageRouter:
             return
         try:
             recorder.record_event(token=token, event_type=event_type, payload=payload, engine=engine)
-        except Exception as exc:  # pragma: no cover - defensive guard
-            print(f"Replay recording failed for event {event_type}: {exc}")
+        except Exception:  # pragma: no cover - defensive guard
+            pass
 
     # ------------------------------------------------------------------
     # Core gameplay handlers
@@ -437,6 +437,7 @@ class MessageRouter:
         to_node_id = msg.get("toNodeId")
         cost = float(msg.get("cost", 0))
         warp_info = msg.get("warpInfo")
+        pipe_type = msg.get("pipeType")
         if token is None or from_node_id is None or to_node_id is None:
             return
 
@@ -446,7 +447,12 @@ class MessageRouter:
 
         engine = game_info["engine"]
         success, new_edge, actual_cost, error_msg, removed_edges = engine.handle_build_bridge(
-            token, int(from_node_id), int(to_node_id), cost, warp_info=warp_info
+            token,
+            int(from_node_id),
+            int(to_node_id),
+            cost,
+            warp_info=warp_info,
+            pipe_type=pipe_type if isinstance(pipe_type, str) else "normal",
         )
 
         if not success:
@@ -479,6 +485,7 @@ class MessageRouter:
                     "warp": warp_payload,
                     "warpAxis": warp_payload["axis"],
                     "warpSegments": warp_payload["segments"],
+                    "pipeType": getattr(new_edge, "pipe_type", "normal"),
                 },
             }
             if removed_edges:
@@ -508,6 +515,7 @@ class MessageRouter:
                 [sx, sy, ex, ey]
                 for sx, sy, ex, ey in (new_edge.warp_segments or [])
             ]
+            event_payload["pipeType"] = getattr(new_edge, "pipe_type", "normal")
         if removed_edges:
             event_payload["removedEdges"] = removed_edges
         self._record_game_event(game_info, token, "buildBridge", event_payload)
@@ -962,9 +970,15 @@ class MessageRouter:
             to_node_id = msg.get("toNodeId")
             cost = float(msg.get("cost", 1.0))
             warp_info = msg.get("warpInfo")
+            pipe_type = msg.get("pipeType")
             if from_node_id is not None and to_node_id is not None:
                 success, new_edge, actual_cost, error_msg, removed_edges = bot_game_engine.handle_build_bridge(
-                    token, int(from_node_id), int(to_node_id), cost, warp_info=warp_info
+                    token,
+                    int(from_node_id),
+                    int(to_node_id),
+                    cost,
+                    warp_info=warp_info,
+                    pipe_type=pipe_type if isinstance(pipe_type, str) else "normal",
                 )
                 if not success:
                     await self._send_safe(
@@ -989,6 +1003,7 @@ class MessageRouter:
                             "warp": warp_payload,
                             "warpAxis": warp_payload["axis"],
                             "warpSegments": warp_payload["segments"],
+                            "pipeType": getattr(new_edge, "pipe_type", "normal"),
                         },
                         "cost": actual_cost,
                     }
@@ -1139,8 +1154,8 @@ class MessageRouter:
             if engine and recorder:
                 try:
                     replay_bundle = recorder.build_package(engine, winner_id)
-                except Exception as exc:
-                    print(f"Failed to finalize replay for game {game_id}: {exc}")
+                except Exception:
+                    pass
 
             # Gather players (tokens) and their websockets in original join order
             clients = game_info.get("clients", {})

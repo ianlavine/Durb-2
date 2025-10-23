@@ -407,6 +407,7 @@ class ReplaySession:
             cost = _coerce_float(payload.get("cost", 0.0), 0.0)
             warp_axis = payload.get("warpAxis")
             warp_segments = payload.get("warpSegments")
+            pipe_type = payload.get("pipeType")
             warp_info = None
             if warp_axis is not None or warp_segments is not None:
                 warp_info = {
@@ -420,6 +421,7 @@ class ReplaySession:
                     to_node,
                     cost,
                     warp_info=warp_info,
+                    pipe_type=pipe_type if isinstance(pipe_type, str) else "normal",
                 )
                 if success and new_edge:
                     if removed_edges:
@@ -451,6 +453,7 @@ class ReplaySession:
                             "warp": warp_payload,
                             "warpAxis": warp_payload["axis"],
                             "warpSegments": warp_payload["segments"],
+                            "pipeType": getattr(new_edge, "pipe_type", "normal"),
                         },
                         "replay": True,
                     }

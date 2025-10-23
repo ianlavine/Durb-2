@@ -55,6 +55,9 @@
   // Abilities system
   let activeAbility = null; // null, 'bridge1way', 'reverse'
   let bridgeFirstNode = null; // first selected node for bridge building
+  let bridgeIsBrass = false; // true when building a brass pipe in cross mode
+  let brassPreviewIntersections = new Set(); // edges that would be removed by the current brass preview
+  let brassActivationDenied = false;
   let mouseWorldX = 0; // current mouse position in world coordinates
   let mouseWorldY = 0;
   let bridgeCostDisplay = null; // current bridge cost display text object
@@ -151,6 +154,12 @@
     cross: 'Cross',
   };
   const OVERFLOW_PENDING_GOLD_THRESHOLD = 10;
+  const BRASS_PIPE_COLOR = 0x8b6f14;
+  const BRASS_PIPE_DIM_COLOR = 0x46320a;
+  const BRASS_PIPE_OUTLINE_COLOR = 0x6f5410;
+  const MONEY_SPEND_COLOR = '#b87333';
+  const MONEY_SPEND_STROKE = '#4e2a10';
+  const MONEY_GAIN_COLOR = '#ffd700';
 
   function isWarpLike(mode) {
     const normalized = normalizeMode(mode);
@@ -166,6 +175,7 @@
 
   let sceneRef = null;
   let quitButton = null;
+  let forfeitKeyListenerAttached = false;
   let rematchButton = null;
   let saveReplayWrapper = null;
   let saveReplayButton = null;
@@ -1076,7 +1086,7 @@
   }
 
   // Bridge cost calculation
-  function calculateBridgeCost(fromNode, toNode) {
+  function calculateBridgeCost(fromNode, toNode, isBrass = false) {
     if (!fromNode || !toNode) return 0;
 
     const baseWidth = screen && Number.isFinite(screen.width) ? screen.width : 275.0;
@@ -1101,8 +1111,9 @@
 
     if (normalizedDistance === 0) return 0;
 
-    const cost = BRIDGE_BASE_COST + normalizedDistance * BRIDGE_COST_PER_UNIT;
-    return Math.round(cost);
+    const baseCost = Math.round(BRIDGE_BASE_COST + normalizedDistance * BRIDGE_COST_PER_UNIT);
+    const useBrass = isBrass && isCrossModeActive();
+    return useBrass ? baseCost * 2 : baseCost;
   }
 
   function normalizeWarpSegmentList(rawSegments, sourceNode, targetNode) {
@@ -1192,6 +1203,7 @@
   }
 
   function getEdgeWarpSegments(edge) {
+    if (!edge) return [];
     if (edge && Array.isArray(edge.warpSegments) && edge.warpSegments.length) {
       return edge.warpSegments.map((seg) => ({
         sx: Number(seg.sx),
@@ -1206,6 +1218,15 @@
       return [{ sx: sourceNode.x, sy: sourceNode.y, ex: targetNode.x, ey: targetNode.y }];
     }
     return [];
+  }
+
+  function toEdgeId(value) {
+    if (value == null) return null;
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
   }
 
   function getEdgeMidpointWorld(edge) {
@@ -1380,7 +1401,7 @@
   }
 
 // Replace the whole function with this Phaser version:
-function updateBridgeCostDisplay(fromNode, toNode) {
+function updateBridgeCostDisplay(fromNode, toNode, isBrass = false) {
   if (!sceneRef || !fromNode || !toNode) return;
 
   const path = computeWarpBridgeSegments(fromNode, toNode);
@@ -1413,26 +1434,28 @@ function updateBridgeCostDisplay(fromNode, toNode) {
 
   const [sx, sy] = worldToScreen(anchorX, anchorY);
 
-  const cost = calculateBridgeCost(fromNode, toNode);
+  const cost = calculateBridgeCost(fromNode, toNode, isBrass);
   const canAfford = goldValue >= cost;
   const text = `$${formatCost(cost)}`;
+  const textColor = canAfford ? MONEY_SPEND_COLOR : '#222222';
+  const strokeColor = canAfford ? MONEY_SPEND_STROKE : 'rgba(255,255,255,0.85)';
 
   if (!bridgeCostDisplay) {
     bridgeCostDisplay = sceneRef.add.text(sx, sy - 20, text, {
       fontFamily: 'monospace',
       fontSize: '20px',
-      fontStyle: 'bold',
-      color: canAfford ? '#cd853f' : '#000000', // Use browny gold color when affordable, black when not
-      stroke: canAfford ? '#000000' : '#ffffff', // Black outline when affordable, white outline when unaffordable
-      strokeThickness: 3,
+      fontStyle: 'normal',
+      color: textColor,
+      stroke: strokeColor,
+      strokeThickness: canAfford ? 1 : 0,
     })
     .setOrigin(0.5, 0.5)
     .setDepth(1000);
   } else {
     bridgeCostDisplay.setText(text);
     bridgeCostDisplay.setPosition(sx, sy - 20);
-    bridgeCostDisplay.setColor(canAfford ? '#cd853f' : '#000000'); // Use browny gold color when affordable, black when not
-    bridgeCostDisplay.setStroke(canAfford ? '#000000' : '#ffffff', 3); // Black outline when affordable, white outline when unaffordable
+    bridgeCostDisplay.setColor(textColor);
+    bridgeCostDisplay.setStroke(strokeColor, canAfford ? 1 : 0);
     bridgeCostDisplay.setVisible(true);
   }
 }
@@ -1467,10 +1490,10 @@ function updateReverseCostDisplay(edge) {
     reverseCostDisplay = sceneRef.add.text(sx, sy - 20, text, {
       fontFamily: 'monospace',
       fontSize: '20px',
-      fontStyle: 'bold',
-      color: canAfford ? '#cd853f' : '#000000',
-      stroke: canAfford ? '#000000' : '#ffffff',
-      strokeThickness: 3,
+      fontStyle: 'normal',
+      color: canAfford ? MONEY_SPEND_COLOR : '#222222',
+      stroke: canAfford ? MONEY_SPEND_STROKE : 'rgba(255,255,255,0.85)',
+      strokeThickness: canAfford ? 1 : 0,
     })
     .setOrigin(0.5, 0.5)
     .setDepth(1000);
@@ -1481,8 +1504,8 @@ function updateReverseCostDisplay(edge) {
   }
 
   if (reverseCostDisplay) {
-    reverseCostDisplay.setColor(canAfford ? '#cd853f' : '#000000');
-    reverseCostDisplay.setStroke(canAfford ? '#000000' : '#ffffff', 3);
+    reverseCostDisplay.setColor(canAfford ? MONEY_SPEND_COLOR : '#222222');
+    reverseCostDisplay.setStroke(canAfford ? MONEY_SPEND_STROKE : 'rgba(255,255,255,0.85)', canAfford ? 1 : 0);
   }
 }
 
@@ -1498,6 +1521,8 @@ function hideReverseCostDisplay() {
 
 function clearBridgeSelection() {
   bridgeFirstNode = null;
+  bridgeIsBrass = false;
+  brassPreviewIntersections.clear();
   warpWrapUsed = false;
   lastDoubleWarpWarningTime = 0;
   lastWarpAxis = null;
@@ -1508,16 +1533,22 @@ function clearBridgeSelection() {
   // Money indicator functions
   // Create an animated text indicator that rises & fades out
   function createMoneyIndicator(x, y, text, color, duration = 2000, options = {}) {
+    const cssColor = toCssColor(color);
+    const strokeColor = options.strokeColor || (cssColor === MONEY_SPEND_COLOR ? MONEY_SPEND_STROKE : '#423200');
+    const strokeThickness = Number.isFinite(options.strokeThickness) ? options.strokeThickness : 1;
+
     const indicator = {
       x,
       y,
       text,
-      color,
+      color: cssColor,
       startTime: Date.now(),
       duration,
       textObj: null,
       floatDistance: Number.isFinite(options.floatDistance) ? options.floatDistance : 30,
-      worldOffset: Number.isFinite(options.worldOffset) ? options.worldOffset : 0
+      worldOffset: Number.isFinite(options.worldOffset) ? options.worldOffset : 0,
+      strokeColor,
+      strokeThickness,
     };
 
     const [sx, sy] = worldToScreen(x, y + indicator.worldOffset);
@@ -1525,10 +1556,10 @@ function clearBridgeSelection() {
       indicator.textObj = sceneRef.add.text(sx, sy, text, {
         fontFamily: 'monospace',
         fontSize: '20px',
-        fontStyle: 'bold',
-        color: toCssColor(color),
-        stroke: '#000000',
-        strokeThickness: 3
+        fontStyle: 'normal',
+        color: indicator.color,
+        stroke: indicator.strokeColor,
+        strokeThickness: indicator.strokeThickness
       })
       .setOrigin(0.5, 0.5)
       .setDepth(1000)
@@ -1837,6 +1868,21 @@ function clearBridgeSelection() {
     });
     quitButton = quitBtn;
 
+    if (!forfeitKeyListenerAttached) {
+      document.addEventListener('keydown', (event) => {
+        if (!quitButton) return;
+        if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+        if (event.key !== 'f' && event.key !== 'F') return;
+        const target = event.target;
+        const tagName = target && target.tagName ? target.tagName.toLowerCase() : '';
+        if (tagName === 'input' || tagName === 'textarea') return;
+        if (target && typeof target.isContentEditable === 'boolean' && target.isContentEditable) return;
+        event.preventDefault();
+        quitButton.click();
+      });
+      forfeitKeyListenerAttached = true;
+    }
+
     reviewReplayDownloadButton = document.createElement('button');
     reviewReplayDownloadButton.textContent = 'Download';
     reviewReplayDownloadButton.dataset.clicked = '';
@@ -2111,7 +2157,7 @@ function clearBridgeSelection() {
       top: '2px',
       fontSize: '58px',
       fontWeight: 'bold',
-      color: '#ffd700',
+      color: MONEY_GAIN_COLOR,
       lineHeight: '1',
       textAlign: 'right',
       textShadow: '2px 2px 4px rgba(0,0,0,0.8)',
@@ -2316,8 +2362,6 @@ function clearBridgeSelection() {
       // The backend will handle the actual game end logic
     }
 
-    const removalAnimating = updateEdgeRemovalAnimations();
-
     // Redraw if there are any flowing edges (for animation), money indicators, targeting, or spin animations
     let hasFlowingEdges = false;
     for (const [id, edge] of edges.entries()) {
@@ -2327,8 +2371,9 @@ function clearBridgeSelection() {
       }
     }
     const anySpinning = updateReverseSpinAnimations();
+    const removalAnimating = updateEdgeRemovalAnimations();
     
-    if (hasFlowingEdges || anySpinning || moneyIndicators.length > 0 || (persistentTargeting && currentTargetNodeId !== null) || removalAnimating) {
+    if (hasFlowingEdges || anySpinning || removalAnimating || moneyIndicators.length > 0 || (persistentTargeting && currentTargetNodeId !== null)) {
       redrawStatic();
     }
   }
@@ -2336,7 +2381,6 @@ function clearBridgeSelection() {
   // Edge reversal spin animation state helpers
   const EDGE_SPIN_PER_TRIANGLE_SEC = 0.08;
   function startEdgeReverseSpin(edge) {
-    if (edge.removing) return;
     const s = nodes.get(edge.source);
     const t = nodes.get(edge.target);
     if (!s || !t) return;
@@ -2357,10 +2401,6 @@ function clearBridgeSelection() {
   function updateReverseSpinAnimations() {
     let any = false;
     for (const e of edges.values()) {
-      if (e.removing) {
-        if (e._spin) delete e._spin;
-        continue;
-      }
       if (e._spin) {
         any = true;
         const elapsed = animationTime - e._spin.spinStartTime;
@@ -2498,13 +2538,13 @@ function clearBridgeSelection() {
     }
     nodes.clear();
     edges.clear();
-    edgeRemovalAnimations.clear();
     players.clear();
     playerStats.clear();
     eliminatedPlayers.clear();
     playerOrder = [];
     hoveredNodeId = null;
     hoveredEdgeId = null;
+    edgeRemovalAnimations.clear();
     progressNameSegments.clear();
     if (progressNameContainer) progressNameContainer.innerHTML = '';
 
@@ -2543,7 +2583,10 @@ function clearBridgeSelection() {
     const edgeWarpMap = msg.edgeWarp || {};
     if (Array.isArray(msg.edges)) {
       for (const arr of msg.edges) {
-        const [id, s, t, _forward, _always1, buildReq = 0, buildElap = 0, building = 0] = arr;
+        const [rawId, s, t, _forward, _always1, buildReq = 0, buildElap = 0, building = 0, goldFlag = 0] = arr;
+        const edgeId = toEdgeId(rawId);
+        if (edgeId == null) continue;
+        const isGoldEdge = Number(goldFlag) === 1;
         const record = {
           source: s,
           target: t,
@@ -2559,10 +2602,11 @@ function clearBridgeSelection() {
           hammerHitIndex: 0,
           warpAxis: 'none',
           warpSegments: [],
+          pipeType: isGoldEdge ? 'gold' : 'normal',
         };
-        const warpPayload = edgeWarpMap[id] ?? edgeWarpMap[String(id)];
+        const warpPayload = edgeWarpMap[edgeId] ?? edgeWarpMap[rawId] ?? edgeWarpMap[String(rawId)];
         applyEdgeWarpData(record, warpPayload, nodes.get(s), nodes.get(t));
-        edges.set(id, record);
+        edges.set(edgeId, record);
       }
     }
 
@@ -2972,19 +3016,14 @@ function clearBridgeSelection() {
     }
 
     if (Array.isArray(msg.edges)) {
-      msg.edges.forEach(([id, on, flowing, forward, lastTransfer, buildReq = 0, buildElap = 0, building = 0]) => {
-        const edge = edges.get(id);
+      const seenEdgeIds = new Set();
+      msg.edges.forEach((entry) => {
+        const [rawId, on, flowing, _forward, lastTransfer, buildReq = 0, buildElap = 0, building = 0, goldFlag = 0] = entry;
+        const edgeId = toEdgeId(rawId);
+        if (edgeId == null) return;
+        seenEdgeIds.add(edgeId);
+        const edge = edges.get(edgeId);
         if (!edge) return;
-        if (edge.removing) {
-          edge.on = false;
-          edge.flowing = false;
-          edge.lastTransfer = 0;
-          edge.building = false;
-          edge.buildTicksElapsed = 0;
-          edge.hammerAccumSec = 0;
-          edge.flowStartTime = null;
-          return;
-        }
         const wasFlowing = edge.flowing;
         edge.on = !!on;
         edge.flowing = !!flowing;
@@ -2993,6 +3032,7 @@ function clearBridgeSelection() {
         edge.buildTicksRequired = Number(buildReq || 0);
         const prevElapsed = Number(edge.buildTicksElapsed || 0);
         edge.buildTicksElapsed = Number(buildElap || 0);
+        edge.pipeType = Number(goldFlag) === 1 ? 'gold' : (edge.pipeType || 'normal');
         // Fixed-interval metronome: accumulate real time and play hits when threshold crossed
         edge.hammerAccumSec = edge.hammerAccumSec || 0;
         if (edge.building) {
@@ -3016,6 +3056,16 @@ function clearBridgeSelection() {
           edge.flowStartTime = null;
         }
       });
+
+      const missingEdges = [];
+      edges.forEach((edge, edgeId) => {
+        if (!seenEdgeIds.has(edgeId) && edge) {
+          missingEdges.push(edgeId);
+        }
+      });
+      if (missingEdges.length) {
+        missingEdges.forEach((edgeId) => forceRemoveEdge(edgeId));
+      }
     }
 
     if (typeof msg.phase === 'string') phase = msg.phase;
@@ -3117,6 +3167,11 @@ function clearBridgeSelection() {
 
     if (msg.edge) {
       const edge = msg.edge;
+      const edgeId = toEdgeId(edge.id);
+      if (edgeId == null) {
+        redrawStatic();
+        return;
+      }
       const record = {
         source: edge.source,
         target: edge.target,
@@ -3132,9 +3187,10 @@ function clearBridgeSelection() {
         builtByMe: !!msg.cost,
         warpAxis: 'none',
         warpSegments: [],
+        pipeType: edge.pipeType === 'gold' ? 'gold' : 'normal',
       };
       applyEdgeWarpData(record, edge.warp ?? edge, nodes.get(edge.source), nodes.get(edge.target));
-      edges.set(edge.id, record);
+      edges.set(edgeId, record);
       
       // Show cost indicator for bridge building
       if (activeAbility === 'bridge1way' && msg.cost) {
@@ -3151,7 +3207,7 @@ function clearBridgeSelection() {
             midX, 
             midY, 
             `-$${msg.cost}`, 
-            0xcd853f, // browner gold color (peru)
+            MONEY_SPEND_COLOR,
             2000 // 2 seconds
           );
         }
@@ -3175,9 +3231,13 @@ function clearBridgeSelection() {
     // Update existing edge with new source/target after reversal
     if (msg.edge) {
       const edge = msg.edge;
-      const existingEdge = edges.get(edge.id);
+      const edgeId = toEdgeId(edge.id);
+      if (edgeId == null) {
+        hideReverseCostDisplay();
+        return;
+      }
+      const existingEdge = edges.get(edgeId);
       if (existingEdge) {
-        if (existingEdge.removing) return;
         // Update the source and target (they've been swapped)
         existingEdge.source = edge.source;
         existingEdge.target = edge.target;
@@ -3214,7 +3274,7 @@ function clearBridgeSelection() {
             indicatorX, 
             indicatorY, 
             `-$${msg.cost}`, 
-            0xcd853f, // browner gold color (peru)
+            MONEY_SPEND_COLOR,
             2000 // 2 seconds
           );
         }
@@ -3236,9 +3296,10 @@ function clearBridgeSelection() {
     // Update existing edge state (used for energy redirection)
     if (msg.edge) {
       const edge = msg.edge;
-      const existingEdge = edges.get(edge.id);
+      const edgeId = toEdgeId(edge.id);
+      if (edgeId == null) return;
+      const existingEdge = edges.get(edgeId);
       if (existingEdge) {
-        if (existingEdge.removing) return;
         const wasFlowing = existingEdge.flowing;
         existingEdge.on = edge.on;
         existingEdge.flowing = edge.flowing;
@@ -3276,244 +3337,244 @@ function clearBridgeSelection() {
     }
   }
 
-  function forceRemoveEdge(edgeId) {
-    const id = Number(edgeId);
-    if (!Number.isFinite(id)) return;
-    const existingEdge = edges.get(id);
-    if (existingEdge && existingEdge.removing) {
-      delete existingEdge.removing;
-    }
-    const label = edgeFlowTexts.get(id);
-    if (label) {
-      label.destroy();
-      edgeFlowTexts.delete(id);
-    }
-    edges.delete(id);
-    edgeRemovalAnimations.delete(id);
-    if (hoveredEdgeId === id) {
-      hoveredEdgeId = null;
-      hideReverseCostDisplay();
-    }
+function forceRemoveEdge(edgeId) {
+  const id = toEdgeId(edgeId);
+  if (id == null) return;
+  const existingEdge = edges.get(id);
+  if (existingEdge && existingEdge.removing) {
+    delete existingEdge.removing;
   }
+  const label = edgeFlowTexts.get(id);
+  if (label) {
+    label.destroy();
+    edgeFlowTexts.delete(id);
+  }
+  edges.delete(id);
+  edgeRemovalAnimations.delete(id);
+  if (hoveredEdgeId === id) {
+    hoveredEdgeId = null;
+    hideReverseCostDisplay();
+  }
+}
 
-  function buildRemovalSteps(count) {
-    const steps = [];
-    if (!Number.isFinite(count) || count <= 0) {
-      return steps;
-    }
-
-    if (count % 2 === 1) {
-      const center = Math.floor(count / 2);
-      steps.push([center]);
-      for (let offset = 1; offset <= center; offset++) {
-        const left = center - offset;
-        const right = center + offset;
-        const step = [];
-        if (left >= 0) step.push(left);
-        if (right < count) step.push(right);
-        if (step.length) steps.push(step);
-      }
-    } else {
-      const leftCenter = count / 2 - 1;
-      const rightCenter = count / 2;
-      const firstStep = [];
-      if (leftCenter >= 0) firstStep.push(leftCenter);
-      if (rightCenter < count) firstStep.push(rightCenter);
-      if (firstStep.length) steps.push(firstStep);
-      const maxOffset = Math.max(leftCenter, count - rightCenter - 1);
-      for (let offset = 1; offset <= maxOffset; offset++) {
-        const step = [];
-        const left = leftCenter - offset;
-        const right = rightCenter + offset;
-        if (left >= 0) step.push(left);
-        if (right < count) step.push(right);
-        if (step.length) steps.push(step);
-      }
-    }
-
+function buildRemovalSteps(count) {
+  const steps = [];
+  if (!Number.isFinite(count) || count <= 0) {
     return steps;
   }
 
-  function beginEdgeRemoval(edgeId) {
-    const id = Number(edgeId);
-    if (!Number.isFinite(id)) return;
-    if (edgeRemovalAnimations.has(id)) return;
-
-    const edge = edges.get(id);
-    if (!edge) {
-      forceRemoveEdge(id);
-      return;
+  if (count % 2 === 1) {
+    const center = Math.floor(count / 2);
+    steps.push([center]);
+    for (let offset = 1; offset <= center; offset++) {
+      const left = center - offset;
+      const right = center + offset;
+      const step = [];
+      if (left >= 0) step.push(left);
+      if (right < count) step.push(right);
+      if (step.length) steps.push(step);
     }
-
-    const sourceNode = nodes.get(edge.source);
-    const targetNode = nodes.get(edge.target);
-
-    const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
-    const fromRadius = sourceNode ? Math.max(1, calculateNodeRadius(sourceNode, baseScale)) + 1 : 0;
-    const toRadius = targetNode ? Math.max(1, calculateNodeRadius(targetNode, baseScale)) + 1 : 0;
-    const path = buildEdgeScreenPath(edge, sourceNode, targetNode, fromRadius, toRadius);
-
-    const totalLength = path.reduce((sum, seg) => sum + seg.length, 0);
-    const triH = 16;
-    const triangleCount = Math.max(1, Math.floor(totalLength / triH));
-
-    if (!Number.isFinite(totalLength) || totalLength <= 0 || !Number.isFinite(triangleCount)) {
-      forceRemoveEdge(id);
-      return;
+  } else {
+    const leftCenter = count / 2 - 1;
+    const rightCenter = count / 2;
+    const firstStep = [];
+    if (leftCenter >= 0) firstStep.push(leftCenter);
+    if (rightCenter < count) firstStep.push(rightCenter);
+    if (firstStep.length) steps.push(firstStep);
+    const maxOffset = Math.max(leftCenter, count - rightCenter - 1);
+    for (let offset = 1; offset <= maxOffset; offset++) {
+      const step = [];
+      const left = leftCenter - offset;
+      const right = rightCenter + offset;
+      if (left >= 0) step.push(left);
+      if (right < count) step.push(right);
+      if (step.length) steps.push(step);
     }
-
-    const removal = {
-      startTime: animationTime,
-      stepDuration: EDGE_REMOVAL_STEP_DURATION,
-      steps: buildRemovalSteps(triangleCount),
-      hidden: new Array(triangleCount).fill(false),
-      hiddenCount: 0,
-      lastAppliedStep: -1,
-      triangleCount,
-      complete: false,
-    };
-
-    if (!removal.steps.length) {
-      forceRemoveEdge(id);
-      return;
-    }
-
-    edge.on = false;
-    edge.flowing = false;
-    edge.lastTransfer = 0;
-    edge.flowStartTime = null;
-    edge.building = false;
-    edge.buildTicksElapsed = 0;
-    edge.buildTicksRequired = 0;
-    if (edge._spin) delete edge._spin;
-    edge.removing = removal;
-
-    const label = edgeFlowTexts.get(id);
-    if (label) {
-      label.destroy();
-      edgeFlowTexts.delete(id);
-    }
-
-    if (hoveredEdgeId === id) {
-      hoveredEdgeId = null;
-      hideReverseCostDisplay();
-    }
-
-    edgeRemovalAnimations.set(id, removal);
-    redrawStatic();
   }
 
-  function applyRemovalSteps(removal, triangleCount) {
-    if (!removal) return null;
+  return steps;
+}
 
-    if (!Number.isFinite(triangleCount) || triangleCount <= 0) {
-      removal.complete = true;
-      return removal.hidden;
-    }
+function beginEdgeRemoval(edgeId) {
+  const id = toEdgeId(edgeId);
+  if (id == null) return;
+  if (edgeRemovalAnimations.has(id)) return;
 
-    if (removal.triangleCount !== triangleCount) {
-      removal.triangleCount = triangleCount;
-      removal.steps = buildRemovalSteps(triangleCount);
-      removal.hidden = new Array(triangleCount).fill(false);
-      removal.hiddenCount = 0;
-      removal.lastAppliedStep = -1;
-      if (!removal.steps.length) {
-        removal.complete = true;
-        return removal.hidden;
-      }
-    }
+  const edge = edges.get(id);
+  if (!edge) {
+    forceRemoveEdge(id);
+    return;
+  }
 
-    const elapsed = Math.max(0, animationTime - removal.startTime);
-    const stepsToApply = Math.min(removal.steps.length, Math.floor(elapsed / removal.stepDuration) + 1);
-    const targetStepIndex = stepsToApply - 1;
+  const sourceNode = nodes.get(edge.source);
+  const targetNode = nodes.get(edge.target);
 
-    if (targetStepIndex > removal.lastAppliedStep) {
-      for (let s = removal.lastAppliedStep + 1; s <= targetStepIndex; s++) {
-        const indices = removal.steps[s];
-        if (!indices) continue;
-        for (const idx of indices) {
-          if (idx >= 0 && idx < removal.hidden.length && !removal.hidden[idx]) {
-            removal.hidden[idx] = true;
-            removal.hiddenCount += 1;
-          }
-        }
-      }
-      removal.lastAppliedStep = targetStepIndex;
-    }
+  const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
+  const fromRadius = sourceNode ? Math.max(1, calculateNodeRadius(sourceNode, baseScale)) + 1 : 0;
+  const toRadius = targetNode ? Math.max(1, calculateNodeRadius(targetNode, baseScale)) + 1 : 0;
+  const path = buildEdgeScreenPath(edge, sourceNode, targetNode, fromRadius, toRadius);
 
-    if (removal.hiddenCount >= removal.triangleCount) {
-      removal.complete = true;
-    }
+  const totalLength = path.reduce((sum, seg) => sum + seg.length, 0);
+  const triH = 16;
+  const triangleCount = Math.max(1, Math.floor(totalLength / triH));
 
+  if (!Number.isFinite(totalLength) || totalLength <= 0 || !Number.isFinite(triangleCount)) {
+    forceRemoveEdge(id);
+    return;
+  }
+
+  const removal = {
+    startTime: animationTime,
+    stepDuration: EDGE_REMOVAL_STEP_DURATION,
+    steps: buildRemovalSteps(triangleCount),
+    hidden: new Array(triangleCount).fill(false),
+    hiddenCount: 0,
+    lastAppliedStep: -1,
+    triangleCount,
+    complete: false,
+  };
+
+  if (!removal.steps.length) {
+    forceRemoveEdge(id);
+    return;
+  }
+
+  edge.on = false;
+  edge.flowing = false;
+  edge.lastTransfer = 0;
+  edge.flowStartTime = null;
+  edge.building = false;
+  edge.buildTicksElapsed = 0;
+  edge.buildTicksRequired = 0;
+  if (edge._spin) delete edge._spin;
+  edge.removing = removal;
+
+  const label = edgeFlowTexts.get(id);
+  if (label) {
+    label.destroy();
+    edgeFlowTexts.delete(id);
+  }
+
+  if (hoveredEdgeId === id) {
+    hoveredEdgeId = null;
+    hideReverseCostDisplay();
+  }
+
+  edgeRemovalAnimations.set(id, removal);
+  redrawStatic();
+}
+
+function applyRemovalSteps(removal, triangleCount) {
+  if (!removal) return null;
+
+  if (!Number.isFinite(triangleCount) || triangleCount <= 0) {
+    removal.complete = true;
     return removal.hidden;
   }
 
-  function finalizeEdgeRemoval(edgeId) {
-    const id = Number(edgeId);
-    if (!Number.isFinite(id)) return;
-    const edge = edges.get(id);
-    if (edge && edge.removing) {
-      delete edge.removing;
+  if (removal.triangleCount !== triangleCount) {
+    removal.triangleCount = triangleCount;
+    removal.steps = buildRemovalSteps(triangleCount);
+    removal.hidden = new Array(triangleCount).fill(false);
+    removal.hiddenCount = 0;
+    removal.lastAppliedStep = -1;
+    if (!removal.steps.length) {
+      removal.complete = true;
+      return removal.hidden;
     }
-    edgeRemovalAnimations.delete(id);
-    forceRemoveEdge(id);
   }
 
-  function removeEdges(edgeIds, options = {}) {
-    if (!Array.isArray(edgeIds)) return;
-    const immediate = Boolean(options.immediate);
-    const seen = new Set();
-    edgeIds.forEach((edgeId) => {
-      const id = Number(edgeId);
-      if (!Number.isFinite(id) || seen.has(id)) return;
-      seen.add(id);
-      if (immediate) {
-        finalizeEdgeRemoval(id);
-      } else {
-        beginEdgeRemoval(id);
-      }
-    });
-  }
+  const elapsed = Math.max(0, animationTime - removal.startTime);
+  const stepsToApply = Math.min(removal.steps.length, Math.floor(elapsed / removal.stepDuration) + 1);
+  const targetStepIndex = stepsToApply - 1;
 
-  function updateEdgeRemovalAnimations() {
-    if (edgeRemovalAnimations.size === 0) return false;
-    const finalizeIds = [];
-    let anyActive = false;
-    edgeRemovalAnimations.forEach((removal, edgeId) => {
-      if (removal.complete) {
-        finalizeIds.push(edgeId);
-      } else {
-        anyActive = true;
+  if (targetStepIndex > removal.lastAppliedStep) {
+    for (let s = removal.lastAppliedStep + 1; s <= targetStepIndex; s++) {
+      const indices = removal.steps[s];
+      if (!indices) continue;
+      for (const idx of indices) {
+        if (idx >= 0 && idx < removal.hidden.length && !removal.hidden[idx]) {
+          removal.hidden[idx] = true;
+          removal.hiddenCount += 1;
+        }
       }
-    });
-    for (const edgeId of finalizeIds) {
-      finalizeEdgeRemoval(edgeId);
     }
-    return anyActive || finalizeIds.length > 0;
+    removal.lastAppliedStep = targetStepIndex;
   }
 
-  function handleRemoveEdges(msg) {
-    if (!msg) return;
-    let ids = [];
-    if (Array.isArray(msg.edgeIds)) {
-      ids = msg.edgeIds;
-    } else if (Array.isArray(msg.removedEdges)) {
-      ids = msg.removedEdges;
+  if (removal.hiddenCount >= removal.triangleCount) {
+    removal.complete = true;
+  }
+
+  return removal.hidden;
+}
+
+function finalizeEdgeRemoval(edgeId) {
+  const id = toEdgeId(edgeId);
+  if (id == null) return;
+  const edge = edges.get(id);
+  if (edge && edge.removing) {
+    delete edge.removing;
+  }
+  edgeRemovalAnimations.delete(id);
+  forceRemoveEdge(id);
+}
+
+function removeEdges(edgeIds, options = {}) {
+  if (!Array.isArray(edgeIds)) return;
+  const seen = new Set();
+  const immediate = Boolean(options.immediate);
+  edgeIds.forEach((edgeId) => {
+    const id = toEdgeId(edgeId);
+    if (id == null || seen.has(id)) return;
+    seen.add(id);
+    if (immediate) {
+      finalizeEdgeRemoval(id);
+    } else {
+      beginEdgeRemoval(id);
     }
-    if (!ids.length) return;
-    removeEdges(ids);
-    redrawStatic();
-  }
+  });
+}
 
-  function fallbackRemoveEdgesForNode(nodeId) {
-    const edgeIds = [];
-    edges.forEach((edge, edgeId) => {
-      if (edge.source === nodeId || edge.target === nodeId) {
-        edgeIds.push(edgeId);
-      }
-    });
-    removeEdges(edgeIds);
+function updateEdgeRemovalAnimations() {
+  if (edgeRemovalAnimations.size === 0) return false;
+  const finalizeIds = [];
+  let anyActive = false;
+  edgeRemovalAnimations.forEach((removal, edgeId) => {
+    if (removal.complete) {
+      finalizeIds.push(edgeId);
+    } else {
+      anyActive = true;
+    }
+  });
+  for (const edgeId of finalizeIds) {
+    finalizeEdgeRemoval(edgeId);
   }
+  return anyActive || finalizeIds.length > 0;
+}
+
+function handleRemoveEdges(msg) {
+  if (!msg) return;
+  let ids = [];
+  if (Array.isArray(msg.edgeIds)) {
+    ids = msg.edgeIds;
+  } else if (Array.isArray(msg.removedEdges)) {
+    ids = msg.removedEdges;
+  }
+  if (!ids.length) return;
+  removeEdges(ids);
+  redrawStatic();
+}
+
+function fallbackRemoveEdgesForNode(nodeId) {
+  const edgeIds = [];
+  edges.forEach((edge, edgeId) => {
+    if (edge.source === nodeId || edge.target === nodeId) {
+      edgeIds.push(edgeId);
+    }
+  });
+  removeEdges(edgeIds);
+}
 
   function handleNodeDestroyed(msg) {
     const nodeId = Number(msg.nodeId);
@@ -3541,7 +3602,7 @@ function clearBridgeSelection() {
         nodeSnapshot.x,
         nodeSnapshot.y,
         `-$${formatCost(msg.cost)}`,
-        0xcd853f,
+        MONEY_SPEND_COLOR,
         1800,
         { worldOffset, floatDistance: 26 }
       );
@@ -3577,7 +3638,7 @@ function clearBridgeSelection() {
           node.x + offsetX, 
           node.y + offsetY, 
           `+$${formatCost(msg.reward)}`,
-          0xffd700, // golden color
+          MONEY_GAIN_COLOR,
           2000 // 2 seconds
         );
         // This is sent only to the capturer; differentiate neutral vs enemy capture by reward amount
@@ -3609,7 +3670,7 @@ function clearBridgeSelection() {
       node.x + offsetX,
       node.y + offsetY,
       `+$${formatCost(amount)}`,
-      0xffd700,
+      MONEY_GAIN_COLOR,
       2000
     );
     playChaChing();
@@ -3644,9 +3705,9 @@ function clearBridgeSelection() {
     
     errorMsg.textContent = message;
     if (variant === 'money') {
-      errorMsg.style.background = '#cd853f';
+      errorMsg.style.background = MONEY_SPEND_COLOR;
       errorMsg.style.color = '#111111';
-      errorMsg.style.border = '2px solid #5a3c1a';
+      errorMsg.style.border = `2px solid ${MONEY_SPEND_STROKE}`;
     } else {
       errorMsg.style.background = 'rgba(255, 0, 0, 0.9)';
       errorMsg.style.color = 'white';
@@ -3665,6 +3726,9 @@ function clearBridgeSelection() {
     const lower = original.toLowerCase();
     if (lower.includes('not enough gold')) return 'Not enough money';
     if (lower.includes('intersect')) return 'No overlapping pipes';
+    if (lower.includes('only golden pipes can cross')) return 'Only brass pipes can cross';
+    if (lower.includes('cannot cross golden pipe')) return 'Brass pipes cannot be crossed';
+    if (lower.includes('must control brass pipes')) return 'Must control Brass Pipes';
     if (lower.includes('pipe controlled')) return 'Pipe controlled by Opponent';
     // Fallbacks per context
     if (context === 'bridge') return original || 'Invalid Pipe!';
@@ -3693,7 +3757,9 @@ function clearBridgeSelection() {
       if (bottomUiBar) bottomUiBar.style.display = 'none';
       return; // Do not draw game under menu
     }
-    
+
+    updateBrassPreviewIntersections();
+
     // Show UI bars when game is active
     if (topUiBar) topUiBar.style.display = 'block';
     if (bottomUiBar) bottomUiBar.style.display = 'block';
@@ -3816,7 +3882,7 @@ function clearBridgeSelection() {
             const ringRadius = r + 2;
             const startAngle = -Math.PI / 2;
             const endAngle = startAngle + progress * Math.PI * 2;
-            graphicsNodes.lineStyle(4, 0xffd700, 1);
+          graphicsNodes.lineStyle(4, 0xffd700, 1);
             graphicsNodes.beginPath();
             graphicsNodes.arc(nx, ny, ringRadius, startAngle, endAngle, false);
             graphicsNodes.strokePath();
@@ -3870,7 +3936,7 @@ function clearBridgeSelection() {
             graphicsNodes.strokeCircle(nx, ny, r + 3);
 
             // show static, live-updating midpoint label
-            updateBridgeCostDisplay(firstNode, n);
+            updateBridgeCostDisplay(firstNode, n, bridgeIsBrass && isCrossModeActive());
           }
 
       }
@@ -3962,7 +4028,7 @@ function clearBridgeSelection() {
             targetNode = hoveredNode;
           }
         }
-        updateBridgeCostDisplay(firstNode, targetNode);
+        updateBridgeCostDisplay(firstNode, targetNode, bridgeIsBrass && isCrossModeActive());
       }
     }
     
@@ -4138,8 +4204,6 @@ function clearBridgeSelection() {
   function canReverseEdge(edge) {
     if (!edge) return false;
 
-    if (edge.removing) return false;
-
     if (isNukeLikeModeActive()) return false;
     
     const sourceNode = nodes.get(edge.source);
@@ -4157,8 +4221,6 @@ function clearBridgeSelection() {
 
   function playerControlsEdge(edge) {
     if (!edge) return false;
-    if (edge.removing) return false;
-    
     const sourceNode = nodes.get(edge.source);
     if (!sourceNode) return false;
     
@@ -4167,9 +4229,9 @@ function clearBridgeSelection() {
   }
 
   function canTargetNodeForFlow(targetNodeId) {
+    if (isCrossModeActive()) return false;
     // Check if I have any edges that I own (source node owned by me) that point to this target node
     for (const [edgeId, edge] of edges.entries()) {
-      if (edge.removing) continue;
       if (edge.target === targetNodeId) {
         const sourceNode = nodes.get(edge.source);
         if (sourceNode && sourceNode.owner === myPlayerId) {
@@ -4183,7 +4245,6 @@ function clearBridgeSelection() {
   // Suppress the target ring if the node is expelling juice (has an outgoing edge owned by me that is on/flowing)
   function shouldSuppressTargetRingForNode(targetNodeId) {
     for (const [edgeId, edge] of edges.entries()) {
-      if (edge.removing) continue;
       if (edge.source === targetNodeId) {
         const sourceNode = nodes.get(edge.source);
         if (sourceNode && sourceNode.owner === myPlayerId) {
@@ -4300,13 +4361,16 @@ function clearBridgeSelection() {
     if (nodeId != null) {
       const node = nodes.get(nodeId);
       if (node && activeAbility !== 'reverse') {
-        activeAbility = 'bridge1way';
-        bridgeFirstNode = nodeId;
-        hideReverseCostDisplay();
-        hideBridgeCostDisplay();
-        redrawStatic();
-        lastPointerDownButton = -1;
-        return;
+        const useBrass = isCrossModeActive();
+        const activated = activateBridgeFromNode(nodeId, useBrass);
+        if (activated || brassActivationDenied) {
+          if (brassActivationDenied) {
+            brassActivationDenied = false;
+          }
+          redrawStatic();
+          lastPointerDownButton = -1;
+          return;
+        }
       }
     }
 
@@ -4645,9 +4709,35 @@ function clearBridgeSelection() {
       return;
     }
 
-    cancelPendingSingleClick();
-    handleSingleClick(ev, wx, wy, baseScale);
+  cancelPendingSingleClick();
+  handleSingleClick(ev, wx, wy, baseScale);
   });
+
+
+  function activateBridgeFromNode(nodeId, useBrass) {
+    if (!nodes.has(nodeId)) return false;
+    brassActivationDenied = false;
+    const wantBrass = !!(useBrass && isCrossModeActive());
+    if (wantBrass) {
+      const node = nodes.get(nodeId);
+      if (!node || node.owner !== myPlayerId) {
+        showErrorMessage('Must control Brass Pipes', 'money');
+        brassActivationDenied = true;
+        return false;
+      }
+    }
+    activeAbility = 'bridge1way';
+    bridgeFirstNode = nodeId;
+    bridgeIsBrass = wantBrass;
+    brassPreviewIntersections.clear();
+    warpWrapUsed = false;
+    lastDoubleWarpWarningTime = 0;
+    lastWarpAxis = null;
+    lastWarpDirection = null;
+    hideReverseCostDisplay();
+    hideBridgeCostDisplay();
+    return true;
+  }
 
 
   function handleBridgeBuilding(wx, wy, baseScale, isRightClick = false) {
@@ -4662,6 +4752,11 @@ function clearBridgeSelection() {
       if (node) {
         if (bridgeFirstNode === null) {
           // Start bridge building from any node
+          const useBrassFirst = bridgeIsBrass && isCrossModeActive();
+          if (useBrassFirst && node.owner !== myPlayerId) {
+            showErrorMessage('Must control Brass Pipes', 'money');
+            return true;
+          }
           bridgeFirstNode = nodeId;
           warpWrapUsed = false;
           lastDoubleWarpWarningTime = 0;
@@ -4676,8 +4771,9 @@ function clearBridgeSelection() {
             hideBridgeCostDisplay();
             return true;
           }
-          const cost = calculateBridgeCost(firstNode, node);
-          
+          const useBrass = bridgeIsBrass && isCrossModeActive();
+          const cost = calculateBridgeCost(firstNode, node, useBrass);
+
           if (goldValue >= cost && ws && ws.readyState === WebSocket.OPEN) {
 
             const token = localStorage.getItem('token');
@@ -4694,13 +4790,16 @@ function clearBridgeSelection() {
                 : []
             } : null;
 
+            const pipeType = useBrass ? 'gold' : 'normal';
+
             const buildBridgePayload = {
               type: 'buildBridge',
               fromNodeId: bridgeFirstNode,
               toNodeId: nodeId,
               cost: cost,
               warpInfo: warpInfoPayload,
-              token: token
+              token: token,
+              pipeType,
             };
 
             ws.send(JSON.stringify(buildBridgePayload));
@@ -4839,6 +4938,18 @@ function clearBridgeSelection() {
       const token = localStorage.getItem('token');
       ws.send(JSON.stringify({ type: 'clickNode', nodeId: nodeId, token }));
       return; // Return after handling starting node pick
+    }
+
+    if (
+      isCrossModeActive() &&
+      nodeId != null &&
+      activeAbility !== 'reverse'
+    ) {
+      const needsActivation = activeAbility !== 'bridge1way' || bridgeFirstNode === null;
+      if (needsActivation && activateBridgeFromNode(nodeId, false)) {
+        redrawStatic();
+        return;
+      }
     }
 
     // Handle all other clicks (node flow targeting, edge clicks, etc.)
@@ -5268,7 +5379,6 @@ function clearBridgeSelection() {
     
     nodes.clear();
     edges.clear();
-    edgeRemovalAnimations.clear();
     players.clear();
     playerOrder = [];
     playerStats.clear();
@@ -5434,7 +5544,6 @@ function clearBridgeSelection() {
     let bestId = null;
     let bestD2 = maxD2;
     for (const [id, e] of edges.entries()) {
-      if (e && e.removing) continue;
       const segments = getEdgeWarpSegments(e);
       if (!segments.length) continue;
       for (const seg of segments) {
@@ -5463,6 +5572,33 @@ function clearBridgeSelection() {
     return (px - bx) ** 2 + (py - by) ** 2;
   }
 
+  function segmentsIntersect(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2) {
+    const orientation = (px, py, qx, qy, rx, ry) => {
+      const val = (qy - py) * (rx - qx) - (qx - px) * (ry - qy);
+      if (Math.abs(val) < 1e-10) return 0;
+      return val > 0 ? 1 : 2;
+    };
+
+    const onSegment = (px, py, qx, qy, rx, ry) => (
+      qx <= Math.max(px, rx) + 1e-10 &&
+      qx + 1e-10 >= Math.min(px, rx) &&
+      qy <= Math.max(py, ry) + 1e-10 &&
+      qy + 1e-10 >= Math.min(py, ry)
+    );
+
+    const o1 = orientation(ax1, ay1, ax2, ay2, bx1, by1);
+    const o2 = orientation(ax1, ay1, ax2, ay2, bx2, by2);
+    const o3 = orientation(bx1, by1, bx2, by2, ax1, ay1);
+    const o4 = orientation(bx1, by1, bx2, by2, ax2, ay2);
+
+    if (o1 !== o2 && o3 !== o4) return true;
+    if (o1 === 0 && onSegment(ax1, ay1, bx1, by1, ax2, ay2)) return true;
+    if (o2 === 0 && onSegment(ax1, ay1, bx2, by2, ax2, ay2)) return true;
+    if (o3 === 0 && onSegment(bx1, by1, ax1, ay1, bx2, by2)) return true;
+    if (o4 === 0 && onSegment(bx1, by1, ax2, ay2, bx2, by2)) return true;
+    return false;
+  }
+
   function drawBridgePreview(e, sNode, tNode) {
     const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
     const path = computeWarpBridgeSegments(sNode, tNode);
@@ -5470,13 +5606,18 @@ function clearBridgeSelection() {
       return;
     }
 
-    // Check if the player can afford this bridge (using warp-aware cost)
-    const cost = calculateBridgeCost(sNode, tNode);
+    const useBrass = bridgeIsBrass && isCrossModeActive();
+    const cost = calculateBridgeCost(sNode, tNode, useBrass);
     const canAfford = goldValue >= cost;
-    const previewColor = canAfford ? ownerToSecondaryColor(myPlayerId) : 0x000000;
+    let previewColor;
+    if (useBrass) {
+      previewColor = canAfford ? ownerToSecondaryColor(myPlayerId) : 0x000000;
+    } else {
+      previewColor = canAfford ? ownerToSecondaryColor(myPlayerId) : 0x000000;
+    }
 
     for (const segment of path.segments) {
-      drawBridgePreviewSegment(segment, previewColor, baseScale);
+      drawBridgePreviewSegment(segment, previewColor, baseScale, useBrass);
     }
   }
 
@@ -5485,11 +5626,11 @@ function clearBridgeSelection() {
     return Math.max(1, calculateNodeRadius(endpoint.node, baseScale)) + 1;
   }
 
-  function drawBridgePreviewSegment(segment, color, baseScale) {
-    if (!segment) return;
-    const start = segment.start;
-    const end = segment.end;
-    if (!start || !end) return;
+function drawBridgePreviewSegment(segment, color, baseScale, useBrass = false) {
+  if (!segment) return;
+  const start = segment.start;
+  const end = segment.end;
+  if (!start || !end) return;
 
     const [sx0, sy0] = worldToScreen(start.x, start.y);
     const [tx0, ty0] = worldToScreen(end.x, end.y);
@@ -5525,21 +5666,86 @@ function clearBridgeSelection() {
     for (let i = 0; i < packedCount; i++) {
       const cx = sx + (i + 0.5) * actualSpacing * ux;
       const cy = sy + (i + 0.5) * actualSpacing * uy;
-      drawPreviewTriangle(cx, cy, triW, triH, angle, color);
+    drawPreviewTriangle(cx, cy, triW, triH, angle, color, useBrass);
+  }
+}
+
+function updateBrassPreviewIntersections() {
+  brassPreviewIntersections.clear();
+  if (!(activeAbility === 'bridge1way' && bridgeIsBrass && isCrossModeActive())) return;
+    if (bridgeFirstNode == null) return;
+    const firstNode = nodes.get(bridgeFirstNode);
+    if (!firstNode) return;
+
+    let previewTarget = null;
+    if (hoveredNodeId !== null && hoveredNodeId !== bridgeFirstNode) {
+      const hoveredNode = nodes.get(hoveredNodeId);
+      if (hoveredNode) previewTarget = hoveredNode;
     }
+    if (!previewTarget) {
+      previewTarget = {
+        x: mouseWorldX,
+        y: mouseWorldY,
+        juice: 8.0,
+        size: 8.0,
+        owner: null,
+        pendingGold: 0,
+      };
+    }
+
+    const path = computeWarpBridgeSegments(firstNode, previewTarget);
+    if (!path || !Array.isArray(path.segments) || !path.segments.length) return;
+
+    const candidateSegments = [];
+    for (const segment of path.segments) {
+      if (!segment || !segment.start || !segment.end) continue;
+      const sx = Number(segment.start.x);
+      const sy = Number(segment.start.y);
+      const ex = Number(segment.end.x);
+      const ey = Number(segment.end.y);
+      if ([sx, sy, ex, ey].every((value) => Number.isFinite(value))) {
+        candidateSegments.push({ sx, sy, ex, ey });
+      }
+    }
+    if (!candidateSegments.length) return;
+
+    edges.forEach((edge, edgeId) => {
+      if (!edge) return;
+      if (edge.pipeType === 'gold') return;
+      if (edge.removing) return;
+      if (edge.source === bridgeFirstNode || edge.target === bridgeFirstNode) return;
+      if (hoveredNodeId != null && (edge.source === hoveredNodeId || edge.target === hoveredNodeId)) return;
+
+      const existingSegments = getEdgeWarpSegments(edge);
+      if (!existingSegments.length) return;
+
+      for (const candidate of candidateSegments) {
+        for (const existing of existingSegments) {
+          if (![candidate, existing].every(Boolean)) continue;
+          if ([candidate.sx, candidate.sy, candidate.ex, candidate.ey, existing.sx, existing.sy, existing.ex, existing.ey]
+            .every((value) => Number.isFinite(value)) &&
+            segmentsIntersect(candidate.sx, candidate.sy, candidate.ex, candidate.ey, existing.sx, existing.sy, existing.ex, existing.ey)
+          ) {
+            brassPreviewIntersections.add(edgeId);
+            return;
+          }
+        }
+      }
+    });
   }
 
-  function drawPreviewTriangle(cx, cy, baseW, height, angle, color) {
-    const halfW = baseW / 2;
-    // Triangle points oriented such that tip points along +x before rotation
-    const p1 = rotatePoint(cx + height / 2, cy, cx, cy, angle); // tip
-    const p2 = rotatePoint(cx - height / 2, cy - halfW, cx, cy, angle); // base left
-    const p3 = rotatePoint(cx - height / 2, cy + halfW, cx, cy, angle); // base right
-    
-    // Draw outlined triangle for preview
-    graphicsEdges.lineStyle(2, color, 0.7);
-    graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
-  }
+function drawPreviewTriangle(cx, cy, baseW, height, angle, color, useBrass = false) {
+  const halfW = baseW / 2;
+  // Triangle points oriented such that tip points along +x before rotation
+  const p1 = rotatePoint(cx + height / 2, cy, cx, cy, angle); // tip
+  const p2 = rotatePoint(cx - height / 2, cy - halfW, cx, cy, angle); // base left
+  const p3 = rotatePoint(cx - height / 2, cy + halfW, cx, cy, angle); // base right
+  
+  const outlineColor = useBrass ? BRASS_PIPE_OUTLINE_COLOR : color;
+  const outlineAlpha = useBrass ? 0.95 : 0.9;
+  graphicsEdges.lineStyle(2, outlineColor, outlineAlpha);
+  graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
+}
 
   function drawEdge(e, sNode, tNode, edgeId) {
     const from = sNode;  // All edges go from source to target
@@ -5578,6 +5784,16 @@ function clearBridgeSelection() {
         hoverAllowed = true;
       }
     }
+
+    const removalHighlight = (!removal &&
+      activeAbility === 'bridge1way' &&
+      bridgeIsBrass &&
+      isCrossModeActive() &&
+      brassPreviewIntersections.has(edgeId)
+    );
+
+    const triangleOverrideColor = hoverColor;
+    const triangleHoverFlag = !removal && (hoverAllowed || removalHighlight);
     let trianglesToDraw;
     if (removal) {
       trianglesToDraw = packedCount;
@@ -5611,11 +5827,14 @@ function clearBridgeSelection() {
       }
       const cx = segment.sx + segment.ux * remaining;
       const cy = segment.sy + segment.uy * remaining;
-      drawTriangle(cx, cy, triW, triH, segment.angle, e, from, hoverColor, hoverAllowed, i, packedCount);
+      drawTriangle(cx, cy, triW, triH, segment.angle, e, from, triangleOverrideColor, triangleHoverFlag, i, packedCount, removalHighlight);
     }
   }
 
-  function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, isHovered, triangleIndex, totalTriangles) {
+function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, isHovered, triangleIndex, totalTriangles, removalOutline = false) {
+    const pipeType = e?.pipeType || 'normal';
+    const inactiveColor = pipeType === 'gold' ? BRASS_PIPE_DIM_COLOR : 0x999999;
+    const isRemovalOutline = !!removalOutline;
     const color = (overrideColor != null) ? overrideColor : edgeColor(e, fromNode);
     const halfW = baseW / 2;
     // Triangle points oriented such that tip points along +x before rotation
@@ -5635,11 +5854,13 @@ function clearBridgeSelection() {
     if (e.flowing) {
       // Animated juice flow effect - filled triangles
       const animatedColor = getAnimatedJuiceColor(color, triangleIndex || 0, totalTriangles || 1, e.flowStartTime);
-      
+
       if (animatedColor === null) {
-        // Triangle not yet filled - show grey outline (same as non-flowing)
-        graphicsEdges.lineStyle(2, 0x999999, 1);
-        graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
+        // Triangle not yet filled - show outline (same as non-flowing)
+        if (!isRemovalOutline) {
+          graphicsEdges.lineStyle(2, inactiveColor, 1);
+          graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
+        }
       } else {
         // Triangle is filled - show animated color
         graphicsEdges.fillStyle(animatedColor.color, animatedColor.alpha);
@@ -5650,20 +5871,35 @@ function clearBridgeSelection() {
       const animatedColor = getAnimatedJuiceColor(color, triangleIndex || 0, totalTriangles || 1, e.flowStartTime);
       
       if (animatedColor === null) {
-        // Triangle not yet reached in animation - show grey outline
-        graphicsEdges.lineStyle(2, 0x999999, 1);
-        graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
+        // Triangle not yet reached in animation - show outline
+        if (!isRemovalOutline) {
+          graphicsEdges.lineStyle(2, inactiveColor, 1);
+          graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
+        }
       } else {
         // Triangle is in animation cycle - show hollow triangle with animated color outline
         graphicsEdges.lineStyle(3, animatedColor.color, animatedColor.alpha);
         graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
       }
     } else {
-      // Edge is not on - show grey outline
-      graphicsEdges.lineStyle(2, 0x999999, 1);
+      // Edge is not on - show outline
+      if (!isRemovalOutline) {
+        graphicsEdges.lineStyle(2, inactiveColor, 1);
+        graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
+      }
+    }
+
+    if (pipeType === 'gold' && !isRemovalOutline) {
+      graphicsEdges.lineStyle(2, BRASS_PIPE_OUTLINE_COLOR, 0.95);
       graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
     }
-    
+
+    if (removalOutline) {
+      graphicsEdges.lineStyle(3, 0x000000, 1);
+      graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
+      return;
+    }
+
     // Add hover border using the same color
     if (isHovered) {
       graphicsEdges.lineStyle(2, color, 1);
@@ -5673,7 +5909,7 @@ function clearBridgeSelection() {
 
   function edgeColor(e, fromNodeOrNull) {
     // If edge is on (flowing or not), use source node owner color; else grey
-    if (!e.on) return 0x999999;
+    if (!e?.on) return 0x999999;
     let fromNode = fromNodeOrNull;
     if (!fromNode) {
       fromNode = nodes.get(e.source);  // Always use source node
@@ -5693,7 +5929,7 @@ function clearBridgeSelection() {
     } else {
       distanceFromLead = (totalTriangles - leadTriangle) + triangleIndex;
     }
-    
+
     // Always cycle through exactly 4 brightness levels, regardless of edge length
     const brightnessLevels = 4;
     const level = distanceFromLead % brightnessLevels; // Cycle through 0, 1, 2, 3
@@ -5712,7 +5948,7 @@ function clearBridgeSelection() {
     
     // Recombine into hex color
     const animatedColor = (newR << 16) | (newG << 8) | newB;
-    
+
     // Check if we're in initialization phase
     if (flowStartTime !== null) {
       const timeSinceStart = animationTime - flowStartTime;

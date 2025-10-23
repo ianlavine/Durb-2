@@ -114,6 +114,7 @@ class BotGameManager:
                                 "warp": warp_payload,
                                 "warpAxis": warp_payload["axis"],
                                 "warpSegments": warp_payload["segments"],
+                                "pipeType": getattr(e, "pipe_type", "normal"),
                             },
                         }
                         break

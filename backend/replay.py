@@ -100,6 +100,7 @@ class GameReplayRecorder:
                         [sx, sy, ex, ey]
                         for sx, sy, ex, ey in (getattr(edge, "warp_segments", []) or [])
                     ],
+                    "pipeType": getattr(edge, "pipe_type", "normal"),
                 }
             )
 
