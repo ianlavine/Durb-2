@@ -307,7 +307,7 @@ class GameEngine:
             self.validate_player_can_act(player_id)
 
             current_mode = normalize_game_mode(getattr(self.state, "mode", DEFAULT_GAME_MODE))
-            if current_mode in {"nuke", "cross"}:
+            if current_mode in {"nuke", "cross", "brass"}:
                 raise GameValidationError("Edge reversal disabled in this mode")
 
             edge = self.validate_edge_exists(edge_id)
@@ -366,7 +366,7 @@ class GameEngine:
         if not self.state:
             return False
         current_mode = normalize_game_mode(getattr(self.state, "mode", DEFAULT_GAME_MODE))
-        return current_mode in {"warp", "sparse", "overflow", "nuke", "cross"}
+        return current_mode in {"warp", "sparse", "overflow", "nuke", "cross", "brass"}
 
     def _compute_warp_bounds(self) -> Optional[Dict[str, float]]:
         if not self._is_warp_mode_active():
@@ -697,14 +697,19 @@ class GameEngine:
 
             current_mode = normalize_game_mode(getattr(self.state, "mode", DEFAULT_GAME_MODE))
             is_cross_mode = current_mode == "cross"
-
-            normalized_pipe_type = "gold" if (pipe_type or "").lower() == "gold" else "normal"
-            if not is_cross_mode:
-                normalized_pipe_type = "normal"
+            is_brass_mode = current_mode == "brass"
+            is_cross_like_mode = current_mode in {"cross", "brass"}
 
             # Validate nodes
             from_node = self.validate_node_exists(from_node_id)
             to_node = self.validate_node_exists(to_node_id)
+
+            if is_brass_mode:
+                normalized_pipe_type = "gold" if getattr(from_node, "node_type", "normal") == "brass" else "normal"
+            else:
+                normalized_pipe_type = "gold" if (pipe_type or "").lower() == "gold" else "normal"
+                if not is_cross_mode:
+                    normalized_pipe_type = "normal"
 
             if normalized_pipe_type == "gold" and from_node.owner != player_id:
                 raise GameValidationError("Must control Brass Pipes")
@@ -743,13 +748,34 @@ class GameEngine:
             self.validate_sufficient_gold(player_id, actual_cost)
 
             # Check if edge already exists
-            if self._edge_exists_between_nodes(from_node_id, to_node_id):
-                raise GameValidationError("Edge already exists between these nodes")
+            existing_between: List[int] = []
+            for edge_id, edge in self.state.edges.items():
+                if {edge.source_node_id, edge.target_node_id} == {from_node_id, to_node_id}:
+                    existing_between.append(edge_id)
+
+            if existing_between:
+                if normalized_pipe_type != "gold" or not is_cross_like_mode:
+                    raise GameValidationError("Edge already exists between these nodes")
+
+                removable_between: List[int] = []
+                blocking_between: List[int] = []
+                for edge_id in existing_between:
+                    existing_edge = self.state.edges.get(edge_id)
+                    existing_type = getattr(existing_edge, "pipe_type", "normal") if existing_edge else "normal"
+                    if existing_type != "gold":
+                        removable_between.append(edge_id)
+                    else:
+                        blocking_between.append(edge_id)
+
+                if blocking_between:
+                    raise GameValidationError("Cannot replace existing brass pipe")
+
+                removed_edges.extend(self._remove_edges(removable_between))
 
             # Check for intersections (cross mode converts them into removals)
             intersecting_edges = self._find_intersecting_edges(from_node, to_node, candidate_segments)
             if intersecting_edges:
-                if current_mode != "cross":
+                if not is_cross_like_mode:
                     raise GameValidationError("Bridge would intersect existing edge")
 
                 removable_edges: List[int] = []

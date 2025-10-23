@@ -245,6 +245,7 @@ class GraphState:
                 round(n.juice, 3),
                 (n.owner if n.owner is not None else None),
                 round(getattr(n, "pending_gold", 0.0), 3),
+                1 if getattr(n, "node_type", "normal") == "brass" else 0,
             ]
             for nid, n in self.nodes.items()
         ]
@@ -341,6 +342,7 @@ class GraphState:
                 round(n.juice, 3),
                 (n.owner if n.owner is not None else None),
                 round(getattr(n, "pending_gold", 0.0), 3),
+                1 if getattr(n, "node_type", "normal") == "brass" else 0,
             ]
             for nid, n in self.nodes.items()
         ]
@@ -386,7 +388,7 @@ class GraphState:
         3. For attacking flows: always flow when on (regardless of target capacity)
         """
         node_max = getattr(self, "node_max_juice", get_node_max_juice(self.mode))
-        is_overflow_mode = normalize_game_mode(self.mode) in {"overflow", "nuke", "cross"}
+        is_overflow_mode = normalize_game_mode(self.mode) in {"overflow", "nuke", "cross", "brass"}
         for edge in self.edges.values():
             # Handle bridge build gating: while building, edge cannot be on/flowing
             if getattr(edge, 'building', False):
@@ -457,7 +459,7 @@ class GraphState:
         self._update_edge_flowing_status()
 
         node_max = getattr(self, "node_max_juice", get_node_max_juice(self.mode))
-        is_overflow_mode = normalize_game_mode(self.mode) in {"overflow", "nuke", "cross"}
+        is_overflow_mode = normalize_game_mode(self.mode) in {"overflow", "nuke", "cross", "brass"}
         if self.pending_overflow_payouts:
             self.pending_overflow_payouts.clear()
 
@@ -733,10 +735,20 @@ def load_graph(graph_path: Path) -> Tuple[GraphState, Dict[str, int]]:
     screen = data.get("screen", {})
     nodes_raw = data["nodes"]
     edges_raw = data["edges"]
-    nodes: List[Node] = [
-        Node(id=n["id"], x=n["x"], y=n["y"], juice=UNOWNED_NODE_BASE_JUICE, cur_intake=0.0)
-        for n in nodes_raw
-    ]
+    nodes: List[Node] = []
+    for n in nodes_raw:
+        node_type_val = n.get("nodeType") if isinstance(n, dict) else None
+        node_type = "brass" if isinstance(node_type_val, str) and node_type_val.lower() == "brass" else "normal"
+        nodes.append(
+            Node(
+                id=n["id"],
+                x=n["x"],
+                y=n["y"],
+                juice=UNOWNED_NODE_BASE_JUICE,
+                cur_intake=0.0,
+                node_type=node_type,
+            )
+        )
     edges: List[Edge] = []
     for e in edges_raw:
         warp_axis = e.get("warpAxis") if isinstance(e, dict) else None
@@ -766,10 +778,20 @@ def build_state_from_dict(data: Dict) -> Tuple[GraphState, Dict[str, int]]:
     nodes_raw = data["nodes"]
     edges_raw = data["edges"]
     # Start nodes very small (juice units)
-    nodes: List[Node] = [
-        Node(id=n["id"], x=n["x"], y=n["y"], juice=UNOWNED_NODE_BASE_JUICE, cur_intake=0.0)
-        for n in nodes_raw
-    ]
+    nodes: List[Node] = []
+    for n in nodes_raw:
+        node_type_val = n.get("nodeType") if isinstance(n, dict) else None
+        node_type = "brass" if isinstance(node_type_val, str) and node_type_val.lower() == "brass" else "normal"
+        nodes.append(
+            Node(
+                id=n["id"],
+                x=n["x"],
+                y=n["y"],
+                juice=UNOWNED_NODE_BASE_JUICE,
+                cur_intake=0.0,
+                node_type=node_type,
+            )
+        )
     edges: List[Edge] = []
     for e in edges_raw:
         edge = Edge(id=e["id"], source_node_id=e["source"], target_node_id=e["target"])

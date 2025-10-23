@@ -142,16 +142,12 @@
   let currentTargetSetTime = null; // Animation time when target was last set
   
   let selectedPlayerCount = 2;
-  let selectedMode = 'overflow';
-  let gameMode = 'overflow';
+  let selectedMode = 'sparse';
+  let gameMode = 'sparse';
   let modeButtons = [];
   const MODE_LABELS = {
-    basic: 'Basic',
-    warp: 'OG',
     sparse: 'Sparse',
-    overflow: 'Ring',
-    nuke: 'Nuke',
-    cross: 'Cross',
+    brass: 'Brass',
   };
   const OVERFLOW_PENDING_GOLD_THRESHOLD = 10;
   const BRASS_PIPE_COLOR = 0x8b6f14;
@@ -163,11 +159,8 @@
 
   function isWarpLike(mode) {
     const normalized = normalizeMode(mode);
-    return normalized === 'warp'
-      || normalized === 'sparse'
-      || normalized === 'overflow'
-      || normalized === 'nuke'
-      || normalized === 'cross';
+    return normalized === 'sparse'
+      || normalized === 'brass';
   }
 
   // Money transparency system
@@ -1112,7 +1105,7 @@
     if (normalizedDistance === 0) return 0;
 
     const baseCost = Math.round(BRIDGE_BASE_COST + normalizedDistance * BRIDGE_COST_PER_UNIT);
-    const useBrass = isBrass && isCrossModeActive();
+    const useBrass = isBrass && isTrueCrossModeActive();
     return useBrass ? baseCost * 2 : baseCost;
   }
 
@@ -1334,12 +1327,11 @@
   }
 
   function normalizeMode(value) {
-    if (typeof value !== 'string') return 'basic';
+    if (typeof value !== 'string') return 'sparse';
     const lowered = value.trim().toLowerCase();
-    // Backward compatibility: treat 'passive' as alias for 'basic'
-    if (lowered === 'passive') return 'basic';
-    if (lowered === 'pop') return 'warp';
-    return Object.prototype.hasOwnProperty.call(MODE_LABELS, lowered) ? lowered : 'basic';
+    // Backward compatibility: treat legacy aliases as sparse
+    if (lowered === 'passive' || lowered === 'basic' || lowered === 'pop') return 'sparse';
+    return Object.prototype.hasOwnProperty.call(MODE_LABELS, lowered) ? lowered : 'sparse';
   }
 
   function isRingModeActive() {
@@ -1350,17 +1342,26 @@
     return normalizeMode(gameMode) === 'nuke';
   }
 
+  function isBrassModeActive() {
+    return normalizeMode(gameMode) === 'brass';
+  }
+
   function isCrossModeActive() {
+    const mode = normalizeMode(gameMode);
+    return mode === 'cross' || mode === 'brass';
+  }
+
+  function isTrueCrossModeActive() {
     return normalizeMode(gameMode) === 'cross';
   }
 
   function isNukeLikeModeActive() {
     const mode = normalizeMode(gameMode);
-    return mode === 'nuke' || mode === 'cross';
+    return mode === 'nuke' || mode === 'cross' || mode === 'brass';
   }
 
   function formatModeText(mode) {
-    return MODE_LABELS[normalizeMode(mode)] || MODE_LABELS.basic;
+    return MODE_LABELS[normalizeMode(mode)] || MODE_LABELS.sparse;
   }
 
   function updateModeButtonsUI() {
@@ -1374,7 +1375,7 @@
 
   function updatePlayBotAvailability(baseEnabled = true) {
     if (!playBotBtnEl) return;
-    const modeAllowsBot = selectedMode === 'basic' || isWarpLike(selectedMode);
+    const modeAllowsBot = isWarpLike(selectedMode);
     const enabled = Boolean(baseEnabled && modeAllowsBot);
     playBotBtnEl.disabled = !enabled;
     playBotBtnEl.title = modeAllowsBot ? '' : 'Bots are unavailable in this mode';
@@ -2569,13 +2570,15 @@ function clearBridgeSelection() {
 
     if (Array.isArray(msg.nodes)) {
       for (const arr of msg.nodes) {
-        const [id, x, y, size, owner, pendingGold = 0] = arr;
+        const [id, x, y, size, owner, pendingGold = 0, brassFlag = 0] = arr;
+        const isBrass = Number(brassFlag) === 1;
         nodes.set(id, {
           x,
           y,
           size,
           owner,
           pendingGold: Number(pendingGold) || 0,
+          isBrass,
         });
       }
     }
@@ -2994,13 +2997,14 @@ function clearBridgeSelection() {
     }
     if (Array.isArray(msg.nodes)) {
       msg.nodes.forEach((entry) => {
-        const [id, size, owner, pendingGold = 0] = entry;
+        const [id, size, owner, pendingGold = 0, brassFlag = 0] = entry;
         const node = nodes.get(id);
         if (node) {
           const oldOwner = node.owner;
           node.size = size;
           node.owner = owner;
           node.pendingGold = Number(pendingGold) || 0;
+          node.isBrass = Number(brassFlag) === 1;
           if (oldOwner !== owner) {
             // Enemy capture sound: you captured from someone else
             if (owner === myPlayerId && oldOwner != null && oldOwner !== myPlayerId) {
@@ -3766,7 +3770,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     
     // Draw border box around play area (warp border handles inner toggle)
     drawPlayAreaBorder();
-    const overflowMode = ['overflow', 'nuke', 'cross'].includes(normalizeMode(gameMode));
+    const overflowMode = ['overflow', 'nuke', 'cross', 'brass'].includes(normalizeMode(gameMode));
     
     // Show gold display when graph is being drawn and we have nodes/game data
     if (goldDisplay && nodes.size > 0) {
@@ -3824,8 +3828,12 @@ function fallbackRemoveEdgesForNode(nodeId) {
     graphicsNodes.clear();
     for (const [id, n] of nodes.entries()) {
       const [nx, ny] = worldToScreen(n.x, n.y);
-      const color = ownerToColor(n.owner);
-      graphicsNodes.fillStyle(color, 1);
+      const isBrassNode = Boolean(n.isBrass);
+      const nodeOwned = n.owner != null;
+      const fillColor = nodeOwned
+        ? ownerToColor(n.owner)
+        : (isBrassNode ? BRASS_PIPE_COLOR : ownerToColor(null));
+      graphicsNodes.fillStyle(fillColor, 1);
       const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
       
       const radius = calculateNodeRadius(n, baseScale);
@@ -3893,6 +3901,23 @@ function fallbackRemoveEdgesForNode(nodeId) {
         }
       }
 
+      if (isBrassNode) {
+        const triHeight = Math.max(6, r * 0.9);
+        const halfBase = triHeight * 0.5;
+        const topX = nx;
+        const topY = ny - triHeight / 2;
+        const leftX = nx - halfBase;
+        const leftY = ny + triHeight / 2;
+        const rightX = nx + halfBase;
+        const rightY = ny + triHeight / 2;
+        graphicsNodes.fillStyle(BRASS_PIPE_COLOR, 1);
+        graphicsNodes.fillTriangle(topX, topY, leftX, leftY, rightX, rightY);
+        if (nodeOwned) {
+          graphicsNodes.lineStyle(1, 0x000000, 0.35);
+          graphicsNodes.strokeTriangle(topX, topY, leftX, leftY, rightX, rightY);
+        }
+      }
+
       // Hover effect: player's color border when eligible for starting node pick
       if (hoveredNodeId === id && !myPicked && (n.owner == null)) {
         const myColor = ownerToColor(myPlayerId);
@@ -3936,7 +3961,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
             graphicsNodes.strokeCircle(nx, ny, r + 3);
 
             // show static, live-updating midpoint label
-            updateBridgeCostDisplay(firstNode, n, bridgeIsBrass && isCrossModeActive());
+            updateBridgeCostDisplay(firstNode, n, bridgeIsBrass && isTrueCrossModeActive());
           }
 
       }
@@ -4028,7 +4053,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
             targetNode = hoveredNode;
           }
         }
-        updateBridgeCostDisplay(firstNode, targetNode, bridgeIsBrass && isCrossModeActive());
+        updateBridgeCostDisplay(firstNode, targetNode, bridgeIsBrass && isTrueCrossModeActive());
       }
     }
     
@@ -4715,16 +4740,24 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
 
   function activateBridgeFromNode(nodeId, useBrass) {
-    if (!nodes.has(nodeId)) return false;
+    const node = nodes.get(nodeId);
+    if (!node) return false;
     brassActivationDenied = false;
-    const wantBrass = !!(useBrass && isCrossModeActive());
-    if (wantBrass) {
-      const node = nodes.get(nodeId);
-      if (!node || node.owner !== myPlayerId) {
-        showErrorMessage('Must control Brass Pipes', 'money');
-        brassActivationDenied = true;
-        return false;
-      }
+
+    const brassMode = isBrassModeActive();
+    const crossLikeMode = isCrossModeActive();
+
+    let wantBrass = false;
+    if (brassMode) {
+      wantBrass = !!node.isBrass;
+    } else if (crossLikeMode) {
+      wantBrass = !!useBrass;
+    }
+
+    if (wantBrass && node.owner !== myPlayerId) {
+      showErrorMessage('Must control Brass Pipes', 'money');
+      brassActivationDenied = true;
+      return false;
     }
     activeAbility = 'bridge1way';
     bridgeFirstNode = nodeId;
@@ -4771,8 +4804,9 @@ function fallbackRemoveEdgesForNode(nodeId) {
             hideBridgeCostDisplay();
             return true;
           }
-          const useBrass = bridgeIsBrass && isCrossModeActive();
-          const cost = calculateBridgeCost(firstNode, node, useBrass);
+          const applyBrassCost = bridgeIsBrass && isTrueCrossModeActive();
+          const useBrassPipe = bridgeIsBrass && isCrossModeActive();
+          const cost = calculateBridgeCost(firstNode, node, applyBrassCost);
 
           if (goldValue >= cost && ws && ws.readyState === WebSocket.OPEN) {
 
@@ -4790,7 +4824,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
                 : []
             } : null;
 
-            const pipeType = useBrass ? 'gold' : 'normal';
+            const pipeType = useBrassPipe ? 'gold' : 'normal';
 
             const buildBridgePayload = {
               type: 'buildBridge',
@@ -5606,18 +5640,18 @@ function fallbackRemoveEdgesForNode(nodeId) {
       return;
     }
 
-    const useBrass = bridgeIsBrass && isCrossModeActive();
-    const cost = calculateBridgeCost(sNode, tNode, useBrass);
+    const useBrassPipe = bridgeIsBrass && isCrossModeActive();
+    const cost = calculateBridgeCost(sNode, tNode, bridgeIsBrass && isTrueCrossModeActive());
     const canAfford = goldValue >= cost;
     let previewColor;
-    if (useBrass) {
-      previewColor = canAfford ? ownerToSecondaryColor(myPlayerId) : 0x000000;
+    if (useBrassPipe) {
+      previewColor = canAfford ? BRASS_PIPE_COLOR : BRASS_PIPE_DIM_COLOR;
     } else {
       previewColor = canAfford ? ownerToSecondaryColor(myPlayerId) : 0x000000;
     }
 
     for (const segment of path.segments) {
-      drawBridgePreviewSegment(segment, previewColor, baseScale, useBrass);
+      drawBridgePreviewSegment(segment, previewColor, baseScale, useBrassPipe);
     }
   }
 

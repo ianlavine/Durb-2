@@ -86,6 +86,8 @@ def build_engine_from_replay(
     for raw in nodes_payload:
         if not isinstance(raw, dict):
             continue
+        node_type_val = raw.get("nodeType") if isinstance(raw.get("nodeType"), str) else raw.get("node_type")
+        node_type = "brass" if isinstance(node_type_val, str) and node_type_val.lower() == "brass" else "normal"
         node = Node(
             id=_coerce_int(raw.get("id")),
             x=float(raw.get("x", 0.0)),
@@ -93,6 +95,7 @@ def build_engine_from_replay(
             juice=float(raw.get("juice", 0.0)),
             owner=(raw.get("owner") if raw.get("owner") is not None else None),
             pending_gold=float(raw.get("pendingGold", 0.0) or 0.0),
+            node_type=node_type,
         )
         nodes.append(node)
 

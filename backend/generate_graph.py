@@ -240,7 +240,16 @@ def remove_isolated_nodes(nodes: List[Node], edges: List[Edge]) -> Tuple[List[No
     new_nodes = []
     for new_id, node in enumerate(connected_nodes):
         old_to_new_id[node.id] = new_id
-        new_nodes.append(Node(id=new_id, x=node.x, y=node.y, juice=node.juice, cur_intake=0.0))
+        new_nodes.append(
+            Node(
+                id=new_id,
+                x=node.x,
+                y=node.y,
+                juice=node.juice,
+                cur_intake=0.0,
+                node_type=getattr(node, "node_type", "normal"),
+            )
+        )
     
     # Update edge IDs and node references
     new_edges = []
@@ -299,7 +308,15 @@ def main() -> None:
 
     data = {
         "screen": screen_meta,
-        "nodes": [{"id": n.id, "x": round(n.x, 3), "y": round(n.y, 3)} for n in nodes],
+        "nodes": [
+            {
+                "id": n.id,
+                "x": round(n.x, 3),
+                "y": round(n.y, 3),
+                "nodeType": getattr(n, "node_type", "normal"),
+            }
+            for n in nodes
+        ],
         "edges": [
             {"id": e.id, "source": e.source_node_id, "target": e.target_node_id, "bidirectional": False}
             for e in edges
@@ -331,7 +348,15 @@ def generate_graph_to_path(width: int, height: int, output_path: Path) -> None:
 
     data = {
         "screen": screen_meta,
-        "nodes": [{"id": n.id, "x": round(n.x, 3), "y": round(n.y, 3)} for n in nodes],
+        "nodes": [
+            {
+                "id": n.id,
+                "x": round(n.x, 3),
+                "y": round(n.y, 3),
+                "nodeType": getattr(n, "node_type", "normal"),
+            }
+            for n in nodes
+        ],
         "edges": [
             {"id": e.id, "source": e.source_node_id, "target": e.target_node_id, "bidirectional": False}
             for e in edges

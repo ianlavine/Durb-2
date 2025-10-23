@@ -15,19 +15,15 @@ MAX_FRIEND_PLAYERS = 4
 TICK_INTERVAL_SECONDS: float = 0.1
 
 # Game modes
-GAME_MODES: Tuple[str, ...] = ("basic", "warp", "sparse", "overflow", "nuke", "cross")
+GAME_MODES: Tuple[str, ...] = ("sparse", "brass")
 DEFAULT_GAME_MODE: str = GAME_MODES[0]
 
 
 # Gameplay flow tuning
 NODE_MIN_JUICE: float = 0.0
 NODE_MAX_JUICE_BY_MODE: Dict[str, float] = {
-    "basic": 500.0,
-    "warp": 500.0,
     "sparse": 500.0,
-    "overflow": 200.0,
-    "nuke": 200.0,
-    "cross": 200.0,
+    "brass": 200.0,
 }
 NODE_MAX_JUICE: float = NODE_MAX_JUICE_BY_MODE[DEFAULT_GAME_MODE]
 PRODUCTION_RATE_PER_NODE: float = 0.4
@@ -36,18 +32,14 @@ INTAKE_TRANSFER_RATIO: float = 0.7
 RESERVE_TRANSFER_RATIO: float = 0.006
 
 # Overflow tuning
-OVERFLOW_JUICE_TO_GOLD_RATIO: float = 20.0  # 20 juice -> 1 pending gold
+OVERFLOW_JUICE_TO_GOLD_RATIO: float = 15.0  # 15 juice -> 1 pending gold
 OVERFLOW_PENDING_GOLD_PAYOUT: float = 10.0   # payout after 10 pending gold -> $10
 
 
 # Economy tuning
 GOLD_REWARD_FOR_NEUTRAL_CAPTURE_BY_MODE: Dict[str, float] = {
-    "basic": 10.0,
-    "warp": 10.0,
     "sparse": 10.0,
-    "overflow": 10.0,
-    "nuke": 10.0,
-    "cross": 10.0,
+    "brass": 10.0,
 }
 GOLD_REWARD_FOR_NEUTRAL_CAPTURE: float = GOLD_REWARD_FOR_NEUTRAL_CAPTURE_BY_MODE[DEFAULT_GAME_MODE]
 GOLD_REWARD_FOR_ENEMY_CAPTURE: float = 0.0
@@ -64,12 +56,8 @@ UNOWNED_NODE_BASE_JUICE: float = 50.0
 # Bridge costs
 BRIDGE_BASE_COST: float = 0.0
 BRIDGE_COST_PER_UNIT_DISTANCE_BY_MODE: Dict[str, float] = {
-    "basic": 1.5,
-    "warp": 1.5,
     "sparse": 1.0,
-    "overflow": 1.0,
-    "nuke": 1.0,
-    "cross": 1.0,
+    "brass": 1.0,
 }
 BRIDGE_COST_PER_UNIT_DISTANCE: float = BRIDGE_COST_PER_UNIT_DISTANCE_BY_MODE[DEFAULT_GAME_MODE]
 

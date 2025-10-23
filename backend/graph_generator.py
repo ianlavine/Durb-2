@@ -3,6 +3,7 @@ Graph Generator - Centralized graph generation utilities.
 Eliminates duplication and provides consistent graph generation.
 """
 import asyncio
+import random
 from typing import Dict, List, Tuple, Any
 
 from . import generate_graph as gen_graph
@@ -39,6 +40,10 @@ class GraphGenerator:
                 "desired_edges": None,
             },
             "cross": {
+                "edge_func": gen_graph.generate_sparse_edges,
+                "desired_edges": None,
+            },
+            "brass": {
                 "edge_func": gen_graph.generate_sparse_edges,
                 "desired_edges": None,
             },
@@ -84,6 +89,17 @@ class GraphGenerator:
 
         # Remove isolated nodes after graph generation
         nodes, edges = gen_graph.remove_isolated_nodes(nodes, edges)
+
+        if mode == "brass":
+            brass_cap = 20
+            for node in nodes:
+                node.node_type = "normal"
+            if nodes:
+                brass_count = min(brass_cap, len(nodes))
+                brass_pool = random.sample(nodes, brass_count)
+                for node in brass_pool:
+                    node.node_type = "brass"
+
         gen_graph.apply_layout_scaling(nodes, width, height)
 
         print(f"{len(nodes)} , {len(edges)}")
@@ -127,7 +143,15 @@ class GraphGenerator:
 
         return {
             "screen": screen,
-            "nodes": [{"id": n.id, "x": round(n.x, 3), "y": round(n.y, 3)} for n in nodes],
+            "nodes": [
+                {
+                    "id": n.id,
+                    "x": round(n.x, 3),
+                    "y": round(n.y, 3),
+                    "nodeType": getattr(n, "node_type", "normal"),
+                }
+                for n in nodes
+            ],
             "edges": [
                 {"id": e.id, "source": e.source_node_id, "target": e.target_node_id, "bidirectional": False}
                 for e in edges

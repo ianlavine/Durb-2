@@ -22,6 +22,7 @@ class Node:
     attached_edge_ids: List[int] = field(default_factory=list)
     cur_intake: float = 0.0  # amount of juice received from friendly nodes in last tick
     pending_gold: float = 0.0  # overflow progress towards gold payout
+    node_type: str = "normal"  # 'normal' or 'brass'
     
 
 
@@ -30,7 +31,7 @@ class Edge:
     id: int
     source_node_id: int
     target_node_id: int
-    pipe_type: str = "normal"  # 'normal' or 'gold'; gold only exists in cross mode
+    pipe_type: str = "normal"  # 'normal' or 'gold'; gold exists in cross/brass modes
     # All edges are now one-way only, from source to target
     on: bool = False
     flowing: bool = False
