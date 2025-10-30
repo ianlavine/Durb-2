@@ -11,7 +11,6 @@ from .constants import (
     INTAKE_TRANSFER_RATIO,
     MAX_TRANSFER_RATIO,
     NODE_MIN_JUICE,
-    OVERFLOW_JUICE_TO_GOLD_RATIO,
     OVERFLOW_PENDING_GOLD_PAYOUT,
     PASSIVE_GOLD_PER_TICK,
     PASSIVE_INCOME_ENABLED,
@@ -21,6 +20,7 @@ from .constants import (
     UNOWNED_NODE_BASE_JUICE,
     get_neutral_capture_reward,
     get_node_max_juice,
+    get_overflow_juice_to_gold_ratio,
     normalize_game_mode,
 )
 from .models import Edge, Node, Player
@@ -388,10 +388,20 @@ class GraphState:
         3. For attacking flows: always flow when on (regardless of target capacity)
         """
         node_max = getattr(self, "node_max_juice", get_node_max_juice(self.mode))
-        is_overflow_mode = normalize_game_mode(self.mode) in {"overflow", "nuke", "cross", "brass"}
+        normalized_mode = normalize_game_mode(self.mode)
+        is_overflow_mode = normalized_mode in {"overflow", "nuke", "cross", "brass", "go", "xb"}
+        is_go_mode = normalized_mode == "go"
         for edge in self.edges.values():
             # Handle bridge build gating: while building, edge cannot be on/flowing
-            if getattr(edge, 'building', False):
+            building = getattr(edge, 'building', False)
+            source_node = self.nodes.get(edge.source_node_id)
+            if is_go_mode:
+                if building:
+                    edge.on = False
+                else:
+                    edge.on = bool(source_node and source_node.owner is not None)
+
+            if building:
                 edge.flowing = False
                 continue
             if not edge.on:
@@ -400,7 +410,6 @@ class GraphState:
                 continue
             
             # Get source and target nodes
-            source_node = self.nodes.get(edge.source_node_id)
             target_node = self.nodes.get(edge.target_node_id)
             
             if source_node is None or target_node is None:
@@ -459,7 +468,9 @@ class GraphState:
         self._update_edge_flowing_status()
 
         node_max = getattr(self, "node_max_juice", get_node_max_juice(self.mode))
-        is_overflow_mode = normalize_game_mode(self.mode) in {"overflow", "nuke", "cross", "brass"}
+        normalized_mode = normalize_game_mode(self.mode)
+        is_overflow_mode = normalized_mode in {"overflow", "nuke", "cross", "brass", "go", "xb"}
+        overflow_ratio = get_overflow_juice_to_gold_ratio(self.mode)
         if self.pending_overflow_payouts:
             self.pending_overflow_payouts.clear()
 
@@ -590,7 +601,7 @@ class GraphState:
                 overflow_amount = max(0.0, updated_amount - node_max)
                 if overflow_amount > 0:
                     pending_gold = getattr(node, "pending_gold", 0.0)
-                    pending_gold += overflow_amount / OVERFLOW_JUICE_TO_GOLD_RATIO
+                    pending_gold += overflow_amount / overflow_ratio
                     updated_amount -= overflow_amount
 
                     payout_threshold = OVERFLOW_PENDING_GOLD_PAYOUT

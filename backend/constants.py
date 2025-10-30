@@ -15,15 +15,32 @@ MAX_FRIEND_PLAYERS = 4
 TICK_INTERVAL_SECONDS: float = 0.1
 
 # Game modes
-GAME_MODES: Tuple[str, ...] = ("sparse", "brass")
-DEFAULT_GAME_MODE: str = GAME_MODES[0]
+GAME_MODES: Tuple[str, ...] = (
+    "sparse",
+    "warp",
+    "basic",
+    "overflow",
+    "nuke",
+    "cross",
+    "brass",
+    "go",
+    "xb",
+)
+DEFAULT_GAME_MODE: str = "sparse"
 
 
 # Gameplay flow tuning
 NODE_MIN_JUICE: float = 0.0
 NODE_MAX_JUICE_BY_MODE: Dict[str, float] = {
+    "basic": 500.0,
+    "warp": 500.0,
     "sparse": 500.0,
-    "brass": 200.0,
+    "overflow": 300.0,
+    "nuke": 300.0,
+    "cross": 300.0,
+    "brass": 300.0,
+    "go": 300.0,
+    "xb": 300.0,
 }
 NODE_MAX_JUICE: float = NODE_MAX_JUICE_BY_MODE[DEFAULT_GAME_MODE]
 PRODUCTION_RATE_PER_NODE: float = 0.4
@@ -32,14 +49,29 @@ INTAKE_TRANSFER_RATIO: float = 0.7
 RESERVE_TRANSFER_RATIO: float = 0.006
 
 # Overflow tuning
-OVERFLOW_JUICE_TO_GOLD_RATIO: float = 15.0  # 15 juice -> 1 pending gold
+OVERFLOW_JUICE_TO_GOLD_RATIO_DEFAULT: float = 15.0  # 15 juice -> 1 pending gold
+OVERFLOW_JUICE_TO_GOLD_RATIO_BY_MODE: Dict[str, float] = {
+    "overflow": 15.0,
+    "nuke": 15.0,
+    "cross": 15.0,
+    "brass": 15.0,
+    "go": 30.0,
+    "xb": 15.0,
+}
 OVERFLOW_PENDING_GOLD_PAYOUT: float = 10.0   # payout after 10 pending gold -> $10
 
 
 # Economy tuning
 GOLD_REWARD_FOR_NEUTRAL_CAPTURE_BY_MODE: Dict[str, float] = {
+    "basic": 10.0,
+    "warp": 10.0,
     "sparse": 10.0,
+    "overflow": 10.0,
+    "nuke": 10.0,
+    "cross": 10.0,
     "brass": 10.0,
+    "go": 10.0,
+    "xb": 10.0,
 }
 GOLD_REWARD_FOR_NEUTRAL_CAPTURE: float = GOLD_REWARD_FOR_NEUTRAL_CAPTURE_BY_MODE[DEFAULT_GAME_MODE]
 GOLD_REWARD_FOR_ENEMY_CAPTURE: float = 0.0
@@ -56,8 +88,15 @@ UNOWNED_NODE_BASE_JUICE: float = 50.0
 # Bridge costs
 BRIDGE_BASE_COST: float = 0.0
 BRIDGE_COST_PER_UNIT_DISTANCE_BY_MODE: Dict[str, float] = {
+    "basic": 1.5,
+    "warp": 1.5,
     "sparse": 1.0,
+    "overflow": 1.0,
+    "nuke": 1.0,
+    "cross": 1.0,
     "brass": 1.0,
+    "go": 1.0,
+    "xb": 1.0,
 }
 BRIDGE_COST_PER_UNIT_DISTANCE: float = BRIDGE_COST_PER_UNIT_DISTANCE_BY_MODE[DEFAULT_GAME_MODE]
 
@@ -94,3 +133,9 @@ def get_node_max_juice(mode: str) -> float:
     """Return the node max juice value for the given mode."""
     key = normalize_game_mode(mode)
     return NODE_MAX_JUICE_BY_MODE.get(key, NODE_MAX_JUICE)
+
+
+def get_overflow_juice_to_gold_ratio(mode: str) -> float:
+    """Return the juice-to-gold conversion ratio for overflow-style modes."""
+    key = normalize_game_mode(mode)
+    return OVERFLOW_JUICE_TO_GOLD_RATIO_BY_MODE.get(key, OVERFLOW_JUICE_TO_GOLD_RATIO_DEFAULT)
