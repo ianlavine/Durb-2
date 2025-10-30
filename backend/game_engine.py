@@ -74,6 +74,9 @@ class GameEngine:
             auto_expand = bool(slot.get("auto_expand", False))
             guest_name = str(slot.get("guest_name", "") or "").strip()
 
+            if normalized_mode == "go":
+                auto_expand = True
+
             player = Player(id=player_id, color=color, secondary_colors=secondary_colors, name=guest_name)
             self.state.add_player(player)
 
@@ -273,6 +276,10 @@ class GameEngine:
             
             # Allow edge clicks if player has picked starting node
             self.validate_player_can_act(player_id)
+
+            current_mode = normalize_game_mode(getattr(self.state, "mode", DEFAULT_GAME_MODE))
+            if current_mode == "go":
+                raise GameValidationError("Pipes auto-flow in Go mode")
             
             edge = self.validate_edge_exists(edge_id)
             
@@ -307,7 +314,7 @@ class GameEngine:
             self.validate_player_can_act(player_id)
 
             current_mode = normalize_game_mode(getattr(self.state, "mode", DEFAULT_GAME_MODE))
-            if current_mode in {"nuke", "cross", "brass"}:
+            if current_mode in {"nuke", "cross", "brass", "go", "xb"}:
                 raise GameValidationError("Edge reversal disabled in this mode")
 
             edge = self.validate_edge_exists(edge_id)
@@ -366,7 +373,7 @@ class GameEngine:
         if not self.state:
             return False
         current_mode = normalize_game_mode(getattr(self.state, "mode", DEFAULT_GAME_MODE))
-        return current_mode in {"warp", "sparse", "overflow", "nuke", "cross", "brass"}
+        return current_mode in {"warp", "sparse", "overflow", "nuke", "cross", "brass", "go", "xb"}
 
     def _compute_warp_bounds(self) -> Optional[Dict[str, float]]:
         if not self._is_warp_mode_active():
@@ -698,6 +705,7 @@ class GameEngine:
             current_mode = normalize_game_mode(getattr(self.state, "mode", DEFAULT_GAME_MODE))
             is_cross_mode = current_mode == "cross"
             is_brass_mode = current_mode == "brass"
+            is_xb_mode = current_mode == "xb"
             is_cross_like_mode = current_mode in {"cross", "brass"}
 
             # Validate nodes
@@ -706,10 +714,10 @@ class GameEngine:
 
             if is_brass_mode:
                 normalized_pipe_type = "gold" if getattr(from_node, "node_type", "normal") == "brass" else "normal"
-            else:
+            elif is_cross_mode:
                 normalized_pipe_type = "gold" if (pipe_type or "").lower() == "gold" else "normal"
-                if not is_cross_mode:
-                    normalized_pipe_type = "normal"
+            else:
+                normalized_pipe_type = "normal"
 
             if normalized_pipe_type == "gold" and from_node.owner != player_id:
                 raise GameValidationError("Must control Brass Pipes")
@@ -775,25 +783,47 @@ class GameEngine:
             # Check for intersections (cross mode converts them into removals)
             intersecting_edges = self._find_intersecting_edges(from_node, to_node, candidate_segments)
             if intersecting_edges:
-                if not is_cross_like_mode:
-                    raise GameValidationError("Bridge would intersect existing edge")
+                if is_xb_mode:
+                    blocked_edges: List[int] = []
+                    removable_edges: List[int] = []
+                    for intersect_id in intersecting_edges:
+                        existing_edge = self.state.edges.get(intersect_id) if self.state else None
+                        existing_type = getattr(existing_edge, "pipe_type", "normal") if existing_edge else "normal"
+                        if existing_type == "gold":
+                            blocked_edges.append(intersect_id)
+                        else:
+                            removable_edges.append(intersect_id)
 
-                removable_edges: List[int] = []
-                blocking_edges: List[int] = []
-                for intersect_id in intersecting_edges:
-                    existing_edge = self.state.edges.get(intersect_id) if self.state else None
-                    existing_type = getattr(existing_edge, "pipe_type", "normal") if existing_edge else "normal"
-                    if normalized_pipe_type == "gold" and existing_type != "gold":
-                        removable_edges.append(intersect_id)
-                    else:
-                        blocking_edges.append(intersect_id)
+                    if blocked_edges:
+                        raise GameValidationError("Cannot cross brass pipe")
 
-                if blocking_edges:
-                    if normalized_pipe_type == "gold":
-                        raise GameValidationError("Cannot cross golden pipe")
-                    raise GameValidationError("Only golden pipes can cross others")
+                    if removable_edges:
+                        removed_edges.extend(self._remove_edges(removable_edges))
 
-                removed_edges = self._remove_edges(removable_edges)
+                    normalized_pipe_type = "gold"
+                else:
+                    if not is_cross_like_mode:
+                        raise GameValidationError("Bridge would intersect existing edge")
+
+                    removable_edges: List[int] = []
+                    blocking_edges: List[int] = []
+                    for intersect_id in intersecting_edges:
+                        existing_edge = self.state.edges.get(intersect_id) if self.state else None
+                        existing_type = getattr(existing_edge, "pipe_type", "normal") if existing_edge else "normal"
+                        if normalized_pipe_type == "gold" and existing_type != "gold":
+                            removable_edges.append(intersect_id)
+                        else:
+                            blocking_edges.append(intersect_id)
+
+                    if blocking_edges:
+                        if normalized_pipe_type == "gold":
+                            raise GameValidationError("Cannot cross golden pipe")
+                        raise GameValidationError("Only golden pipes can cross others")
+
+                    removed_edges = self._remove_edges(removable_edges)
+
+            if normalized_pipe_type == "gold" and from_node.owner != player_id:
+                raise GameValidationError("Must control Brass Pipes")
 
             # Create the edge (always one-way from source to target)
             new_edge_id = max(self.state.edges.keys(), default=0) + 1
@@ -1077,6 +1107,9 @@ class GameEngine:
             self.validate_game_active()
             player_id = self.validate_player(token)
             self.validate_player_can_act(player_id)
+            current_mode = normalize_game_mode(getattr(self.state, "mode", DEFAULT_GAME_MODE))
+            if current_mode == "go":
+                return False
             target_node = self.validate_node_exists(target_node_id)
             
             # Find all edges that flow into the target node and are owned by the player
@@ -1104,6 +1137,9 @@ class GameEngine:
             self.validate_game_active()
             player_id = self.validate_player(token)
             self.validate_player_can_act(player_id)
+            current_mode = normalize_game_mode(getattr(self.state, "mode", DEFAULT_GAME_MODE))
+            if current_mode == "go":
+                return False
             target_node = self.validate_node_exists(target_node_id)
             
             # Get all nodes owned by the player
@@ -1272,19 +1308,27 @@ class GameEngine:
             self.validate_game_active()
             player_id = self.validate_player(token)
 
-            if self.state and player_id in self.state.eliminated_players:
+            if not self.state:
+                raise GameValidationError("No game state")
+
+            if player_id in self.state.eliminated_players:
                 raise GameValidationError("Player eliminated")
-            
-            # Allow toggling auto-expand even before picking starting node
-            # (just validate that player exists and game is active)
-            
+
+            current_mode = normalize_game_mode(getattr(self.state, "mode", DEFAULT_GAME_MODE))
+            if current_mode == "go":
+                was_disabled = not self.state.player_auto_expand.get(player_id, False)
+                self.state.player_auto_expand[player_id] = True
+                if was_disabled:
+                    self._check_auto_expand_opportunities(player_id)
+                return True
+
             # Toggle the setting
             new_state = self.state.toggle_auto_expand(player_id)
-            
+
             # If auto-expand was just turned ON, immediately check for expansion opportunities
             if new_state:
                 self._check_auto_expand_opportunities(player_id)
-            
+
             return True
             
         except GameValidationError:
