@@ -1011,10 +1011,34 @@
     return { x, y, node: node || null, portalAxis };
   }
 
-  function computeWarpBridgeSegments(fromNode, toNode) {
+  function getActiveWarpPreference() {
+    if (!warpWrapUsed) {
+      return { allowWarp: false, preferredWrapAxis: null, preferredWrapDirection: null };
+    }
+    const axis = (lastWarpAxis === 'horizontal' || lastWarpAxis === 'vertical') ? lastWarpAxis : null;
+    if (!axis) {
+      return { allowWarp: false, preferredWrapAxis: null, preferredWrapDirection: null };
+    }
+    const direction = typeof lastWarpDirection === 'string' ? lastWarpDirection : null;
+    return {
+      allowWarp: true,
+      preferredWrapAxis: axis,
+      preferredWrapDirection: direction,
+    };
+  }
+
+  function computeWarpBridgeSegments(fromNode, toNode, options = {}) {
     if (!fromNode || !toNode) {
       return null;
     }
+
+    const allowWarp = options && Object.prototype.hasOwnProperty.call(options, 'allowWarp')
+      ? !!options.allowWarp
+      : true;
+    const preferredAxis = options && typeof options.preferredWrapAxis === 'string' ? options.preferredWrapAxis : null;
+    const forcedAxis = allowWarp && (preferredAxis === 'horizontal' || preferredAxis === 'vertical') ? preferredAxis : null;
+    const preferredDirection = options && typeof options.preferredWrapDirection === 'string' ? options.preferredWrapDirection : null;
+    const forcedDirection = forcedAxis ? preferredDirection : null;
 
     const baseSegment = {
       wrapAxis: 'none',
@@ -1027,20 +1051,7 @@
       totalWorldDistance: Math.hypot(toNode.x - fromNode.x, toNode.y - fromNode.y),
     };
 
-    if (!isWarpFrontendActive()) {
-      return baseSegment;
-    }
-
-    const width = warpBoundsWorld.width;
-    const height = warpBoundsWorld.height;
-    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
-      return baseSegment;
-    }
-
-    const dx = toNode.x - fromNode.x;
-    const dy = toNode.y - fromNode.y;
-
-    let best = {
+    const baseCopy = {
       wrapAxis: 'none',
       segments: baseSegment.segments.map((seg) => ({
         start: { ...seg.start },
@@ -1049,11 +1060,37 @@
       totalWorldDistance: baseSegment.totalWorldDistance,
     };
 
+    if (!isWarpFrontendActive()) {
+      return baseCopy;
+    }
+
+    const width = warpBoundsWorld.width;
+    const height = warpBoundsWorld.height;
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      return baseCopy;
+    }
+
+    const dx = toNode.x - fromNode.x;
+    const dy = toNode.y - fromNode.y;
+
+    let best = baseCopy;
+
     const EPS = 1e-6;
 
+    if (!allowWarp) {
+      return best;
+    }
+
+    const forceHorizontal = forcedAxis === 'horizontal';
+    const forceVertical = forcedAxis === 'vertical';
+
     // Horizontal wrap candidate (left/right)
-    if (Math.abs(dx) > width / 2 + EPS) {
-      const adjust = dx > 0 ? -width : width;
+    if (forceHorizontal || (!forceVertical && Math.abs(dx) > width / 2 + EPS)) {
+      const adjust = forceHorizontal
+        ? (forcedDirection === 'leftToRight' ? -width
+          : forcedDirection === 'rightToLeft' ? width
+          : (dx > 0 ? -width : width))
+        : (dx > 0 ? -width : width);
       const adjustedTargetX = toNode.x + adjust;
       const dxWrap = adjustedTargetX - fromNode.x;
       if (Math.abs(dxWrap) > EPS) {
@@ -1066,7 +1103,7 @@
             const dist1 = Math.hypot(boundaryX - fromNode.x, exitY - fromNode.y);
             const dist2 = Math.hypot(toNode.x - entryX, toNode.y - exitY);
             const total = dist1 + dist2;
-            if (total + EPS < best.totalWorldDistance || best.totalWorldDistance < EPS) {
+            if (forceHorizontal || total + EPS < best.totalWorldDistance || best.totalWorldDistance < EPS) {
               best = {
                 wrapAxis: 'horizontal',
                 segments: [
@@ -1088,8 +1125,12 @@
     }
 
     // Vertical wrap candidate (top/bottom)
-    if (Math.abs(dy) > height / 2 + EPS) {
-      const adjust = dy > 0 ? -height : height;
+    if (forceVertical || (!forceHorizontal && Math.abs(dy) > height / 2 + EPS)) {
+      const adjust = forceVertical
+        ? (forcedDirection === 'topToBottom' ? -height
+          : forcedDirection === 'bottomToTop' ? height
+          : (dy > 0 ? -height : height))
+        : (dy > 0 ? -height : height);
       const adjustedTargetY = toNode.y + adjust;
       const dyWrap = adjustedTargetY - fromNode.y;
       if (Math.abs(dyWrap) > EPS) {
@@ -1102,7 +1143,7 @@
             const dist1 = Math.hypot(exitX - fromNode.x, boundaryY - fromNode.y);
             const dist2 = Math.hypot(toNode.x - exitX, toNode.y - entryY);
             const total = dist1 + dist2;
-            if (total + EPS < best.totalWorldDistance || best.totalWorldDistance < EPS) {
+            if (forceVertical || total + EPS < best.totalWorldDistance || best.totalWorldDistance < EPS) {
               best = {
                 wrapAxis: 'vertical',
                 segments: [
@@ -1127,15 +1168,30 @@
   }
 
   // Bridge cost calculation
-  function calculateBridgeCost(fromNode, toNode, isBrass = false) {
+  function calculateBridgeCost(fromNode, toNode, isBrass = false, options = {}) {
     if (!fromNode || !toNode) return 0;
+
+    let allowWarp = true;
+    let preferredWrapAxis = null;
+    let preferredWrapDirection = null;
+    if (options && typeof options === 'object') {
+      if (Object.prototype.hasOwnProperty.call(options, 'allowWarp')) {
+        allowWarp = !!options.allowWarp;
+      }
+      if (typeof options.preferredWrapAxis === 'string') {
+        preferredWrapAxis = options.preferredWrapAxis;
+      }
+      if (typeof options.preferredWrapDirection === 'string') {
+        preferredWrapDirection = options.preferredWrapDirection;
+      }
+    }
 
     const baseWidth = screen && Number.isFinite(screen.width) ? screen.width : 275.0;
     const baseHeight = screen && Number.isFinite(screen.height) ? screen.height : 108.0;
     const largestSpan = Math.max(1, baseWidth, baseHeight);
     const scale = 100 / largestSpan;
 
-    const path = computeWarpBridgeSegments(fromNode, toNode);
+    const path = computeWarpBridgeSegments(fromNode, toNode, { allowWarp, preferredWrapAxis, preferredWrapDirection });
     let normalizedDistance = 0;
 
     if (path && Array.isArray(path.segments) && path.segments.length) {
@@ -1213,8 +1269,23 @@
     return { axis, segments };
   }
 
-  function buildWarpInfoForBridge(fromNode, toNode) {
-    const path = computeWarpBridgeSegments(fromNode, toNode);
+  function buildWarpInfoForBridge(fromNode, toNode, options = {}) {
+    let allowWarp = true;
+    let preferredWrapAxis = null;
+    let preferredWrapDirection = null;
+    if (options && typeof options === 'object') {
+      if (Object.prototype.hasOwnProperty.call(options, 'allowWarp')) {
+        allowWarp = !!options.allowWarp;
+      }
+      if (typeof options.preferredWrapAxis === 'string') {
+        preferredWrapAxis = options.preferredWrapAxis;
+      }
+      if (typeof options.preferredWrapDirection === 'string') {
+        preferredWrapDirection = options.preferredWrapDirection;
+      }
+    }
+
+    const path = computeWarpBridgeSegments(fromNode, toNode, { allowWarp, preferredWrapAxis, preferredWrapDirection });
     let axis = 'none';
     let segments = [];
     if (path && typeof path.wrapAxis === 'string') {
@@ -1466,7 +1537,10 @@
 function updateBridgeCostDisplay(fromNode, toNode, isBrass = false) {
   if (!sceneRef || !fromNode || !toNode) return;
 
-  const path = computeWarpBridgeSegments(fromNode, toNode);
+  const warpPreference = (activeAbility === 'bridge1way' && bridgeFirstNode != null)
+    ? getActiveWarpPreference()
+    : { allowWarp: true, preferredWrapAxis: null, preferredWrapDirection: null };
+  const path = computeWarpBridgeSegments(fromNode, toNode, warpPreference);
   let anchorX = (fromNode.x + toNode.x) / 2;
   let anchorY = (fromNode.y + toNode.y) / 2;
 
@@ -1496,7 +1570,7 @@ function updateBridgeCostDisplay(fromNode, toNode, isBrass = false) {
 
   const [sx, sy] = worldToScreen(anchorX, anchorY);
 
-  const cost = calculateBridgeCost(fromNode, toNode, isBrass);
+  const cost = calculateBridgeCost(fromNode, toNode, isBrass, warpPreference);
   const canAfford = goldValue >= cost;
   const text = `$${formatCost(cost)}`;
   const textColor = canAfford ? MONEY_SPEND_COLOR : '#222222';
@@ -4894,12 +4968,13 @@ function fallbackRemoveEdgesForNode(nodeId) {
             }
           }
           const useBrassPipe = bridgePreviewWillBeBrass && isCrossLikeModeActive();
-          const cost = calculateBridgeCost(firstNode, node, applyBrassCost);
+          const warpPreference = getActiveWarpPreference();
+          const cost = calculateBridgeCost(firstNode, node, applyBrassCost, warpPreference);
 
           if (goldValue >= cost && ws && ws.readyState === WebSocket.OPEN) {
 
             const token = localStorage.getItem('token');
-            const warpInfo = buildWarpInfoForBridge(firstNode, node);
+            const warpInfo = buildWarpInfoForBridge(firstNode, node, warpPreference);
             const warpInfoPayload = warpInfo ? {
               axis: warpInfo.axis,
               segments: Array.isArray(warpInfo.segments)
@@ -5723,13 +5798,14 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
   function drawBridgePreview(e, sNode, tNode) {
     const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
-    const path = computeWarpBridgeSegments(sNode, tNode);
+    const warpPreference = getActiveWarpPreference();
+    const path = computeWarpBridgeSegments(sNode, tNode, warpPreference);
     if (!path || !Array.isArray(path.segments) || !path.segments.length) {
       return;
     }
 
     const useBrassPipe = bridgePreviewWillBeBrass;
-    const cost = calculateBridgeCost(sNode, tNode, bridgePreviewWillBeBrass && isTrueCrossModeActive());
+    const cost = calculateBridgeCost(sNode, tNode, bridgePreviewWillBeBrass && isTrueCrossModeActive(), warpPreference);
     const canAfford = goldValue >= cost;
     let previewColor;
     if (useBrassPipe) {
@@ -5828,7 +5904,8 @@ function updateBrassPreviewIntersections() {
     };
   }
 
-  const path = computeWarpBridgeSegments(firstNode, previewTarget);
+  const warpPreference = getActiveWarpPreference();
+  const path = computeWarpBridgeSegments(firstNode, previewTarget, warpPreference);
   if (!path || !Array.isArray(path.segments) || !path.segments.length) return;
 
   const candidateSegments = [];
