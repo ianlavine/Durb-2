@@ -47,6 +47,14 @@ class GraphGenerator:
                 "edge_func": gen_graph.generate_sparse_edges,
                 "desired_edges": None,
             },
+            "xb": {
+                "edge_func": gen_graph.generate_sparse_edges,
+                "desired_edges": None,
+            },
+            "go": {
+                "edge_func": gen_graph.generate_sparse_edges,
+                "desired_edges": None,
+            },
         }
 
     def _resolve_mode(self, mode: str = None) -> str:

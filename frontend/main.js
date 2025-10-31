@@ -58,6 +58,8 @@
   let bridgeIsBrass = false; // true when building a brass pipe in cross mode
   let brassPreviewIntersections = new Set(); // edges that would be removed by the current brass preview
   let brassActivationDenied = false;
+  let bridgePreviewWillBeBrass = false; // dynamic flag for previewing brass outcome
+  let xbPreviewBlockedByBrass = false;
   let mouseWorldX = 0; // current mouse position in world coordinates
   let mouseWorldY = 0;
   let bridgeCostDisplay = null; // current bridge cost display text object
@@ -148,6 +150,12 @@
   const MODE_LABELS = {
     sparse: 'Sparse',
     brass: 'Brass',
+    go: 'Go',
+    overflow: 'Overflow',
+    nuke: 'Nuke',
+    cross: 'Cross',
+    warp: 'Warp',
+    xb: 'XB',
   };
   const OVERFLOW_PENDING_GOLD_THRESHOLD = 10;
   const BRASS_PIPE_COLOR = 0x8b6f14;
@@ -159,8 +167,7 @@
 
   function isWarpLike(mode) {
     const normalized = normalizeMode(mode);
-    return normalized === 'sparse'
-      || normalized === 'brass';
+    return ['warp', 'sparse', 'overflow', 'nuke', 'cross', 'brass', 'go', 'xb'].includes(normalized);
   }
 
   // Money transparency system
@@ -1335,7 +1342,8 @@
   }
 
   function isRingModeActive() {
-    return normalizeMode(gameMode) === 'overflow';
+    const mode = normalizeMode(gameMode);
+    return mode === 'overflow' || mode === 'go' || mode === 'xb';
   }
 
   function isNukeModeActive() {
@@ -1347,8 +1355,12 @@
   }
 
   function isCrossModeActive() {
+    return normalizeMode(gameMode) === 'cross';
+  }
+
+  function isCrossLikeModeActive() {
     const mode = normalizeMode(gameMode);
-    return mode === 'cross' || mode === 'brass';
+    return mode === 'cross' || mode === 'brass' || mode === 'xb';
   }
 
   function isTrueCrossModeActive() {
@@ -1357,7 +1369,11 @@
 
   function isNukeLikeModeActive() {
     const mode = normalizeMode(gameMode);
-    return mode === 'nuke' || mode === 'cross' || mode === 'brass';
+    return mode === 'nuke' || mode === 'cross' || mode === 'brass' || mode === 'xb';
+  }
+
+  function isXbModeActive() {
+    return normalizeMode(gameMode) === 'xb';
   }
 
   function formatModeText(mode) {
@@ -1524,6 +1540,8 @@ function clearBridgeSelection() {
   bridgeFirstNode = null;
   bridgeIsBrass = false;
   brassPreviewIntersections.clear();
+  bridgePreviewWillBeBrass = false;
+  xbPreviewBlockedByBrass = false;
   warpWrapUsed = false;
   lastDoubleWarpWarningTime = 0;
   lastWarpAxis = null;
@@ -3770,7 +3788,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     
     // Draw border box around play area (warp border handles inner toggle)
     drawPlayAreaBorder();
-    const overflowMode = ['overflow', 'nuke', 'cross', 'brass'].includes(normalizeMode(gameMode));
+    const overflowMode = ['overflow', 'nuke', 'cross', 'brass', 'go', 'xb'].includes(normalizeMode(gameMode));
     
     // Show gold display when graph is being drawn and we have nodes/game data
     if (goldDisplay && nodes.size > 0) {
@@ -3961,7 +3979,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
             graphicsNodes.strokeCircle(nx, ny, r + 3);
 
             // show static, live-updating midpoint label
-            updateBridgeCostDisplay(firstNode, n, bridgeIsBrass && isTrueCrossModeActive());
+            updateBridgeCostDisplay(firstNode, n, bridgePreviewWillBeBrass && isTrueCrossModeActive());
           }
 
       }
@@ -4053,7 +4071,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
             targetNode = hoveredNode;
           }
         }
-        updateBridgeCostDisplay(firstNode, targetNode, bridgeIsBrass && isTrueCrossModeActive());
+        updateBridgeCostDisplay(firstNode, targetNode, bridgePreviewWillBeBrass && isTrueCrossModeActive());
       }
     }
     
@@ -4254,7 +4272,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
   }
 
   function canTargetNodeForFlow(targetNodeId) {
-    if (isCrossModeActive()) return false;
+    if (isCrossLikeModeActive()) return false;
     // Check if I have any edges that I own (source node owned by me) that point to this target node
     for (const [edgeId, edge] of edges.entries()) {
       if (edge.target === targetNodeId) {
@@ -4386,7 +4404,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     if (nodeId != null) {
       const node = nodes.get(nodeId);
       if (node && activeAbility !== 'reverse') {
-        const useBrass = isCrossModeActive();
+        const useBrass = isCrossLikeModeActive();
         const activated = activateBridgeFromNode(nodeId, useBrass);
         if (activated || brassActivationDenied) {
           if (brassActivationDenied) {
@@ -4745,12 +4763,13 @@ function fallbackRemoveEdgesForNode(nodeId) {
     brassActivationDenied = false;
 
     const brassMode = isBrassModeActive();
-    const crossLikeMode = isCrossModeActive();
+    const crossMode = isCrossModeActive();
+    const xbMode = isXbModeActive();
 
     let wantBrass = false;
     if (brassMode) {
       wantBrass = !!node.isBrass;
-    } else if (crossLikeMode) {
+    } else if (crossMode) {
       wantBrass = !!useBrass;
     }
 
@@ -4762,6 +4781,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
     activeAbility = 'bridge1way';
     bridgeFirstNode = nodeId;
     bridgeIsBrass = wantBrass;
+    bridgePreviewWillBeBrass = wantBrass && !xbMode;
+    xbPreviewBlockedByBrass = false;
     brassPreviewIntersections.clear();
     warpWrapUsed = false;
     lastDoubleWarpWarningTime = 0;
@@ -4804,8 +4825,21 @@ function fallbackRemoveEdgesForNode(nodeId) {
             hideBridgeCostDisplay();
             return true;
           }
-          const applyBrassCost = bridgeIsBrass && isTrueCrossModeActive();
-          const useBrassPipe = bridgeIsBrass && isCrossModeActive();
+          const modeIsCross = isTrueCrossModeActive();
+          const modeIsXb = isXbModeActive();
+          const applyBrassCost = bridgePreviewWillBeBrass && modeIsCross;
+          if (modeIsXb && xbPreviewBlockedByBrass) {
+            showErrorMessage('Cannot cross brass pipe');
+            return true;
+          }
+          if (modeIsXb && bridgePreviewWillBeBrass) {
+            const firstOwner = firstNode.owner;
+            if (firstOwner !== myPlayerId) {
+              showErrorMessage('Must control Brass Pipes', 'money');
+              return true;
+            }
+          }
+          const useBrassPipe = bridgePreviewWillBeBrass && isCrossLikeModeActive();
           const cost = calculateBridgeCost(firstNode, node, applyBrassCost);
 
           if (goldValue >= cost && ws && ws.readyState === WebSocket.OPEN) {
@@ -4975,7 +5009,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     }
 
     if (
-      isCrossModeActive() &&
+      isCrossLikeModeActive() &&
       nodeId != null &&
       activeAbility !== 'reverse'
     ) {
@@ -5640,8 +5674,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
       return;
     }
 
-    const useBrassPipe = bridgeIsBrass && isCrossModeActive();
-    const cost = calculateBridgeCost(sNode, tNode, bridgeIsBrass && isTrueCrossModeActive());
+    const useBrassPipe = bridgePreviewWillBeBrass;
+    const cost = calculateBridgeCost(sNode, tNode, bridgePreviewWillBeBrass && isTrueCrossModeActive());
     const canAfford = goldValue >= cost;
     let previewColor;
     if (useBrassPipe) {
@@ -5706,67 +5740,97 @@ function drawBridgePreviewSegment(segment, color, baseScale, useBrass = false) {
 
 function updateBrassPreviewIntersections() {
   brassPreviewIntersections.clear();
-  if (!(activeAbility === 'bridge1way' && bridgeIsBrass && isCrossModeActive())) return;
-    if (bridgeFirstNode == null) return;
-    const firstNode = nodes.get(bridgeFirstNode);
-    if (!firstNode) return;
+  xbPreviewBlockedByBrass = false;
 
-    let previewTarget = null;
-    if (hoveredNodeId !== null && hoveredNodeId !== bridgeFirstNode) {
-      const hoveredNode = nodes.get(hoveredNodeId);
-      if (hoveredNode) previewTarget = hoveredNode;
+  const modeIsCrossLike = isCrossLikeModeActive();
+  const modeIsCross = isTrueCrossModeActive();
+  const modeIsXb = isXbModeActive();
+
+  if (activeAbility !== 'bridge1way' || bridgeFirstNode == null) {
+    bridgePreviewWillBeBrass = bridgeIsBrass && modeIsCrossLike;
+    return;
+  }
+
+  const firstNode = nodes.get(bridgeFirstNode);
+  if (!firstNode) return;
+
+  const shouldCheck = modeIsXb || (bridgeIsBrass && modeIsCrossLike);
+  bridgePreviewWillBeBrass = bridgeIsBrass && modeIsCrossLike;
+  if (!shouldCheck) return;
+
+  let previewTarget = null;
+  if (hoveredNodeId !== null && hoveredNodeId !== bridgeFirstNode) {
+    const hoveredNode = nodes.get(hoveredNodeId);
+    if (hoveredNode) previewTarget = hoveredNode;
+  }
+  if (!previewTarget) {
+    previewTarget = {
+      x: mouseWorldX,
+      y: mouseWorldY,
+      juice: 8.0,
+      size: 8.0,
+      owner: null,
+      pendingGold: 0,
+    };
+  }
+
+  const path = computeWarpBridgeSegments(firstNode, previewTarget);
+  if (!path || !Array.isArray(path.segments) || !path.segments.length) return;
+
+  const candidateSegments = [];
+  for (const segment of path.segments) {
+    if (!segment || !segment.start || !segment.end) continue;
+    const sx = Number(segment.start.x);
+    const sy = Number(segment.start.y);
+    const ex = Number(segment.end.x);
+    const ey = Number(segment.end.y);
+    if ([sx, sy, ex, ey].every((value) => Number.isFinite(value))) {
+      candidateSegments.push({ sx, sy, ex, ey });
     }
-    if (!previewTarget) {
-      previewTarget = {
-        x: mouseWorldX,
-        y: mouseWorldY,
-        juice: 8.0,
-        size: 8.0,
-        owner: null,
-        pendingGold: 0,
-      };
-    }
+  }
+  if (!candidateSegments.length) return;
 
-    const path = computeWarpBridgeSegments(firstNode, previewTarget);
-    if (!path || !Array.isArray(path.segments) || !path.segments.length) return;
+  let willCross = false;
+  let blockedByBrass = false;
 
-    const candidateSegments = [];
-    for (const segment of path.segments) {
-      if (!segment || !segment.start || !segment.end) continue;
-      const sx = Number(segment.start.x);
-      const sy = Number(segment.start.y);
-      const ex = Number(segment.end.x);
-      const ey = Number(segment.end.y);
-      if ([sx, sy, ex, ey].every((value) => Number.isFinite(value))) {
-        candidateSegments.push({ sx, sy, ex, ey });
-      }
-    }
-    if (!candidateSegments.length) return;
+  edges.forEach((edge, edgeId) => {
+    if (!edge) return;
+    if (edge.removing) return;
+    if (edge.source === bridgeFirstNode || edge.target === bridgeFirstNode) return;
+    if (hoveredNodeId != null && (edge.source === hoveredNodeId || edge.target === hoveredNodeId)) return;
 
-    edges.forEach((edge, edgeId) => {
-      if (!edge) return;
-      if (edge.pipeType === 'gold') return;
-      if (edge.removing) return;
-      if (edge.source === bridgeFirstNode || edge.target === bridgeFirstNode) return;
-      if (hoveredNodeId != null && (edge.source === hoveredNodeId || edge.target === hoveredNodeId)) return;
+    const existingSegments = getEdgeWarpSegments(edge);
+    if (!existingSegments.length) return;
 
-      const existingSegments = getEdgeWarpSegments(edge);
-      if (!existingSegments.length) return;
-
-      for (const candidate of candidateSegments) {
-        for (const existing of existingSegments) {
-          if (![candidate, existing].every(Boolean)) continue;
-          if ([candidate.sx, candidate.sy, candidate.ex, candidate.ey, existing.sx, existing.sy, existing.ex, existing.ey]
-            .every((value) => Number.isFinite(value)) &&
-            segmentsIntersect(candidate.sx, candidate.sy, candidate.ex, candidate.ey, existing.sx, existing.sy, existing.ex, existing.ey)
-          ) {
+    for (const candidate of candidateSegments) {
+      for (const existing of existingSegments) {
+        if (![candidate, existing].every(Boolean)) continue;
+        if ([candidate.sx, candidate.sy, candidate.ex, candidate.ey, existing.sx, existing.sy, existing.ex, existing.ey]
+          .every((value) => Number.isFinite(value)) &&
+          segmentsIntersect(candidate.sx, candidate.sy, candidate.ex, candidate.ey, existing.sx, existing.sy, existing.ex, existing.ey)
+        ) {
+          if (edge.pipeType === 'gold') {
+            blockedByBrass = true;
+          } else {
             brassPreviewIntersections.add(edgeId);
-            return;
+            willCross = true;
           }
+          return;
         }
       }
-    });
+    }
+  });
+
+  if (modeIsXb) {
+    bridgePreviewWillBeBrass = willCross;
+    xbPreviewBlockedByBrass = blockedByBrass;
+  } else if (modeIsCrossLike) {
+    if (!bridgeIsBrass) {
+      brassPreviewIntersections.clear();
+    }
+    bridgePreviewWillBeBrass = bridgeIsBrass;
   }
+}
 
 function drawPreviewTriangle(cx, cy, baseW, height, angle, color, useBrass = false) {
   const halfW = baseW / 2;
@@ -5821,8 +5885,8 @@ function drawPreviewTriangle(cx, cy, baseW, height, angle, color, useBrass = fal
 
     const removalHighlight = (!removal &&
       activeAbility === 'bridge1way' &&
-      bridgeIsBrass &&
-      isCrossModeActive() &&
+      bridgePreviewWillBeBrass &&
+      isCrossLikeModeActive() &&
       brassPreviewIntersections.has(edgeId)
     );
 
