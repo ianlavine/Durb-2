@@ -101,11 +101,7 @@ BRIDGE_COST_PER_UNIT_DISTANCE_BY_MODE: Dict[str, float] = {
 BRIDGE_COST_PER_UNIT_DISTANCE: float = BRIDGE_COST_PER_UNIT_DISTANCE_BY_MODE[DEFAULT_GAME_MODE]
 
 # Bridge build timing (ticks required per unit world distance)
-BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE_BY_MODE: Dict[str, float] = {
-    "sparse": 0.3,
-    "brass": 0.3,
-}
-BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE: float = BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE_BY_MODE[DEFAULT_GAME_MODE]
+BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE: float = 0.6
 
 # Warp geometry (mirror frontend)
 WARP_MARGIN_RATIO_X: float = 0.06
@@ -134,12 +130,6 @@ def get_bridge_cost_per_unit(mode: str) -> float:
     """Return the bridge cost per unit distance for the given mode."""
     key = normalize_game_mode(mode)
     return BRIDGE_COST_PER_UNIT_DISTANCE_BY_MODE.get(key, BRIDGE_COST_PER_UNIT_DISTANCE)
-
-
-def get_bridge_build_ticks_per_unit(mode: str) -> float:
-    """Return the bridge build ticks per unit world distance for the given mode."""
-    key = normalize_game_mode(mode)
-    return BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE_BY_MODE.get(key, BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE)
 
 
 def get_node_max_juice(mode: str) -> float:

@@ -43,3 +43,4 @@ class Edge:
     building: bool = False  # if True, edge cannot be toggled/clicked and will not flow
     warp_axis: str = "none"
     warp_segments: List[Tuple[float, float, float, float]] = field(default_factory=list)
+    pending_cross_removals: List[Tuple[int, int]] = field(default_factory=list)

@@ -388,6 +388,46 @@
     playNoiseBurst({ duration: 0.12, volume: 0.20, filterType: 'bandpass', filterFreq: 850 + hitIndex * 110, q: 3.5, attack: 0.002, decay: 0.11 });
   }
 
+  function playBridgeExplosion() {
+    if (!soundEnabled) return;
+    ensureAudio();
+    if (!audioCtx) return;
+    const now = audioCtx.currentTime;
+
+    const boomOsc = audioCtx.createOscillator();
+    const boomGain = audioCtx.createGain();
+    boomOsc.type = 'sawtooth';
+    boomOsc.frequency.setValueAtTime(110, now);
+    boomOsc.frequency.exponentialRampToValueAtTime(36, now + 0.5);
+    boomGain.gain.setValueAtTime(0.0001, now);
+    boomGain.gain.exponentialRampToValueAtTime(0.38, now + 0.03);
+    boomGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.6);
+    boomOsc.connect(boomGain);
+    boomGain.connect(globalGain);
+    boomOsc.start(now);
+    boomOsc.stop(now + 0.65);
+
+    playNoiseBurst({
+      duration: 0.55,
+      volume: 0.32,
+      filterType: 'bandpass',
+      filterFreq: 720,
+      q: 0.9,
+      attack: 0.005,
+      decay: 0.5,
+    });
+
+    playNoiseBurst({
+      duration: 0.35,
+      volume: 0.18,
+      filterType: 'highpass',
+      filterFreq: 2400,
+      q: 1.8,
+      attack: 0.004,
+      decay: 0.25,
+    });
+  }
+
   // Target spacing between hammer hits in seconds (consistent regardless of bridge size)
   const BRIDGE_HIT_SPACING_SEC = 0.25;
 
@@ -3010,6 +3050,14 @@ function clearBridgeSelection() {
   }
 
   function handleTick(msg) {
+    const removalEvents = Array.isArray(msg.removedEdgeEvents) ? msg.removedEdgeEvents : null;
+    if (Array.isArray(msg.removedEdges) && msg.removedEdges.length > 0) {
+      removeEdges(msg.removedEdges);
+    }
+    if (removalEvents && removalEvents.some((event) => event && event.reason === 'bridgeCross')) {
+      playBridgeExplosion();
+    }
+
     if (typeof msg.mode === 'string') {
       gameMode = normalizeMode(msg.mode);
     }
@@ -3082,6 +3130,7 @@ function clearBridgeSelection() {
       const missingEdges = [];
       edges.forEach((edge, edgeId) => {
         if (!seenEdgeIds.has(edgeId) && edge) {
+          if (edge.removing) return;
           missingEdges.push(edgeId);
         }
       });

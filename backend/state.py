@@ -67,6 +67,7 @@ class GraphState:
 
         # Replay helpers
         self.tick_count: int = 0
+        self.pending_edge_removals: List[Dict[str, Any]] = []
         
 
     def add_player(self, player: Player) -> None:
@@ -237,6 +238,41 @@ class GraphState:
             "removedEdges": edges_to_remove,
         }
 
+    def remove_edges(
+        self,
+        edge_ids: List[int],
+        *,
+        record: bool = False,
+        reason: Optional[str] = None,
+    ) -> List[int]:
+        """Remove edges by id, optionally recording them for the next tick payload."""
+        if not edge_ids:
+            return []
+
+        removed_ids: List[int] = []
+        for edge_id in edge_ids:
+            edge = self.edges.pop(edge_id, None)
+            if not edge:
+                continue
+            removed_ids.append(edge_id)
+
+            source_node = self.nodes.get(edge.source_node_id)
+            if source_node and edge_id in source_node.attached_edge_ids:
+                source_node.attached_edge_ids.remove(edge_id)
+
+            target_node = self.nodes.get(edge.target_node_id)
+            if target_node and edge_id in target_node.attached_edge_ids:
+                target_node.attached_edge_ids.remove(edge_id)
+
+        if record and removed_ids:
+            for rid in removed_ids:
+                payload: Dict[str, Any] = {"edgeId": rid}
+                if reason:
+                    payload["reason"] = reason
+                self.pending_edge_removals.append(payload)
+
+        return removed_ids
+
     def to_init_message(self, screen: Dict[str, int], tick_interval: float, current_time: float = 0.0) -> Dict:
         node_max = getattr(self, "node_max_juice", get_node_max_juice(self.mode))
         nodes_arr = [
@@ -363,7 +399,10 @@ class GraphState:
             elapsed = max(0.0, current_time - self.game_start_time)
             timer_remaining = max(0.0, self.game_duration - elapsed)
         
-        return {
+        removed_edge_events = [dict(event) for event in self.pending_edge_removals]
+        self.pending_edge_removals = []
+
+        message = {
             "type": "tick",
             "edges": edges_arr,
             "nodes": nodes_arr,
@@ -380,6 +419,12 @@ class GraphState:
             "timerRemaining": timer_remaining,
             "mode": self.mode,
         }
+
+        if removed_edge_events:
+            message["removedEdges"] = [event.get("edgeId") for event in removed_edge_events]
+            message["removedEdgeEvents"] = removed_edge_events
+
+        return message
 
     def _update_edge_flowing_status(self) -> None:
         """
@@ -439,7 +484,7 @@ class GraphState:
 
     def simulate_tick(self, tick_interval_seconds: float) -> None:
         # Progress bridge builds
-        for e in self.edges.values():
+        for e in list(self.edges.values()):
             if getattr(e, 'building', False):
                 e.build_ticks_elapsed = int(getattr(e, 'build_ticks_elapsed', 0)) + 1
                 if e.build_ticks_elapsed >= int(getattr(e, 'build_ticks_required', 0)):
@@ -450,8 +495,28 @@ class GraphState:
                     if src and src.owner is not None:
                         # Leave 'on' state as-is; game logic elsewhere may toggle it
                         pass
+        # Handle delayed cross removals tied to bridge construction progress
+        for e in list(self.edges.values()):
+            pending = list(getattr(e, 'pending_cross_removals', []) or [])
+            if not pending:
+                continue
+
+            elapsed = int(getattr(e, 'build_ticks_elapsed', 0))
+            remaining: List[Tuple[int, int]] = []
+            ready_ids: List[int] = []
+            for target_edge_id, trigger in pending:
+                if elapsed >= trigger:
+                    ready_ids.append(target_edge_id)
+                else:
+                    remaining.append((target_edge_id, trigger))
+
+            if ready_ids:
+                self.remove_edges(ready_ids, record=True, reason="bridgeCross")
+
+            e.pending_cross_removals = remaining
+
         # Update edge build progress and apply post-build on-state
-        for e in self.edges.values():
+        for e in list(self.edges.values()):
             if getattr(e, 'building', False):
                 continue
             if getattr(e, 'post_build_turn_on', False):
