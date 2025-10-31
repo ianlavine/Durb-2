@@ -8,10 +8,12 @@ from typing import Any, Dict, List, Optional, Tuple
 from .constants import (
     BRIDGE_BASE_COST,
     BRIDGE_COST_PER_UNIT_DISTANCE,
+    BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE,
     DEFAULT_GAME_MODE,
     WARP_MARGIN_RATIO_X,
     WARP_MARGIN_RATIO_Y,
     get_bridge_cost_per_unit,
+    get_bridge_build_ticks_per_unit,
     get_neutral_capture_reward,
     get_node_max_juice,
     normalize_game_mode,
@@ -61,6 +63,7 @@ class GameEngine:
         self.state.node_max_juice = get_node_max_juice(normalized_mode)
         self.state.neutral_capture_reward = get_neutral_capture_reward(normalized_mode)
         self.state.bridge_cost_per_unit = get_bridge_cost_per_unit(normalized_mode)
+        self.state.bridge_build_ticks_per_unit = get_bridge_build_ticks_per_unit(normalized_mode)
         self.state.eliminated_players.clear()
         self.state.pending_eliminations = []
 
@@ -130,6 +133,7 @@ class GameEngine:
         new_state.node_max_juice = get_node_max_juice(DEFAULT_GAME_MODE)
         new_state.neutral_capture_reward = get_neutral_capture_reward(DEFAULT_GAME_MODE)
         new_state.bridge_cost_per_unit = get_bridge_cost_per_unit(DEFAULT_GAME_MODE)
+        new_state.bridge_build_ticks_per_unit = get_bridge_build_ticks_per_unit(DEFAULT_GAME_MODE)
 
         self.state = new_state
         self.screen = screen
@@ -807,6 +811,13 @@ class GameEngine:
             if total_world_distance <= 0.0:
                 total_world_distance = math.hypot(to_node.x - from_node.x, to_node.y - from_node.y)
 
+            ticks_per_unit = getattr(
+                self.state,
+                "bridge_build_ticks_per_unit",
+                BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE,
+            )
+            build_ticks_required = max(1, int(total_world_distance * max(0.0, ticks_per_unit)))
+
             new_edge = Edge(
                 id=new_edge_id,
                 source_node_id=from_node_id,
@@ -814,7 +825,7 @@ class GameEngine:
                 pipe_type=normalized_pipe_type,
                 on=False,
                 flowing=False,  # Will be set to True by _update_edge_flowing_status when built and conditions are met
-                build_ticks_required=max(1, int(total_world_distance * 0.3)),
+                build_ticks_required=build_ticks_required,
                 build_ticks_elapsed=0,
                 building=True,
                 warp_axis=warp_axis,

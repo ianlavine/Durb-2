@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from .constants import (
     BRIDGE_BASE_COST,
     BRIDGE_COST_PER_UNIT_DISTANCE,
+    BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE,
     DEFAULT_GAME_MODE,
     GOLD_REWARD_FOR_ENEMY_CAPTURE,
     INTAKE_TRANSFER_RATIO,
@@ -62,6 +63,7 @@ class GraphState:
         self.mode: str = DEFAULT_GAME_MODE
         self.neutral_capture_reward: float = get_neutral_capture_reward(self.mode)
         self.bridge_cost_per_unit: float = BRIDGE_COST_PER_UNIT_DISTANCE
+        self.bridge_build_ticks_per_unit: float = BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE
 
         # Replay helpers
         self.tick_count: int = 0
