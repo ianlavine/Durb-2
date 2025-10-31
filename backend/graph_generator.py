@@ -23,7 +23,7 @@ class GraphGenerator:
                 "edge_func": gen_graph.generate_planar_edges,
                 "desired_edges": gen_graph.DESIRED_EDGE_COUNT,
             },
-            "warp": {
+            "warp-old": {
                 "edge_func": gen_graph.generate_planar_edges,
                 "desired_edges": gen_graph.DESIRED_EDGE_COUNT,
             },
@@ -47,7 +47,11 @@ class GraphGenerator:
                 "edge_func": gen_graph.generate_sparse_edges,
                 "desired_edges": None,
             },
-            "xb": {
+            "warp": {
+                "edge_func": gen_graph.generate_sparse_edges,
+                "desired_edges": None,
+            },
+            "flat": {
                 "edge_func": gen_graph.generate_sparse_edges,
                 "desired_edges": None,
             },

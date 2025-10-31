@@ -17,14 +17,15 @@ TICK_INTERVAL_SECONDS: float = 0.1
 # Game modes
 GAME_MODES: Tuple[str, ...] = (
     "sparse",
+    "warp-old",
     "warp",
+    "flat",
     "basic",
     "overflow",
     "nuke",
     "cross",
     "brass",
     "go",
-    "xb",
 )
 DEFAULT_GAME_MODE: str = "sparse"
 
@@ -33,14 +34,15 @@ DEFAULT_GAME_MODE: str = "sparse"
 NODE_MIN_JUICE: float = 0.0
 NODE_MAX_JUICE_BY_MODE: Dict[str, float] = {
     "basic": 500.0,
-    "warp": 500.0,
+    "warp-old": 500.0,
+    "warp": 300.0,
+    "flat": 300.0,
     "sparse": 500.0,
     "overflow": 300.0,
     "nuke": 300.0,
     "cross": 300.0,
     "brass": 300.0,
     "go": 300.0,
-    "xb": 300.0,
 }
 NODE_MAX_JUICE: float = NODE_MAX_JUICE_BY_MODE[DEFAULT_GAME_MODE]
 PRODUCTION_RATE_PER_NODE: float = 0.4
@@ -56,7 +58,9 @@ OVERFLOW_JUICE_TO_GOLD_RATIO_BY_MODE: Dict[str, float] = {
     "cross": 15.0,
     "brass": 15.0,
     "go": 30.0,
-    "xb": 15.0,
+    "warp-old": 15.0,
+    "warp": 15.0,
+    "flat": 15.0,
 }
 OVERFLOW_PENDING_GOLD_PAYOUT: float = 10.0   # payout after 10 pending gold -> $10
 
@@ -64,14 +68,15 @@ OVERFLOW_PENDING_GOLD_PAYOUT: float = 10.0   # payout after 10 pending gold -> $
 # Economy tuning
 GOLD_REWARD_FOR_NEUTRAL_CAPTURE_BY_MODE: Dict[str, float] = {
     "basic": 10.0,
+    "warp-old": 10.0,
     "warp": 10.0,
+    "flat": 10.0,
     "sparse": 10.0,
     "overflow": 10.0,
     "nuke": 10.0,
     "cross": 10.0,
     "brass": 10.0,
     "go": 10.0,
-    "xb": 10.0,
 }
 GOLD_REWARD_FOR_NEUTRAL_CAPTURE: float = GOLD_REWARD_FOR_NEUTRAL_CAPTURE_BY_MODE[DEFAULT_GAME_MODE]
 GOLD_REWARD_FOR_ENEMY_CAPTURE: float = 0.0
@@ -89,14 +94,15 @@ UNOWNED_NODE_BASE_JUICE: float = 50.0
 BRIDGE_BASE_COST: float = 0.0
 BRIDGE_COST_PER_UNIT_DISTANCE_BY_MODE: Dict[str, float] = {
     "basic": 1.5,
-    "warp": 1.5,
+    "warp-old": 1.5,
+    "warp": 1.0,
+    "flat": 1.0,
     "sparse": 1.0,
     "overflow": 1.0,
     "nuke": 1.0,
     "cross": 1.0,
     "brass": 1.0,
     "go": 1.0,
-    "xb": 1.0,
 }
 BRIDGE_COST_PER_UNIT_DISTANCE: float = BRIDGE_COST_PER_UNIT_DISTANCE_BY_MODE[DEFAULT_GAME_MODE]
 
@@ -115,7 +121,9 @@ def normalize_game_mode(value: str) -> str:
     lowered = value.strip().lower()
     if lowered == "passive":  # legacy alias
         lowered = "basic"
-    if lowered == "pop":  # legacy alias now mapped to warp
+    if lowered == "pop":  # legacy alias now mapped to legacy warp
+        lowered = "warp-old"
+    if lowered == "xb":  # legacy alias now mapped to modern warp
         lowered = "warp"
     return lowered if lowered in GAME_MODES else DEFAULT_GAME_MODE
 
