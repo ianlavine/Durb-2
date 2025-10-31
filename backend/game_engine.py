@@ -317,7 +317,7 @@ class GameEngine:
             self.validate_player_can_act(player_id)
 
             current_mode = normalize_game_mode(getattr(self.state, "mode", DEFAULT_GAME_MODE))
-            if current_mode in {"nuke", "cross", "brass", "go", "xb"}:
+            if current_mode in {"nuke", "cross", "brass", "go", "warp", "flat"}:
                 raise GameValidationError("Edge reversal disabled in this mode")
 
             edge = self.validate_edge_exists(edge_id)
@@ -376,7 +376,7 @@ class GameEngine:
         if not self.state:
             return False
         current_mode = normalize_game_mode(getattr(self.state, "mode", DEFAULT_GAME_MODE))
-        return current_mode in {"warp", "sparse", "overflow", "nuke", "cross", "brass", "go", "xb"}
+        return current_mode in {"warp-old", "warp", "sparse", "overflow", "nuke", "cross", "brass", "go"}
 
     def _compute_warp_bounds(self) -> Optional[Dict[str, float]]:
         if not self._is_warp_mode_active():
@@ -708,7 +708,7 @@ class GameEngine:
             current_mode = normalize_game_mode(getattr(self.state, "mode", DEFAULT_GAME_MODE))
             is_cross_mode = current_mode == "cross"
             is_brass_mode = current_mode == "brass"
-            is_xb_mode = current_mode == "xb"
+            is_warp_variant_mode = current_mode in {"warp", "flat"}
             is_cross_like_mode = current_mode in {"cross", "brass"}
 
             # Validate nodes
@@ -787,7 +787,7 @@ class GameEngine:
             # Check for intersections (cross mode converts them into removals)
             intersecting_edges = self._find_intersecting_edges(from_node, to_node, candidate_segments)
             if intersecting_edges:
-                if is_xb_mode:
+                if is_warp_variant_mode:
                     blocked_edges: List[int] = []
                     for intersect_id in intersecting_edges:
                         existing_edge = self.state.edges.get(intersect_id) if self.state else None

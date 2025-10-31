@@ -144,8 +144,8 @@
   let currentTargetSetTime = null; // Animation time when target was last set
   
   let selectedPlayerCount = 2;
-  let selectedMode = 'sparse';
-  let gameMode = 'sparse';
+  let selectedMode = 'flat';
+  let gameMode = 'flat';
   let modeButtons = [];
   const MODE_LABELS = {
     sparse: 'Sparse',
@@ -155,7 +155,8 @@
     nuke: 'Nuke',
     cross: 'Cross',
     warp: 'Warp',
-    xb: 'XB',
+    'warp-old': 'Warp (Old)',
+    flat: 'Flat',
   };
   const OVERFLOW_PENDING_GOLD_THRESHOLD = 10;
   const BRASS_PIPE_COLOR = 0x8b6f14;
@@ -167,7 +168,7 @@
 
   function isWarpLike(mode) {
     const normalized = normalizeMode(mode);
-    return ['warp', 'sparse', 'overflow', 'nuke', 'cross', 'brass', 'go', 'xb'].includes(normalized);
+    return ['warp-old', 'warp', 'sparse', 'overflow', 'nuke', 'cross', 'brass', 'go'].includes(normalized);
   }
 
   // Money transparency system
@@ -1375,15 +1376,17 @@
 
   function normalizeMode(value) {
     if (typeof value !== 'string') return 'sparse';
-    const lowered = value.trim().toLowerCase();
-    // Backward compatibility: treat legacy aliases as sparse
-    if (lowered === 'passive' || lowered === 'basic' || lowered === 'pop') return 'sparse';
+    let lowered = value.trim().toLowerCase();
+    // Backward compatibility: treat legacy aliases as named modes
+    if (lowered === 'passive' || lowered === 'basic') lowered = 'sparse';
+    else if (lowered === 'pop') lowered = 'warp-old';
+    else if (lowered === 'xb') lowered = 'warp';
     return Object.prototype.hasOwnProperty.call(MODE_LABELS, lowered) ? lowered : 'sparse';
   }
 
   function isRingModeActive() {
     const mode = normalizeMode(gameMode);
-    return mode === 'overflow' || mode === 'go' || mode === 'xb';
+    return mode === 'overflow' || mode === 'go' || mode === 'warp' || mode === 'flat';
   }
 
   function isNukeModeActive() {
@@ -1400,7 +1403,7 @@
 
   function isCrossLikeModeActive() {
     const mode = normalizeMode(gameMode);
-    return mode === 'cross' || mode === 'brass' || mode === 'xb';
+    return mode === 'cross' || mode === 'brass' || mode === 'warp' || mode === 'flat';
   }
 
   function isTrueCrossModeActive() {
@@ -1409,11 +1412,12 @@
 
   function isNukeLikeModeActive() {
     const mode = normalizeMode(gameMode);
-    return mode === 'nuke' || mode === 'cross' || mode === 'brass' || mode === 'xb';
+    return mode === 'nuke' || mode === 'cross' || mode === 'brass' || mode === 'warp' || mode === 'flat';
   }
 
   function isXbModeActive() {
-    return normalizeMode(gameMode) === 'xb';
+    const mode = normalizeMode(gameMode);
+    return mode === 'warp' || mode === 'flat';
   }
 
   function formatModeText(mode) {
@@ -1431,7 +1435,8 @@
 
   function updatePlayBotAvailability(baseEnabled = true) {
     if (!playBotBtnEl) return;
-    const modeAllowsBot = isWarpLike(selectedMode);
+    const normalized = normalizeMode(selectedMode);
+    const modeAllowsBot = normalized === 'flat' || isWarpLike(selectedMode);
     const enabled = Boolean(baseEnabled && modeAllowsBot);
     playBotBtnEl.disabled = !enabled;
     playBotBtnEl.title = modeAllowsBot ? '' : 'Bots are unavailable in this mode';
@@ -3837,7 +3842,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     
     // Draw border box around play area (warp border handles inner toggle)
     drawPlayAreaBorder();
-    const overflowMode = ['overflow', 'nuke', 'cross', 'brass', 'go', 'xb'].includes(normalizeMode(gameMode));
+    const overflowMode = ['overflow', 'nuke', 'cross', 'brass', 'go', 'warp', 'flat'].includes(normalizeMode(gameMode));
     
     // Show gold display when graph is being drawn and we have nodes/game data
     if (goldDisplay && nodes.size > 0) {
