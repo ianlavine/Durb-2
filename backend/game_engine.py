@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from .constants import (
     BRIDGE_BASE_COST,
     BRIDGE_COST_PER_UNIT_DISTANCE,
+    BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE,
     DEFAULT_GAME_MODE,
     WARP_MARGIN_RATIO_X,
     WARP_MARGIN_RATIO_Y,
@@ -61,6 +62,7 @@ class GameEngine:
         self.state.node_max_juice = get_node_max_juice(normalized_mode)
         self.state.neutral_capture_reward = get_neutral_capture_reward(normalized_mode)
         self.state.bridge_cost_per_unit = get_bridge_cost_per_unit(normalized_mode)
+        self.state.bridge_build_ticks_per_unit = BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE
         self.state.eliminated_players.clear()
         self.state.pending_eliminations = []
 
@@ -133,6 +135,7 @@ class GameEngine:
         new_state.node_max_juice = get_node_max_juice(DEFAULT_GAME_MODE)
         new_state.neutral_capture_reward = get_neutral_capture_reward(DEFAULT_GAME_MODE)
         new_state.bridge_cost_per_unit = get_bridge_cost_per_unit(DEFAULT_GAME_MODE)
+        new_state.bridge_build_ticks_per_unit = BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE
 
         self.state = new_state
         self.screen = screen
@@ -729,6 +732,7 @@ class GameEngine:
             warp_axis = "none"
             total_world_distance = 0.0
             removed_edges: List[int] = []
+            delayed_cross_removals: List[Tuple[int, float]] = []
 
             if warp_info:
                 warp_axis, candidate_segments, total_world_distance = self._parse_client_warp_info(
@@ -785,33 +789,31 @@ class GameEngine:
             if intersecting_edges:
                 if is_xb_mode:
                     blocked_edges: List[int] = []
-                    removable_edges: List[int] = []
                     for intersect_id in intersecting_edges:
                         existing_edge = self.state.edges.get(intersect_id) if self.state else None
                         existing_type = getattr(existing_edge, "pipe_type", "normal") if existing_edge else "normal"
                         if existing_type == "gold":
                             blocked_edges.append(intersect_id)
                         else:
-                            removable_edges.append(intersect_id)
+                            distance = self._distance_to_first_intersection(candidate_segments, existing_edge) or 0.0
+                            delayed_cross_removals.append((intersect_id, max(0.0, distance)))
 
                     if blocked_edges:
                         raise GameValidationError("Cannot cross brass pipe")
 
-                    if removable_edges:
-                        removed_edges.extend(self._remove_edges(removable_edges))
-
-                    normalized_pipe_type = "gold"
+                    if delayed_cross_removals:
+                        normalized_pipe_type = "gold"
                 else:
-                    if not is_cross_like_mode:
+                    if not is_cross_like_mode and normalized_pipe_type != "gold":
                         raise GameValidationError("Bridge would intersect existing edge")
 
-                    removable_edges: List[int] = []
                     blocking_edges: List[int] = []
                     for intersect_id in intersecting_edges:
                         existing_edge = self.state.edges.get(intersect_id) if self.state else None
                         existing_type = getattr(existing_edge, "pipe_type", "normal") if existing_edge else "normal"
                         if normalized_pipe_type == "gold" and existing_type != "gold":
-                            removable_edges.append(intersect_id)
+                            distance = self._distance_to_first_intersection(candidate_segments, existing_edge) or 0.0
+                            delayed_cross_removals.append((intersect_id, max(0.0, distance)))
                         else:
                             blocking_edges.append(intersect_id)
 
@@ -820,7 +822,9 @@ class GameEngine:
                             raise GameValidationError("Cannot cross golden pipe")
                         raise GameValidationError("Only golden pipes can cross others")
 
-                    removed_edges = self._remove_edges(removable_edges)
+                    if delayed_cross_removals and normalized_pipe_type != "gold":
+                        # Should not happen because blocking_edges would have triggered, but guard anyway
+                        raise GameValidationError("Only golden pipes can cross others")
 
             if normalized_pipe_type == "gold" and from_node.owner != player_id:
                 raise GameValidationError("Must control Brass Pipes")
@@ -837,6 +841,13 @@ class GameEngine:
             if total_world_distance <= 0.0:
                 total_world_distance = math.hypot(to_node.x - from_node.x, to_node.y - from_node.y)
 
+            ticks_per_unit = getattr(
+                self.state,
+                "bridge_build_ticks_per_unit",
+                BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE,
+            )
+            build_ticks_required = max(1, int(total_world_distance * max(0.0, ticks_per_unit)))
+
             new_edge = Edge(
                 id=new_edge_id,
                 source_node_id=from_node_id,
@@ -844,12 +855,33 @@ class GameEngine:
                 pipe_type=normalized_pipe_type,
                 on=False,
                 flowing=False,  # Will be set to True by _update_edge_flowing_status when built and conditions are met
-                build_ticks_required=max(1, int(total_world_distance * 0.3)),
+                build_ticks_required=build_ticks_required,
                 build_ticks_elapsed=0,
                 building=True,
                 warp_axis=warp_axis,
                 warp_segments=[(float(sx), float(sy), float(ex), float(ey)) for sx, sy, ex, ey in candidate_segments],
             )
+
+            if delayed_cross_removals and new_edge.build_ticks_required > 0:
+                total_distance_for_schedule = total_world_distance
+                if total_distance_for_schedule <= 0.0:
+                    total_distance_for_schedule = 0.0
+                    for sx, sy, ex, ey in candidate_segments:
+                        total_distance_for_schedule += math.hypot(ex - sx, ey - sy)
+                if total_distance_for_schedule <= 0.0:
+                    total_distance_for_schedule = float(new_edge.build_ticks_required)
+
+                distance_per_tick = total_distance_for_schedule / max(1, new_edge.build_ticks_required)
+                scheduled: List[Tuple[int, int]] = []
+                for target_edge_id, distance in delayed_cross_removals:
+                    clamped_distance = max(0.0, min(distance, total_distance_for_schedule))
+                    if distance_per_tick <= 0:
+                        intersection_tick = new_edge.build_ticks_required
+                    else:
+                        intersection_tick = math.ceil(clamped_distance / distance_per_tick)
+                    removal_tick = max(1, min(new_edge.build_ticks_required, intersection_tick + 1))
+                    scheduled.append((target_edge_id, removal_tick))
+                new_edge.pending_cross_removals = scheduled
             
             # Add to state
             self.state.edges[new_edge_id] = new_edge
@@ -1004,22 +1036,7 @@ class GameEngine:
         if not self.state or not edge_ids:
             return []
 
-        removed_ids: List[int] = []
-        for edge_id in edge_ids:
-            edge = self.state.edges.pop(edge_id, None)
-            if not edge:
-                continue
-            removed_ids.append(edge_id)
-
-            source_node = self.state.nodes.get(edge.source_node_id)
-            if source_node and edge_id in source_node.attached_edge_ids:
-                source_node.attached_edge_ids.remove(edge_id)
-
-            target_node = self.state.nodes.get(edge.target_node_id)
-            if target_node and edge_id in target_node.attached_edge_ids:
-                target_node.attached_edge_ids.remove(edge_id)
-
-        return removed_ids
+        return self.state.remove_edges(edge_ids, record=False)
 
     def _edges_would_intersect(
         self,
@@ -1059,6 +1076,58 @@ class GameEngine:
             return True
         
         return False
+
+    def _segment_intersection_point(
+        self,
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
+        x3: float,
+        y3: float,
+        x4: float,
+        y4: float,
+    ) -> Optional[Tuple[float, float, float]]:
+        """Return intersection (x,y) and parametric t on first segment if the segments intersect."""
+        denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+        if abs(denom) < 1e-9:
+            return None
+
+        t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom
+        u = ((x1 - x3) * (y1 - y2) - (y1 - y3) * (x1 - x2)) / denom
+
+        if -1e-6 <= t <= 1 + 1e-6 and -1e-6 <= u <= 1 + 1e-6:
+            ix = x1 + t * (x2 - x1)
+            iy = y1 + t * (y2 - y1)
+            return ix, iy, max(0.0, min(1.0, t))
+
+        return None
+
+    def _distance_to_first_intersection(
+        self,
+        candidate_segments: List[Tuple[float, float, float, float]],
+        existing_edge: Optional[Edge],
+    ) -> Optional[float]:
+        if not candidate_segments or not existing_edge:
+            return None
+
+        existing_segments = self._edge_segments(existing_edge)
+        if not existing_segments:
+            return None
+
+        cumulative = 0.0
+        for csx, csy, cex, cey in candidate_segments:
+            seg_len = math.hypot(cex - csx, cey - csy)
+            if seg_len <= 0:
+                continue
+            for esx, esy, eex, eey in existing_segments:
+                point = self._segment_intersection_point(csx, csy, cex, cey, esx, esy, eex, eey)
+                if point is not None:
+                    _, _, t = point
+                    return cumulative + (t * seg_len)
+            cumulative += seg_len
+
+        return None
     
     def simulate_tick(self, tick_interval_seconds: float) -> Optional[int]:
         """
