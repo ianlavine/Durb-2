@@ -58,6 +58,9 @@ class GraphState:
         # Auto-expand settings per player
         self.player_auto_expand: Dict[int, bool] = {}
         self.pending_auto_expand_nodes: Dict[int, Set[int]] = {}
+        # Auto-attack settings per player (mirrors auto-expand but targets enemy nodes)
+        self.player_auto_attack: Dict[int, bool] = {}
+        self.pending_auto_attack_nodes: Dict[int, Set[int]] = {}
         
         # Game mode (e.g., 'basic', 'warp')
         self.mode: str = DEFAULT_GAME_MODE
@@ -77,6 +80,8 @@ class GraphState:
         self.players_who_picked[player.id] = False
         # Initialize auto-expand setting (default: off)
         self.player_auto_expand[player.id] = False
+        # Initialize auto-attack setting (default: off)
+        self.player_auto_attack[player.id] = False
         self.eliminated_players.discard(player.id)
 
     def get_player_node_counts(self) -> Dict[int, int]:
@@ -326,6 +331,7 @@ class GraphState:
         gold_arr = [[pid, round(self.player_gold.get(pid, 0.0), 4)] for pid in self.players.keys()]
         picked_arr = [[pid, bool(self.players_who_picked.get(pid, False))] for pid in self.players.keys()]
         auto_expand_arr = [[pid, bool(self.player_auto_expand.get(pid, False))] for pid in self.players.keys()]
+        auto_attack_arr = [[pid, bool(self.player_auto_attack.get(pid, False))] for pid in self.players.keys()]
         
         # Calculate win threshold for progress bar
         win_threshold = self.calculate_win_threshold()
@@ -356,6 +362,7 @@ class GraphState:
             "winThreshold": win_threshold,
             "totalNodes": len(self.nodes),
             "autoExpand": auto_expand_arr,
+            "autoAttack": auto_attack_arr,
             "eliminatedPlayers": sorted(self.eliminated_players),
             "gameDuration": self.game_duration,
             "timerRemaining": timer_remaining,
@@ -389,6 +396,7 @@ class GraphState:
         gold_arr = [[pid, round(self.player_gold.get(pid, 0.0), 4)] for pid in self.players.keys()]
         picked_arr = [[pid, bool(self.players_who_picked.get(pid, False))] for pid in self.players.keys()]
         auto_expand_arr = [[pid, bool(self.player_auto_expand.get(pid, False))] for pid in self.players.keys()]
+        auto_attack_arr = [[pid, bool(self.player_auto_attack.get(pid, False))] for pid in self.players.keys()]
         
         # Calculate win threshold for progress bar
         win_threshold = self.calculate_win_threshold()
@@ -414,6 +422,7 @@ class GraphState:
             "picked": picked_arr,
             "winThreshold": win_threshold,
             "autoExpand": auto_expand_arr,
+            "autoAttack": auto_attack_arr,
             "eliminatedPlayers": eliminated_players,
             "recentEliminations": recent_eliminations,
             "gameDuration": self.game_duration,
@@ -730,6 +739,8 @@ class GraphState:
         for nid, new_owner in pending_ownership.items():
             if self.player_auto_expand.get(new_owner, False):
                 self._auto_expand_from_node(nid, new_owner)
+            if self.player_auto_attack.get(new_owner, False):
+                self._auto_attack_from_node(nid, new_owner)
 
         self.enforce_eliminated_edges_off()
 
@@ -750,6 +761,20 @@ class GraphState:
 
         self.pending_auto_expand_nodes.clear()
 
+    def process_pending_auto_attacks(self) -> None:
+        """Run any auto-attack operations that were deferred during the picking phase."""
+        if not self.pending_auto_attack_nodes:
+            return
+
+        for player_id, node_ids in list(self.pending_auto_attack_nodes.items()):
+            if not self.player_auto_attack.get(player_id, False):
+                continue
+
+            for node_id in list(node_ids):
+                self._apply_auto_attack_from_node(node_id, player_id)
+
+        self.pending_auto_attack_nodes.clear()
+
     def _auto_expand_from_node(self, node_id: int, player_id: int) -> None:
         """
         Auto-expand from a newly captured node by turning on edges to unowned surrounding nodes.
@@ -761,6 +786,15 @@ class GraphState:
             return
 
         self._apply_auto_expand_from_node(node_id, player_id)
+
+    def _auto_attack_from_node(self, node_id: int, player_id: int) -> None:
+        """Auto-attack from a captured node by turning on edges to enemy-owned nodes."""
+        if self.phase == "picking":
+            pending = self.pending_auto_attack_nodes.setdefault(player_id, set())
+            pending.add(node_id)
+            return
+
+        self._apply_auto_attack_from_node(node_id, player_id)
 
     def enforce_eliminated_edges_off(self) -> None:
         """Force edges owned by eliminated players to remain off."""
@@ -796,6 +830,25 @@ class GraphState:
                     # This is an unowned node that can be captured - turn on the edge
                     edge.on = True
 
+    def _apply_auto_attack_from_node(self, node_id: int, player_id: int) -> None:
+        captured_node = self.nodes.get(node_id)
+        if not captured_node or captured_node.owner != player_id:
+            return
+
+        for edge_id in captured_node.attached_edge_ids:
+            edge = self.edges.get(edge_id)
+            if not edge:
+                continue
+
+            if edge.source_node_id != node_id:
+                continue
+
+            target_node = self.nodes.get(edge.target_node_id)
+            if not target_node or target_node.owner is None or target_node.owner == player_id:
+                continue
+
+            edge.on = True
+
     def toggle_auto_expand(self, player_id: int) -> bool:
         """
         Toggle the auto-expand setting for a player.
@@ -806,6 +859,14 @@ class GraphState:
         
         self.player_auto_expand[player_id] = not self.player_auto_expand[player_id]
         return self.player_auto_expand[player_id]
+
+    def toggle_auto_attack(self, player_id: int) -> bool:
+        """Toggle the auto-attack setting for a player and return the new state."""
+        if player_id not in self.player_auto_attack:
+            self.player_auto_attack[player_id] = False
+
+        self.player_auto_attack[player_id] = not self.player_auto_attack[player_id]
+        return self.player_auto_attack[player_id]
 
 
 def load_graph(graph_path: Path) -> Tuple[GraphState, Dict[str, int]]:

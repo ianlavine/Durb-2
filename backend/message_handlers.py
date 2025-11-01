@@ -55,6 +55,7 @@ class MessageRouter:
             "nukeNode": self.handle_nuke_node,
             "quitGame": self.handle_quit_game,
             "toggleAutoExpand": self.handle_toggle_auto_expand,
+            "toggleAutoAttack": self.handle_toggle_auto_attack,
             "newGame": self.handle_new_game,
             "nodeCaptured": self.handle_node_captured_flush,
             # Postgame / rematch flow
@@ -102,6 +103,7 @@ class MessageRouter:
         player_count = int(msg.get("playerCount", MIN_FRIEND_PLAYERS))
         player_count = max(MIN_FRIEND_PLAYERS, min(MAX_FRIEND_PLAYERS, player_count))
         auto_expand = bool(msg.get("autoExpand", False))
+        auto_attack = bool(msg.get("autoAttack", False))
         token = msg.get("token") or uuid.uuid4().hex
         guest_name = _clean_guest_name(msg.get("guestName"))
         requested_mode = str(msg.get("mode") or DEFAULT_GAME_MODE).strip().lower()
@@ -122,6 +124,7 @@ class MessageRouter:
                 "token": token,
                 "websocket": websocket,
                 "auto_expand": auto_expand,
+                "auto_attack": auto_attack,
                 "joined_at": time.time(),
                 "guest_name": guest_name,
                 "mode": mode,
@@ -192,10 +195,12 @@ class MessageRouter:
 
         player_slots: List[Dict[str, Any]] = []
         auto_expand_state: Dict[str, bool] = {}
+        auto_attack_state: Dict[str, bool] = {}
         guest_names: Dict[str, str] = {}
         for idx, player in enumerate(players, start=1):
             color_info = color_pool[idx - 1]
             auto_expand = bool(player.get("auto_expand", False))
+            auto_attack = bool(player.get("auto_attack", False))
             guest_name = _clean_guest_name(player.get("guest_name"))
             if not guest_name:
                 guest_name = f"Guest {idx}"
@@ -206,10 +211,12 @@ class MessageRouter:
                     "color": color_info["color"],
                     "secondary_colors": color_info["secondary"],
                     "auto_expand": auto_expand,
+                    "auto_attack": auto_attack,
                     "guest_name": guest_name,
                 }
             )
             auto_expand_state[player["token"]] = auto_expand
+            auto_attack_state[player["token"]] = auto_attack
             guest_names[player["token"]] = guest_name
 
         engine.start_game(player_slots, mode=sanitized_mode)
@@ -226,6 +233,7 @@ class MessageRouter:
             "disconnect_deadlines": {},
             "replay_recorder": replay_recorder,
             "auto_expand_state": auto_expand_state,
+            "auto_attack_state": auto_attack_state,
             "guest_names": guest_names,
             "mode": sanitized_mode,
         }
@@ -770,6 +778,36 @@ class MessageRouter:
             )
 
     # ------------------------------------------------------------------
+    async def handle_toggle_auto_attack(
+        self,
+        websocket: websockets.WebSocketServerProtocol,
+        msg: Dict[str, Any],
+        server_context: Dict[str, Any],
+    ) -> None:
+        token = msg.get("token")
+        if token is None:
+            return
+
+        game_info = self._get_game_info(token, server_context)
+        if not game_info:
+            return
+
+        engine = game_info["engine"]
+        success = engine.handle_toggle_auto_attack(token)
+        if success:
+            enabled = False
+            player_id = engine.get_player_id(token)
+            if engine.state and player_id is not None:
+                enabled = bool(engine.state.player_auto_attack.get(player_id, False))
+            game_info.setdefault("auto_attack_state", {})[token] = enabled
+            self._record_game_event(
+                game_info,
+                token,
+                "toggleAutoAttack",
+                {"enabled": enabled},
+            )
+
+    # ------------------------------------------------------------------
     # Utility handlers
     # ------------------------------------------------------------------
 
@@ -831,12 +869,14 @@ class MessageRouter:
         token = msg.get("token") or uuid.uuid4().hex
         difficulty = msg.get("difficulty", "easy")
         auto_expand = bool(msg.get("autoExpand", False))
+        auto_attack = bool(msg.get("autoAttack", False))
         mode = normalize_game_mode(msg.get("mode", DEFAULT_GAME_MODE))
 
         success, error_msg = bot_game_manager.start_bot_game(
             token,
             difficulty,
             auto_expand,
+            auto_attack,
             mode=mode,
         )
         if not success:
@@ -1068,6 +1108,9 @@ class MessageRouter:
         elif msg_type == "toggleAutoExpand":
             bot_game_engine.handle_toggle_auto_expand(token)
 
+        elif msg_type == "toggleAutoAttack":
+            bot_game_engine.handle_toggle_auto_attack(token)
+
         elif msg_type == "requestInit":
             if bot_game_engine.state:
                 message = bot_game_engine.state.to_init_message(
@@ -1162,11 +1205,17 @@ class MessageRouter:
             tokens = list(clients.keys())
 
             auto_expand_map: Dict[str, bool] = dict(game_info.get("auto_expand_state", {}))
+            auto_attack_map: Dict[str, bool] = dict(game_info.get("auto_attack_state", {}))
             if not auto_expand_map and engine and engine.state:
                 for player_id, enabled in getattr(engine.state, "player_auto_expand", {}).items():
                     token = engine.player_id_to_token.get(player_id)
                     if token:
                         auto_expand_map[token] = bool(enabled)
+            if not auto_attack_map and engine and engine.state:
+                for player_id, enabled in getattr(engine.state, "player_auto_attack", {}).items():
+                    token = engine.player_id_to_token.get(player_id)
+                    if token:
+                        auto_attack_map[token] = bool(enabled)
 
             guest_name_map: Dict[str, str] = {}
             raw_guest_names = game_info.get("guest_names", {})
@@ -1187,6 +1236,7 @@ class MessageRouter:
                 "rematch_votes": set(),
                 "replay_data": replay_bundle,
                 "auto_expand": auto_expand_map,
+                "auto_attack": auto_attack_map,
                 "guest_names": guest_name_map,
                 "mode": game_info.get("mode", DEFAULT_GAME_MODE),
             }
@@ -1250,6 +1300,7 @@ class MessageRouter:
                     "token": t,
                     "websocket": group.get("clients", {}).get(t),
                     "auto_expand": bool(group.get("auto_expand", {}).get(t, False)),
+                    "auto_attack": bool(group.get("auto_attack", {}).get(t, False)),
                     "guest_name": group.get("guest_names", {}).get(t),
                     "mode": mode,
                 })
@@ -1276,6 +1327,7 @@ class MessageRouter:
         clients = group.setdefault("clients", {})
         tokens = group.setdefault("tokens", [])
         auto_expand_map = group.setdefault("auto_expand", {})
+        auto_attack_map = group.setdefault("auto_attack", {})
 
         # Notify remaining participants that an opponent has left
         notice = json.dumps({"type": "postgameOpponentLeft"})
@@ -1289,6 +1341,7 @@ class MessageRouter:
         if token in tokens:
             tokens.remove(token)
         auto_expand_map.pop(token, None)
+        auto_attack_map.pop(token, None)
 
         if not tokens:
             groups.pop(group_id, None)

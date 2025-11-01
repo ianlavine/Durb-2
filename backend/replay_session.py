@@ -147,6 +147,7 @@ def build_engine_from_replay(
             color = entry.get("color", "#ffffff")
             secondary_colors = list(entry.get("secondaryColors", entry.get("secondary_colors", [])))
             auto_expand = bool(entry.get("autoExpand", entry.get("auto_expand", False)))
+            auto_attack = bool(entry.get("autoAttack", entry.get("auto_attack", False)))
             name = str(entry.get("name") or entry.get("guestName") or "")
         else:
             player_id = _coerce_int(entry)
@@ -161,6 +162,7 @@ def build_engine_from_replay(
         player = Player(id=player_id, color=color, secondary_colors=secondary_colors, name=name)
         state.add_player(player)
         state.player_auto_expand[player_id] = auto_expand
+        state.player_auto_attack[player_id] = auto_attack
         state.player_gold[player_id] = starting_gold_value
         token = f"replay-{player_id}"
         player_tokens[player_id] = token
@@ -552,6 +554,8 @@ class ReplaySession:
                 self._cancelled = True
         elif event_type == "toggleAutoExpand":
             self.engine.handle_toggle_auto_expand(token)
+        elif event_type == "toggleAutoAttack":
+            self.engine.handle_toggle_auto_attack(token)
         else:
             # Unsupported events are ignored for now
             return

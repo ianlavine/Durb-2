@@ -23,7 +23,7 @@ if TYPE_CHECKING:  # pragma: no cover - import only for type checking
 class GameReplayRecorder:
     """Capture the essential data needed to replay a completed match."""
 
-    VERSION: int = 2
+    VERSION: int = 3
 
     def __init__(
         self,
@@ -57,6 +57,7 @@ class GameReplayRecorder:
                     "color": slot.get("color"),
                     "secondaryColors": list(slot.get("secondary_colors", [])),
                     "autoExpand": bool(slot.get("auto_expand", False)),
+                    "autoAttack": bool(slot.get("auto_attack", False)),
                     "name": str(slot.get("guest_name", "") or ""),
                 }
             )

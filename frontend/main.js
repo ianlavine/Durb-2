@@ -123,6 +123,12 @@
   let myAutoExpand = false; // my player's auto-expand setting
   let persistentAutoExpand = false; // persistent setting stored in localStorage
   
+  // Auto-attack system
+  let autoAttackToggle = null;
+  let homeAutoAttackToggle = null;
+  let myAutoAttack = false; // my player's auto-attack setting
+  let persistentAutoAttack = false; // persistent setting stored in localStorage
+  
   // Numbers toggle system
   let numbersToggle = null;
   let persistentNumbers = true; // persistent setting stored in localStorage (default to true)
@@ -133,9 +139,8 @@
   let edgeFlowTexts = new Map(); // edgeId -> text object
   const edgeRemovalAnimations = new Map(); // edgeId -> removal animation state
   
-  // Targeting toggle system
-  let targetingToggle = null;
-  let persistentTargeting = false; // persistent setting stored in localStorage (default to false)
+  // Targeting overlay support (legacy feature locked off for now)
+  let persistentTargeting = false;
   
   // Node juice display system
   let nodeJuiceTexts = new Map(); // nodeId -> text object
@@ -950,6 +955,17 @@
     localStorage.setItem('autoExpand', value.toString());
   }
 
+  function loadPersistentAutoAttack() {
+    const saved = localStorage.getItem('autoAttack');
+    persistentAutoAttack = saved === 'true';
+    return persistentAutoAttack;
+  }
+
+  function savePersistentAutoAttack(value) {
+    persistentAutoAttack = value;
+    localStorage.setItem('autoAttack', value.toString());
+  }
+
   // Settings panel persistence
   function loadPersistentSettingsOpen() {
     const saved = localStorage.getItem('settingsOpen');
@@ -984,19 +1000,6 @@
     persistentEdgeFlow = value;
     localStorage.setItem('edgeFlow', value.toString());
   }
-
-  // Targeting persistence functions
-  function loadPersistentTargeting() {
-    const saved = localStorage.getItem('targeting');
-    persistentTargeting = saved === 'true'; // Default to false if not set
-    return persistentTargeting;
-  }
-
-  function savePersistentTargeting(value) {
-    persistentTargeting = value;
-    localStorage.setItem('targeting', value.toString());
-  }
-
 
   // Helper: convert 0xRRGGBB -> "#rrggbb"
   function toCssColor(hex) {
@@ -1757,17 +1760,17 @@ function clearBridgeSelection() {
     else autoToggle.classList.remove('enabled');
   }
 
+  function updateHomeAutoAttackToggle() {
+    const toggleSwitch = document.querySelector('#autoAttackToggle .toggle-switch');
+    if (!toggleSwitch) return;
+    if (persistentAutoAttack) toggleSwitch.classList.add('enabled');
+    else toggleSwitch.classList.remove('enabled');
+  }
+
   function updateHomeNumbersToggle() {
     const toggleSwitch = document.querySelector('#numbersToggle .toggle-switch');
     if (!toggleSwitch) return;
     if (persistentNumbers) toggleSwitch.classList.add('enabled');
-    else toggleSwitch.classList.remove('enabled');
-  }
-
-  function updateHomeTargetingToggle() {
-    const toggleSwitch = document.querySelector('#targetingToggle .toggle-switch');
-    if (!toggleSwitch) return;
-    if (persistentTargeting) toggleSwitch.classList.add('enabled');
     else toggleSwitch.classList.remove('enabled');
   }
 
@@ -1782,9 +1785,9 @@ function clearBridgeSelection() {
 
     // Load persistent settings
     loadPersistentAutoExpand();
+    loadPersistentAutoAttack();
     loadPersistentNumbers();
     loadPersistentEdgeFlow();
-    loadPersistentTargeting();
     loadPersistentSound();
 
     tryConnectWS();
@@ -1795,9 +1798,9 @@ function clearBridgeSelection() {
     if (togglesPanelEl) togglesPanelEl.style.display = settingsOpen ? 'grid' : 'none';
     // Ensure visual state matches persisted values on refresh while in menu
     updateHomeAutoExpandToggle();
+    updateHomeAutoAttackToggle();
     updateHomeNumbersToggle();
     updateHomeEdgeFlowToggle();
-    updateHomeTargetingToggle();
     const settingsBtn = document.getElementById('settingsButton');
     if (settingsBtn && togglesPanelEl) {
       settingsBtn.addEventListener('click', () => {
@@ -2349,6 +2352,26 @@ function clearBridgeSelection() {
     }
   }
 
+  // Initialize auto-attack toggle (works in menu and in-game)
+  autoAttackToggle = document.getElementById('autoAttackToggle');
+  if (autoAttackToggle) {
+    const toggleSwitch = autoAttackToggle.querySelector('.toggle-switch');
+    if (toggleSwitch) {
+      toggleSwitch.addEventListener('click', () => {
+        const newValue = !persistentAutoAttack;
+        savePersistentAutoAttack(newValue);
+        myAutoAttack = newValue;
+        updateHomeAutoAttackToggle();
+        updateAutoAttackToggle();
+
+        if (ws && ws.readyState === WebSocket.OPEN && !gameEnded && !replayMode) {
+          const token = localStorage.getItem('token');
+          ws.send(JSON.stringify({ type: 'toggleAutoAttack', token }));
+        }
+      });
+    }
+  }
+
   // Initialize numbers toggle
   numbersToggle = document.getElementById('numbersToggle');
   if (numbersToggle) {
@@ -2378,27 +2401,6 @@ function clearBridgeSelection() {
     }
   }
 
-  // Initialize targeting toggle
-  targetingToggle = document.getElementById('targetingToggle');
-  if (targetingToggle) {
-    const toggleSwitch = targetingToggle.querySelector('.toggle-switch');
-    if (toggleSwitch) {
-      toggleSwitch.addEventListener('click', () => {
-        const newValue = !persistentTargeting;
-        savePersistentTargeting(newValue);
-        updateTargetingToggle();
-        updateHomeTargetingToggle();
-        
-        // Clear targeting indicator when targeting is turned off
-        if (!newValue) {
-          currentTargetNodeId = null;
-          currentTargetSetTime = null;
-        }
-      });
-    }
-  }
-  
-
     // Initialize home screen auto-expand toggle
     homeAutoExpandToggle = document.getElementById('homeAutoExpandToggle');
     if (homeAutoExpandToggle) {
@@ -2412,6 +2414,20 @@ function clearBridgeSelection() {
       }
       // Initialize the toggle state
       updateHomeAutoExpandToggle();
+    }
+
+    // Initialize home screen auto-attack toggle
+    homeAutoAttackToggle = document.getElementById('homeAutoAttackToggle');
+    if (homeAutoAttackToggle) {
+      const toggleSwitch = homeAutoAttackToggle.querySelector('.toggle-switch');
+      if (toggleSwitch) {
+        toggleSwitch.addEventListener('click', () => {
+          const newValue = !persistentAutoAttack;
+          savePersistentAutoAttack(newValue);
+          updateHomeAutoAttackToggle();
+        });
+      }
+      updateHomeAutoAttackToggle();
     }
 
     // Initialize home screen numbers toggle
@@ -2445,28 +2461,6 @@ function clearBridgeSelection() {
       }
       // Initialize the toggle state
       updateHomeEdgeFlowToggle();
-    }
-
-    // Initialize home screen targeting toggle
-    homeTargetingToggle = document.getElementById('homeTargetingToggle');
-    if (homeTargetingToggle) {
-      const toggleSwitch = homeTargetingToggle.querySelector('.toggle-switch');
-      if (toggleSwitch) {
-        toggleSwitch.addEventListener('click', () => {
-          const newValue = !persistentTargeting;
-          savePersistentTargeting(newValue);
-          updateHomeTargetingToggle();
-          updateTargetingToggle();
-          
-          // Clear targeting indicator when targeting is turned off
-          if (!newValue) {
-            currentTargetNodeId = null;
-            currentTargetSetTime = null;
-          }
-        });
-      }
-      // Initialize the toggle state
-      updateHomeTargetingToggle();
     }
 
 
@@ -2865,10 +2859,20 @@ function clearBridgeSelection() {
         }
       });
     }
+
+    myAutoAttack = persistentAutoAttack;
+    if (Array.isArray(msg.autoAttack)) {
+      msg.autoAttack.forEach(([pid, enabled]) => {
+        if (Number(pid) === myPlayerId) {
+          myAutoAttack = !!enabled;
+        }
+      });
+    }
+
     updateAutoExpandToggle();
+    updateAutoAttackToggle();
     updateNumbersToggle();
     updateEdgeFlowToggle();
-    updateTargetingToggle();
 
     myEliminated = eliminatedPlayers.has(myPlayerId);
     updateQuitButtonLabel();
@@ -3271,10 +3275,19 @@ function clearBridgeSelection() {
         }
       });
     }
+    if (Array.isArray(msg.autoAttack)) {
+      msg.autoAttack.forEach(([pid, enabled]) => {
+        if (Number(pid) === myPlayerId) {
+          myAutoAttack = !!enabled;
+          savePersistentAutoAttack(myAutoAttack);
+          updateHomeAutoAttackToggle();
+        }
+      });
+    }
     updateAutoExpandToggle();
+    updateAutoAttackToggle();
     updateNumbersToggle();
     updateEdgeFlowToggle();
-    updateTargetingToggle();
 
     if (Array.isArray(msg.eliminatedPlayers)) {
       eliminatedPlayers.clear();
@@ -5553,9 +5566,9 @@ function fallbackRemoveEdgesForNode(nodeId) {
     if (togglesPanel) togglesPanel.style.display = settingsOpen ? 'grid' : 'none';
 
     updateHomeAutoExpandToggle();
+    updateHomeAutoAttackToggle();
     updateHomeNumbersToggle();
     updateHomeEdgeFlowToggle();
-    updateHomeTargetingToggle();
 
     reviewReplayActive = false;
     reviewReplayLastData = null;
@@ -5677,6 +5690,19 @@ function fallbackRemoveEdgesForNode(nodeId) {
     }
   }
 
+  function updateAutoAttackToggle() {
+    if (!autoAttackToggle) return;
+
+    const toggleSwitch = autoAttackToggle.querySelector('.toggle-switch');
+    if (toggleSwitch) {
+      if (myAutoAttack) {
+        toggleSwitch.classList.add('enabled');
+      } else {
+        toggleSwitch.classList.remove('enabled');
+      }
+    }
+  }
+
   function updateNumbersToggle() {
     if (!numbersToggle) return;
     
@@ -5707,19 +5733,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
     if (!toggleSwitch) return;
     if (persistentEdgeFlow) toggleSwitch.classList.add('enabled');
     else toggleSwitch.classList.remove('enabled');
-  }
-
-  function updateTargetingToggle() {
-    if (!targetingToggle) return;
-    
-    const toggleSwitch = targetingToggle.querySelector('.toggle-switch');
-    if (toggleSwitch) {
-      if (persistentTargeting) {
-        toggleSwitch.classList.add('enabled');
-      } else {
-        toggleSwitch.classList.remove('enabled');
-      }
-    }
   }
 
 

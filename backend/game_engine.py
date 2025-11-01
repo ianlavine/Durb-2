@@ -74,6 +74,7 @@ class GameEngine:
             color = slot.get("color", "#ffffff")
             secondary_colors = list(slot.get("secondary_colors", []))
             auto_expand = bool(slot.get("auto_expand", False))
+            auto_attack = bool(slot.get("auto_attack", False))
             guest_name = str(slot.get("guest_name", "") or "").strip()
 
             if normalized_mode == "go":
@@ -90,6 +91,7 @@ class GameEngine:
                 "guest_name": guest_name,
             }
             self.state.player_auto_expand[player_id] = auto_expand
+            self.state.player_auto_attack[player_id] = auto_attack
 
         self.game_active = True
 
@@ -115,10 +117,14 @@ class GameEngine:
         self.state.phase = "playing"
         self.state.start_game_timer(time.time())
         self.state.process_pending_auto_expands()
+        self.state.process_pending_auto_attacks()
 
         for player_id, auto_enabled in self.state.player_auto_expand.items():
             if auto_enabled:
                 self._check_auto_expand_opportunities(player_id)
+        for player_id, auto_enabled in self.state.player_auto_attack.items():
+            if auto_enabled:
+                self._check_auto_attack_opportunities(player_id)
 
     def create_new_game(self) -> Tuple[GraphState, Dict[str, int]]:
         """Create a new single-player game for testing/development."""
@@ -136,6 +142,9 @@ class GameEngine:
         new_state.neutral_capture_reward = get_neutral_capture_reward(DEFAULT_GAME_MODE)
         new_state.bridge_cost_per_unit = get_bridge_cost_per_unit(DEFAULT_GAME_MODE)
         new_state.bridge_build_ticks_per_unit = BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE
+        for pid in new_state.players.keys():
+            new_state.player_auto_expand[pid] = False
+            new_state.player_auto_attack[pid] = False
 
         self.state = new_state
         self.screen = screen
@@ -246,6 +255,8 @@ class GameEngine:
                 # Check for auto-expand if enabled
                 if self.state.player_auto_expand.get(player_id, False):
                     self.state._auto_expand_from_node(node_id, player_id)
+                if self.state.player_auto_attack.get(player_id, False):
+                    self.state._auto_attack_from_node(node_id, player_id)
 
                 # Store the capture event for frontend notification
                 if not hasattr(self.state, 'pending_node_captures'):
@@ -975,6 +986,9 @@ class GameEngine:
         self.state.player_auto_expand[player_id] = False
         if hasattr(self.state, 'pending_auto_expand_nodes'):
             self.state.pending_auto_expand_nodes.pop(player_id, None)
+        self.state.player_auto_attack[player_id] = False
+        if hasattr(self.state, 'pending_auto_attack_nodes'):
+            self.state.pending_auto_attack_nodes.pop(player_id, None)
         self._deactivate_player_edges(player_id)
 
     def _edge_exists_between_nodes(self, node_id1: int, node_id2: int) -> bool:
@@ -1402,7 +1416,27 @@ class GameEngine:
             
         except GameValidationError:
             return False
-    
+
+    def handle_toggle_auto_attack(self, token: str) -> bool:
+        try:
+            self.validate_game_active()
+            player_id = self.validate_player(token)
+            self.validate_player_can_act(player_id)
+            if not self.state:
+                raise GameValidationError("No game state")
+
+            if player_id in self.state.eliminated_players:
+                raise GameValidationError("Player eliminated")
+
+            new_state = self.state.toggle_auto_attack(player_id)
+            if new_state:
+                self._check_auto_attack_opportunities(player_id)
+
+            return True
+
+        except GameValidationError:
+            return False
+
     def _check_auto_expand_opportunities(self, player_id: int) -> None:
         """
         Check all owned nodes for auto-expand opportunities and turn on edges to unowned nodes.
@@ -1418,3 +1452,13 @@ class GameEngine:
         # For each owned node, check for auto-expand opportunities
         for node_id in owned_nodes:
             self.state._auto_expand_from_node(node_id, player_id)
+
+    def _check_auto_attack_opportunities(self, player_id: int) -> None:
+        """Check all owned nodes and turn on edges to enemy neighbors when auto-attack is enabled."""
+        if not self.state:
+            return
+
+        owned_nodes = [node_id for node_id, node in self.state.nodes.items() if node.owner == player_id]
+
+        for node_id in owned_nodes:
+            self.state._auto_attack_from_node(node_id, player_id)

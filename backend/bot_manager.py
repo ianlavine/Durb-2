@@ -27,6 +27,7 @@ class BotGameManager:
         human_token: str,
         difficulty: str = "easy",
         auto_expand: bool = False,
+        auto_attack: bool = False,
         mode: str = DEFAULT_GAME_MODE,
     ) -> Tuple[bool, Optional[str]]:
         """
@@ -49,6 +50,7 @@ class BotGameManager:
                     "color": PLAYER_COLOR_SCHEMES[0]["color"],
                     "secondary_colors": PLAYER_COLOR_SCHEMES[0]["secondary"],
                     "auto_expand": auto_expand,
+                    "auto_attack": auto_attack,
                 },
                 {
                     "player_id": 2,
@@ -56,6 +58,7 @@ class BotGameManager:
                     "color": PLAYER_COLOR_SCHEMES[1]["color"],
                     "secondary_colors": PLAYER_COLOR_SCHEMES[1]["secondary"],
                     "auto_expand": True,
+                    "auto_attack": True,
                 },
             ]
 
