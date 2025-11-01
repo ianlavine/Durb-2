@@ -158,7 +158,8 @@
     'warp-old': 'Warp (Old)',
     flat: 'Flat',
   };
-  const OVERFLOW_PENDING_GOLD_THRESHOLD = 10;
+  const DEFAULT_OVERFLOW_PENDING_GOLD_THRESHOLD = 10;
+  let OVERFLOW_PENDING_GOLD_THRESHOLD = DEFAULT_OVERFLOW_PENDING_GOLD_THRESHOLD;
   const BRASS_PIPE_COLOR = 0x8b6f14;
   const BRASS_PIPE_DIM_COLOR = 0x46320a;
   const BRASS_PIPE_OUTLINE_COLOR = 0x6f5410;
@@ -2796,17 +2797,19 @@ function clearBridgeSelection() {
         : Number(localStorage.getItem('myPlayerId') || '0');
     }
 
-    if (msg.settings && typeof msg.settings.nodeMaxJuice === 'number') {
-      nodeMaxJuice = msg.settings.nodeMaxJuice;
-    }
-
-    // Read bridge costs from backend
+    OVERFLOW_PENDING_GOLD_THRESHOLD = DEFAULT_OVERFLOW_PENDING_GOLD_THRESHOLD;
     if (msg.settings) {
+      if (typeof msg.settings.nodeMaxJuice === 'number') {
+        nodeMaxJuice = msg.settings.nodeMaxJuice;
+      }
       if (typeof msg.settings.bridgeBaseCost === 'number') {
         BRIDGE_BASE_COST = msg.settings.bridgeBaseCost;
       }
       if (typeof msg.settings.bridgeCostPerUnit === 'number') {
         BRIDGE_COST_PER_UNIT = msg.settings.bridgeCostPerUnit;
+      }
+      if (typeof msg.settings.overflowPendingGoldPayout === 'number') {
+        OVERFLOW_PENDING_GOLD_THRESHOLD = msg.settings.overflowPendingGoldPayout;
       }
     }
 

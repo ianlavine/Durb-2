@@ -348,6 +348,7 @@ class GraphState:
                 "bridgeBaseCost": BRIDGE_BASE_COST,
                 "bridgeCostPerUnit": self.bridge_cost_per_unit,
                 "neutralCaptureReward": neutral_reward,
+                "overflowPendingGoldPayout": OVERFLOW_PENDING_GOLD_PAYOUT,
             },
             "phase": self.phase,
             "gold": gold_arr,

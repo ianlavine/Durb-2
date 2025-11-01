@@ -59,8 +59,8 @@ OVERFLOW_JUICE_TO_GOLD_RATIO_BY_MODE: Dict[str, float] = {
     "brass": 15.0,
     "go": 30.0,
     "warp-old": 15.0,
-    "warp": 15.0,
-    "flat": 15.0,
+    "warp": 30.0,
+    "flat": 30.0,
 }
 OVERFLOW_PENDING_GOLD_PAYOUT: float = 10.0   # payout after 10 pending gold -> $10
 
