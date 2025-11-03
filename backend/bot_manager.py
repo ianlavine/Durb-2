@@ -4,7 +4,7 @@ This module is responsible for creating a game, wiring a bot into it, and
 exposing simple controls for ticking and lifecycle.
 """
 
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from .game_engine import GameEngine
 from .bots import Bot2
@@ -29,6 +29,7 @@ class BotGameManager:
         auto_expand: bool = False,
         auto_attack: bool = False,
         mode: str = DEFAULT_GAME_MODE,
+        options: Optional[Dict[str, Any]] = None,
     ) -> Tuple[bool, Optional[str]]:
         """
         Start a new bot vs human game with specified difficulty.
@@ -62,7 +63,7 @@ class BotGameManager:
                 },
             ]
 
-            self.game_engine.start_game(player_slots, mode=mode)
+            self.game_engine.start_game(player_slots, mode=mode, options=options)
             self.bot_player.join_game(self.game_engine)
             self.game_active = True
 

@@ -19,11 +19,14 @@ GAME_MODES: Tuple[str, ...] = (
     "sparse",
     "warp-old",
     "warp",
+    "i-warp",
+    "i-flat",
     "flat",
     "basic",
     "overflow",
     "nuke",
     "cross",
+    "brass-old",
     "brass",
     "go",
 )
@@ -36,11 +39,14 @@ NODE_MAX_JUICE_BY_MODE: Dict[str, float] = {
     "basic": 500.0,
     "warp-old": 500.0,
     "warp": 300.0,
+    "i-warp": 300.0,
+    "i-flat": 300.0,
     "flat": 300.0,
     "sparse": 500.0,
     "overflow": 300.0,
     "nuke": 300.0,
     "cross": 300.0,
+    "brass-old": 300.0,
     "brass": 300.0,
     "go": 300.0,
 }
@@ -56,10 +62,13 @@ OVERFLOW_JUICE_TO_GOLD_RATIO_BY_MODE: Dict[str, float] = {
     "overflow": 15.0,
     "nuke": 15.0,
     "cross": 15.0,
+    "brass-old": 15.0,
     "brass": 15.0,
     "go": 30.0,
     "warp-old": 15.0,
     "warp": 30.0,
+    "i-warp": 30.0,
+    "i-flat": 30.0,
     "flat": 30.0,
 }
 OVERFLOW_PENDING_GOLD_PAYOUT: float = 10.0   # payout after 10 pending gold -> $10
@@ -70,11 +79,14 @@ GOLD_REWARD_FOR_NEUTRAL_CAPTURE_BY_MODE: Dict[str, float] = {
     "basic": 10.0,
     "warp-old": 10.0,
     "warp": 10.0,
+    "i-warp": 10.0,
+    "i-flat": 10.0,
     "flat": 10.0,
     "sparse": 10.0,
     "overflow": 10.0,
     "nuke": 10.0,
     "cross": 10.0,
+    "brass-old": 10.0,
     "brass": 10.0,
     "go": 10.0,
 }
@@ -96,11 +108,14 @@ BRIDGE_COST_PER_UNIT_DISTANCE_BY_MODE: Dict[str, float] = {
     "basic": 1.5,
     "warp-old": 1.5,
     "warp": 1.0,
+    "i-warp": 0.7,
+    "i-flat": 0.7,
     "flat": 1.0,
     "sparse": 1.0,
     "overflow": 1.0,
     "nuke": 1.0,
     "cross": 1.0,
+    "brass-old": 1.0,
     "brass": 1.0,
     "go": 1.0,
 }
@@ -125,6 +140,8 @@ def normalize_game_mode(value: str) -> str:
         lowered = "warp-old"
     if lowered == "xb":  # legacy alias now mapped to modern warp
         lowered = "warp"
+    if lowered == "brass":
+        lowered = "brass-old"
     return lowered if lowered in GAME_MODES else DEFAULT_GAME_MODE
 
 

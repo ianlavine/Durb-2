@@ -43,7 +43,7 @@ class GraphGenerator:
                 "edge_func": gen_graph.generate_sparse_edges,
                 "desired_edges": None,
             },
-            "brass": {
+            "brass-old": {
                 "edge_func": gen_graph.generate_sparse_edges,
                 "desired_edges": None,
             },
@@ -51,7 +51,19 @@ class GraphGenerator:
                 "edge_func": gen_graph.generate_sparse_edges,
                 "desired_edges": None,
             },
+            "i-warp": {
+                "edge_func": gen_graph.generate_sparse_edges,
+                "desired_edges": None,
+            },
             "flat": {
+                "edge_func": gen_graph.generate_sparse_edges,
+                "desired_edges": None,
+            },
+            "i-flat": {
+                "edge_func": gen_graph.generate_sparse_edges,
+                "desired_edges": None,
+            },
+            "brass": {
                 "edge_func": gen_graph.generate_sparse_edges,
                 "desired_edges": None,
             },
@@ -102,7 +114,7 @@ class GraphGenerator:
         # Remove isolated nodes after graph generation
         nodes, edges = gen_graph.remove_isolated_nodes(nodes, edges)
 
-        if mode == "brass":
+        if mode in {"brass-old", "brass"}:
             brass_cap = 20
             for node in nodes:
                 node.node_type = "normal"
