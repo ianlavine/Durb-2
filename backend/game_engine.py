@@ -328,7 +328,7 @@ class GameEngine:
             self.validate_player_can_act(player_id)
 
             current_mode = normalize_game_mode(getattr(self.state, "mode", DEFAULT_GAME_MODE))
-            if current_mode in {"nuke", "cross", "brass", "go", "warp", "flat"}:
+            if current_mode in {"nuke", "cross", "brass", "go", "warp", "flat", "i-warp", "i-flat"}:
                 raise GameValidationError("Edge reversal disabled in this mode")
 
             edge = self.validate_edge_exists(edge_id)
@@ -387,7 +387,7 @@ class GameEngine:
         if not self.state:
             return False
         current_mode = normalize_game_mode(getattr(self.state, "mode", DEFAULT_GAME_MODE))
-        return current_mode in {"warp-old", "warp", "sparse", "overflow", "nuke", "cross", "brass", "go"}
+        return current_mode in {"warp-old", "warp", "i-warp", "sparse", "overflow", "nuke", "cross", "brass", "go"}
 
     def _compute_warp_bounds(self) -> Optional[Dict[str, float]]:
         if not self._is_warp_mode_active():
@@ -719,7 +719,9 @@ class GameEngine:
             current_mode = normalize_game_mode(getattr(self.state, "mode", DEFAULT_GAME_MODE))
             is_cross_mode = current_mode == "cross"
             is_brass_mode = current_mode == "brass"
-            is_warp_variant_mode = current_mode in {"warp", "flat"}
+            is_intentional_brass_mode = current_mode in {"cross", "i-warp", "i-flat"}
+            is_auto_brass_mode = current_mode in {"warp", "flat"}
+            is_warp_variant_mode = current_mode in {"warp", "flat", "i-warp", "i-flat"}
             is_cross_like_mode = current_mode in {"cross", "brass"}
 
             # Validate nodes
@@ -728,7 +730,7 @@ class GameEngine:
 
             if is_brass_mode:
                 normalized_pipe_type = "gold" if getattr(from_node, "node_type", "normal") == "brass" else "normal"
-            elif is_cross_mode:
+            elif is_intentional_brass_mode:
                 normalized_pipe_type = "gold" if (pipe_type or "").lower() == "gold" else "normal"
             else:
                 normalized_pipe_type = "normal"
@@ -766,8 +768,9 @@ class GameEngine:
 
             # Calculate and validate gold using server-side formula
             actual_cost = self.calculate_bridge_cost(from_node, to_node, segments_override=candidate_segments)
-            if is_cross_mode and normalized_pipe_type == "gold":
-                actual_cost *= 2
+            if normalized_pipe_type == "gold":
+                if is_cross_mode or current_mode in {"i-warp", "i-flat"}:
+                    actual_cost *= 2
             self.validate_sufficient_gold(player_id, actual_cost)
 
             # Check if edge already exists
@@ -813,7 +816,34 @@ class GameEngine:
                         raise GameValidationError("Cannot cross brass pipe")
 
                     if delayed_cross_removals:
-                        normalized_pipe_type = "gold"
+                        if normalized_pipe_type == "gold":
+                            pass
+                        elif is_auto_brass_mode:
+                            normalized_pipe_type = "gold"
+                        else:
+                            raise GameValidationError("Only brass pipes can cross others")
+                    else:
+                        if not is_cross_like_mode and normalized_pipe_type != "gold":
+                            raise GameValidationError("Bridge would intersect existing edge")
+
+                        blocking_edges: List[int] = []
+                        for intersect_id in intersecting_edges:
+                            existing_edge = self.state.edges.get(intersect_id) if self.state else None
+                            existing_type = getattr(existing_edge, "pipe_type", "normal") if existing_edge else "normal"
+                            if normalized_pipe_type == "gold" and existing_type != "gold":
+                                distance = self._distance_to_first_intersection(candidate_segments, existing_edge) or 0.0
+                                delayed_cross_removals.append((intersect_id, max(0.0, distance)))
+                            else:
+                                blocking_edges.append(intersect_id)
+
+                        if blocking_edges:
+                            if normalized_pipe_type == "gold":
+                                raise GameValidationError("Cannot cross golden pipe")
+                            raise GameValidationError("Only golden pipes can cross others")
+
+                        if delayed_cross_removals and normalized_pipe_type != "gold":
+                            # Should not happen because blocking_edges would have triggered, but guard anyway
+                            raise GameValidationError("Only golden pipes can cross others")
                 else:
                     if not is_cross_like_mode and normalized_pipe_type != "gold":
                         raise GameValidationError("Bridge would intersect existing edge")

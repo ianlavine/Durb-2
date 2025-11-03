@@ -161,6 +161,8 @@
     cross: 'Cross',
     warp: 'Warp',
     'warp-old': 'Warp (Old)',
+    'i-warp': 'I-Warp',
+    'i-flat': 'I-Flat',
     flat: 'Flat',
   };
   const DEFAULT_OVERFLOW_PENDING_GOLD_THRESHOLD = 10;
@@ -174,7 +176,7 @@
 
   function isWarpLike(mode) {
     const normalized = normalizeMode(mode);
-    return ['warp-old', 'warp', 'sparse', 'overflow', 'nuke', 'cross', 'brass', 'go'].includes(normalized);
+    return ['warp-old', 'warp', 'i-warp', 'sparse', 'overflow', 'nuke', 'cross', 'brass', 'go'].includes(normalized);
   }
 
   // Money transparency system
@@ -1213,8 +1215,8 @@
     if (normalizedDistance === 0) return 0;
 
     const baseCost = Math.round(BRIDGE_BASE_COST + normalizedDistance * BRIDGE_COST_PER_UNIT);
-    const useBrass = isBrass && isTrueCrossModeActive();
-    return useBrass ? baseCost * 2 : baseCost;
+    const doubleCost = isBrass && brassPipesDoubleCost();
+    return doubleCost ? baseCost * 2 : baseCost;
   }
 
   function normalizeWarpSegmentList(rawSegments, sourceNode, targetNode) {
@@ -1461,7 +1463,7 @@
 
   function isRingModeActive() {
     const mode = normalizeMode(gameMode);
-    return mode === 'overflow' || mode === 'go' || mode === 'warp' || mode === 'flat';
+    return ['overflow', 'go', 'warp', 'i-warp', 'flat', 'i-flat'].includes(mode);
   }
 
   function isNukeModeActive() {
@@ -1476,9 +1478,18 @@
     return normalizeMode(gameMode) === 'cross';
   }
 
+  function isIntentionalBrassMode(mode) {
+    const normalized = normalizeMode(mode);
+    return normalized === 'cross' || normalized === 'i-warp' || normalized === 'i-flat';
+  }
+
+  function isIntentionalBrassModeActive() {
+    return isIntentionalBrassMode(gameMode);
+  }
+
   function isCrossLikeModeActive() {
     const mode = normalizeMode(gameMode);
-    return mode === 'cross' || mode === 'brass' || mode === 'warp' || mode === 'flat';
+    return mode === 'cross' || mode === 'brass' || mode === 'warp' || mode === 'i-warp' || mode === 'flat' || mode === 'i-flat';
   }
 
   function isTrueCrossModeActive() {
@@ -1487,12 +1498,17 @@
 
   function isNukeLikeModeActive() {
     const mode = normalizeMode(gameMode);
-    return mode === 'nuke' || mode === 'cross' || mode === 'brass' || mode === 'warp' || mode === 'flat';
+    return ['nuke', 'cross', 'brass', 'warp', 'i-warp', 'flat', 'i-flat'].includes(mode);
   }
 
   function isXbModeActive() {
     const mode = normalizeMode(gameMode);
     return mode === 'warp' || mode === 'flat';
+  }
+
+  function brassPipesDoubleCost() {
+    if (isIntentionalBrassMode(gameMode)) return true;
+    return isIntentionalBrassMode(selectedMode);
   }
 
   function formatModeText(mode) {
@@ -1511,7 +1527,7 @@
   function updatePlayBotAvailability(baseEnabled = true) {
     if (!playBotBtnEl) return;
     const normalized = normalizeMode(selectedMode);
-    const modeAllowsBot = normalized === 'flat' || isWarpLike(selectedMode);
+    const modeAllowsBot = ['flat', 'i-flat'].includes(normalized) || isWarpLike(selectedMode);
     const enabled = Boolean(baseEnabled && modeAllowsBot);
     playBotBtnEl.disabled = !enabled;
     playBotBtnEl.title = modeAllowsBot ? '' : 'Bots are unavailable in this mode';
@@ -3932,7 +3948,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     
     // Draw border box around play area (warp border handles inner toggle)
     drawPlayAreaBorder();
-    const overflowMode = ['overflow', 'nuke', 'cross', 'brass', 'go', 'warp', 'flat'].includes(normalizeMode(gameMode));
+    const overflowMode = ['overflow', 'nuke', 'cross', 'brass', 'go', 'warp', 'i-warp', 'flat', 'i-flat'].includes(normalizeMode(gameMode));
     
     // Show gold display when graph is being drawn and we have nodes/game data
     if (goldDisplay && nodes.size > 0) {
@@ -4123,7 +4139,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
             graphicsNodes.strokeCircle(nx, ny, r + 3);
 
             // show static, live-updating midpoint label
-            updateBridgeCostDisplay(firstNode, n, bridgePreviewWillBeBrass && isTrueCrossModeActive());
+            updateBridgeCostDisplay(firstNode, n, bridgePreviewWillBeBrass && brassPipesDoubleCost());
           }
 
       }
@@ -4215,7 +4231,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
             targetNode = hoveredNode;
           }
         }
-        updateBridgeCostDisplay(firstNode, targetNode, bridgePreviewWillBeBrass && isTrueCrossModeActive());
+        updateBridgeCostDisplay(firstNode, targetNode, bridgePreviewWillBeBrass && brassPipesDoubleCost());
       }
     }
     
@@ -4907,13 +4923,13 @@ function fallbackRemoveEdgesForNode(nodeId) {
     brassActivationDenied = false;
 
     const brassMode = isBrassModeActive();
-    const crossMode = isCrossModeActive();
+    const intentionalBrassMode = isIntentionalBrassModeActive();
     const xbMode = isXbModeActive();
 
     let wantBrass = false;
     if (brassMode) {
       wantBrass = !!node.isBrass;
-    } else if (crossMode) {
+    } else if (intentionalBrassMode) {
       wantBrass = !!useBrass;
     }
 
@@ -4950,7 +4966,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
       if (node) {
         if (bridgeFirstNode === null) {
           // Start bridge building from any node
-          const useBrassFirst = bridgeIsBrass && isCrossModeActive();
+          const useBrassFirst = bridgeIsBrass && isIntentionalBrassModeActive();
           if (useBrassFirst && node.owner !== myPlayerId) {
             showErrorMessage('Must control Brass Pipes', 'money');
             return true;
@@ -4969,9 +4985,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
             hideBridgeCostDisplay();
             return true;
           }
-          const modeIsCross = isTrueCrossModeActive();
           const modeIsXb = isXbModeActive();
-          const applyBrassCost = bridgePreviewWillBeBrass && modeIsCross;
+          const applyBrassCost = bridgePreviewWillBeBrass && brassPipesDoubleCost();
           if (modeIsXb && xbPreviewBlockedByBrass) {
             showErrorMessage('Cannot cross brass pipe');
             return true;
@@ -5821,7 +5836,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     }
 
     const useBrassPipe = bridgePreviewWillBeBrass;
-    const cost = calculateBridgeCost(sNode, tNode, bridgePreviewWillBeBrass && isTrueCrossModeActive(), warpPreference);
+    const cost = calculateBridgeCost(sNode, tNode, bridgePreviewWillBeBrass && brassPipesDoubleCost(), warpPreference);
     const canAfford = goldValue >= cost;
     let previewColor;
     if (useBrassPipe) {
