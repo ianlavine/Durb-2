@@ -68,6 +68,13 @@ class GraphState:
         self.bridge_cost_per_unit: float = BRIDGE_COST_PER_UNIT_DISTANCE
         self.bridge_build_ticks_per_unit: float = BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE
 
+        # Runtime rule configuration (overridden by game options)
+        self.screen_variant: str = "flat"
+        self.auto_brass_on_cross: bool = False
+        self.manual_brass_selection: bool = False
+        self.brass_double_cost: bool = False
+        self.mode_settings: Dict[str, Any] = {}
+
         # Replay helpers
         self.tick_count: int = 0
         self.pending_edge_removals: List[Dict[str, Any]] = []
@@ -367,6 +374,7 @@ class GraphState:
             "gameDuration": self.game_duration,
             "timerRemaining": timer_remaining,
             "mode": self.mode,
+            "modeSettings": dict(self.mode_settings or {}),
             "edgeWarp": edge_warp,
         }
 
@@ -428,6 +436,7 @@ class GraphState:
             "gameDuration": self.game_duration,
             "timerRemaining": timer_remaining,
             "mode": self.mode,
+            "modeSettings": dict(self.mode_settings or {}),
         }
 
         if removed_edge_events:
@@ -446,7 +455,7 @@ class GraphState:
         """
         node_max = getattr(self, "node_max_juice", get_node_max_juice(self.mode))
         normalized_mode = normalize_game_mode(self.mode)
-        is_overflow_mode = normalized_mode in {"overflow", "nuke", "cross", "brass", "go", "warp", "flat", "i-warp", "i-flat"}
+        is_overflow_mode = normalized_mode in {"overflow", "nuke", "cross", "brass-old", "go", "warp", "flat", "i-warp", "i-flat"}
         is_go_mode = normalized_mode == "go"
         for edge in self.edges.values():
             # Handle bridge build gating: while building, edge cannot be on/flowing
@@ -546,7 +555,7 @@ class GraphState:
 
         node_max = getattr(self, "node_max_juice", get_node_max_juice(self.mode))
         normalized_mode = normalize_game_mode(self.mode)
-        is_overflow_mode = normalized_mode in {"overflow", "nuke", "cross", "brass", "go", "warp", "flat", "i-warp", "i-flat"}
+        is_overflow_mode = normalized_mode in {"overflow", "nuke", "cross", "brass-old", "go", "warp", "flat", "i-warp", "i-flat"}
         overflow_ratio = get_overflow_juice_to_gold_ratio(self.mode)
         if self.pending_overflow_payouts:
             self.pending_overflow_payouts.clear()

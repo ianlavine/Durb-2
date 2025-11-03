@@ -44,6 +44,7 @@ class GameEngine:
         self,
         player_slots: List[Dict[str, Any]],
         mode: str = DEFAULT_GAME_MODE,
+        options: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Initialize a new game with the provided player configuration."""
         normalized_mode = normalize_game_mode(mode)
@@ -65,6 +66,8 @@ class GameEngine:
         self.state.bridge_build_ticks_per_unit = BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE
         self.state.eliminated_players.clear()
         self.state.pending_eliminations = []
+
+        self._configure_gameplay_options(normalized_mode, options)
 
         self._refresh_edge_geometry()
 
@@ -94,6 +97,62 @@ class GameEngine:
             self.state.player_auto_attack[player_id] = auto_attack
 
         self.game_active = True
+
+    def _configure_gameplay_options(
+        self,
+        normalized_mode: str,
+        options: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if not self.state:
+            return
+
+        screen_variant = "warp" if normalized_mode in {"warp-old", "warp", "i-warp"} else "flat"
+        auto_brass_on_cross = normalized_mode in {"warp", "flat"}
+        manual_brass_selection = normalized_mode in {"i-warp", "i-flat", "cross"}
+        brass_double_cost = manual_brass_selection or normalized_mode == "cross"
+        bridge_cost_override: Optional[float] = None
+
+        if isinstance(options, dict):
+            screen_option = str(options.get("screen", "")).strip().lower()
+            if screen_option in {"warp", "flat"}:
+                screen_variant = screen_option
+
+            brass_option = str(options.get("brass", "")).strip().lower()
+            if brass_option in {"cross", "right-click", "rightclick", "right_click"}:
+                manual_brass_selection = brass_option in {"right-click", "rightclick", "right_click"}
+                auto_brass_on_cross = brass_option == "cross"
+
+            bridge_cost_value = options.get("bridgeCost")
+            if isinstance(bridge_cost_value, str):
+                bridge_cost_value = bridge_cost_value.strip()
+            try:
+                parsed_cost = float(bridge_cost_value)
+            except (TypeError, ValueError):
+                parsed_cost = None
+            if parsed_cost is not None and parsed_cost > 0:
+                bridge_cost_override = parsed_cost
+
+        if bridge_cost_override is not None:
+            self.state.bridge_cost_per_unit = bridge_cost_override
+
+        brass_double_cost = manual_brass_selection or normalized_mode == "cross"
+
+        sanitized_options: Dict[str, Any] = {
+            "screen": screen_variant,
+            "brass": "right-click" if manual_brass_selection else "cross",
+            "bridgeCost": self.state.bridge_cost_per_unit,
+            "derivedMode": normalized_mode,
+        }
+        if isinstance(options, dict):
+            base_mode = options.get("baseMode")
+            if isinstance(base_mode, str):
+                sanitized_options["baseMode"] = base_mode.strip()
+
+        self.state.screen_variant = screen_variant
+        self.state.auto_brass_on_cross = auto_brass_on_cross
+        self.state.manual_brass_selection = manual_brass_selection
+        self.state.brass_double_cost = brass_double_cost
+        self.state.mode_settings = sanitized_options
 
     def is_game_active(self) -> bool:
         """Check if a game is currently active."""
@@ -151,6 +210,7 @@ class GameEngine:
         self.token_to_player_id.clear()
         self.player_id_to_token.clear()
         self.player_meta.clear()
+        self._configure_gameplay_options(DEFAULT_GAME_MODE, None)
         self._refresh_edge_geometry()
         return new_state, screen
     
@@ -328,7 +388,7 @@ class GameEngine:
             self.validate_player_can_act(player_id)
 
             current_mode = normalize_game_mode(getattr(self.state, "mode", DEFAULT_GAME_MODE))
-            if current_mode in {"nuke", "cross", "brass", "go", "warp", "flat", "i-warp", "i-flat"}:
+            if current_mode in {"nuke", "cross", "brass-old", "go", "warp", "flat", "i-warp", "i-flat"}:
                 raise GameValidationError("Edge reversal disabled in this mode")
 
             edge = self.validate_edge_exists(edge_id)
@@ -386,8 +446,10 @@ class GameEngine:
     def _is_warp_mode_active(self) -> bool:
         if not self.state:
             return False
+        if getattr(self.state, "screen_variant", None) == "warp":
+            return True
         current_mode = normalize_game_mode(getattr(self.state, "mode", DEFAULT_GAME_MODE))
-        return current_mode in {"warp-old", "warp", "i-warp", "sparse", "overflow", "nuke", "cross", "brass", "go"}
+        return current_mode in {"warp-old", "warp", "i-warp", "sparse", "overflow", "nuke", "cross", "brass-old", "go"}
 
     def _compute_warp_bounds(self) -> Optional[Dict[str, float]]:
         if not self._is_warp_mode_active():
@@ -718,11 +780,13 @@ class GameEngine:
 
             current_mode = normalize_game_mode(getattr(self.state, "mode", DEFAULT_GAME_MODE))
             is_cross_mode = current_mode == "cross"
-            is_brass_mode = current_mode == "brass"
-            is_intentional_brass_mode = current_mode in {"cross", "i-warp", "i-flat"}
-            is_auto_brass_mode = current_mode in {"warp", "flat"}
-            is_warp_variant_mode = current_mode in {"warp", "flat", "i-warp", "i-flat"}
-            is_cross_like_mode = current_mode in {"cross", "brass"}
+            is_brass_mode = current_mode == "brass-old"
+            auto_brass_on_cross = bool(getattr(self.state, "auto_brass_on_cross", current_mode in {"warp", "flat"}))
+            manual_brass_selection = bool(getattr(self.state, "manual_brass_selection", current_mode in {"i-warp", "i-flat", "cross"}))
+            brass_double_cost = bool(getattr(self.state, "brass_double_cost", manual_brass_selection or current_mode == "cross"))
+            screen_variant = getattr(self.state, "screen_variant", "warp" if current_mode in {"warp", "i-warp", "warp-old"} else "flat")
+            is_warp_variant_mode = auto_brass_on_cross or screen_variant == "warp" or current_mode in {"warp", "i-warp", "warp-old"}
+            is_cross_like_mode = current_mode in {"cross", "brass-old"}
 
             # Validate nodes
             from_node = self.validate_node_exists(from_node_id)
@@ -730,7 +794,7 @@ class GameEngine:
 
             if is_brass_mode:
                 normalized_pipe_type = "gold" if getattr(from_node, "node_type", "normal") == "brass" else "normal"
-            elif is_intentional_brass_mode:
+            elif is_cross_mode or manual_brass_selection:
                 normalized_pipe_type = "gold" if (pipe_type or "").lower() == "gold" else "normal"
             else:
                 normalized_pipe_type = "normal"
@@ -768,9 +832,8 @@ class GameEngine:
 
             # Calculate and validate gold using server-side formula
             actual_cost = self.calculate_bridge_cost(from_node, to_node, segments_override=candidate_segments)
-            if normalized_pipe_type == "gold":
-                if is_cross_mode or current_mode in {"i-warp", "i-flat"}:
-                    actual_cost *= 2
+            if normalized_pipe_type == "gold" and brass_double_cost:
+                actual_cost *= 2
             self.validate_sufficient_gold(player_id, actual_cost)
 
             # Check if edge already exists
@@ -818,7 +881,7 @@ class GameEngine:
                     if delayed_cross_removals:
                         if normalized_pipe_type == "gold":
                             pass
-                        elif is_auto_brass_mode:
+                        elif auto_brass_on_cross:
                             normalized_pipe_type = "gold"
                         else:
                             raise GameValidationError("Only brass pipes can cross others")

@@ -148,10 +148,22 @@
   let currentTargetNodeId = null; // The node currently being targeted (for visual indicator)
   let currentTargetSetTime = null; // Animation time when target was last set
   
+  const MODE_QUEUE_KEY = 'brass';
+  const DEFAULT_MODE_SETTINGS = {
+    screen: 'flat',
+    brass: 'cross',
+    bridgeCost: 1.0,
+  };
+
   let selectedPlayerCount = 2;
   let selectedMode = 'flat';
   let gameMode = 'flat';
-  let modeButtons = [];
+  let selectedSettings = { ...DEFAULT_MODE_SETTINGS };
+  let modeOptionsButton = null;
+  let modeOptionsPanel = null;
+  let modeSummaryEl = null;
+  let modeOptionButtons = [];
+  let modePanelOpen = false;
   const MODE_LABELS = {
     sparse: 'Sparse',
     brass: 'Brass',
@@ -163,6 +175,7 @@
     'warp-old': 'Warp (Old)',
     'i-warp': 'I-Warp',
     'i-flat': 'I-Flat',
+    'brass-old': 'Brass-Old',
     flat: 'Flat',
   };
   const DEFAULT_OVERFLOW_PENDING_GOLD_THRESHOLD = 10;
@@ -174,9 +187,108 @@
   const MONEY_SPEND_STROKE = '#4e2a10';
   const MONEY_GAIN_COLOR = '#ffd700';
 
+  function coerceBridgeCost(value) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) {
+      return numeric;
+    }
+    return DEFAULT_MODE_SETTINGS.bridgeCost;
+  }
+
+  function deriveModeFromSettings(settings = selectedSettings) {
+    if (!settings || typeof settings !== 'object') return 'flat';
+    const screen = typeof settings.screen === 'string' ? settings.screen.toLowerCase() : 'flat';
+    const brass = typeof settings.brass === 'string' ? settings.brass.toLowerCase() : 'cross';
+    if (screen === 'warp') {
+      return brass.startsWith('right') ? 'i-warp' : 'warp';
+    }
+    return brass.startsWith('right') ? 'i-flat' : 'flat';
+  }
+
+  function formatModeSettingsSummary(settings = selectedSettings) {
+    const screenLabel = (settings.screen === 'warp') ? 'Warp' : 'Flat';
+    const brassLabel = (settings.brass === 'right-click') ? 'Right-Click' : 'Cross';
+    const costValue = coerceBridgeCost(settings.bridgeCost);
+    const costLabel = Number(costValue).toFixed(1).replace(/\.0$/, '.0');
+    return `Screen: ${screenLabel} · Brass: ${brassLabel} · Bridge Cost: ${costLabel}`;
+  }
+
+  function updateModeSummaryDisplay(settings = selectedSettings) {
+    if (!modeSummaryEl) return;
+    modeSummaryEl.textContent = formatModeSettingsSummary(settings);
+  }
+
+  function updateModeOptionButtonStates() {
+    if (!Array.isArray(modeOptionButtons)) return;
+    const currentScreen = (selectedSettings.screen || 'flat').toLowerCase();
+    const currentBrass = (selectedSettings.brass || 'cross').toLowerCase();
+    const currentCost = Number(coerceBridgeCost(selectedSettings.bridgeCost));
+    modeOptionButtons.forEach((btn) => {
+      const setting = btn?.dataset?.setting;
+      const value = btn?.dataset?.value;
+      if (!setting || typeof value === 'undefined') {
+        btn.classList.remove('active');
+        return;
+      }
+      let isActive = false;
+      if (setting === 'screen') {
+        isActive = value.toLowerCase() === currentScreen;
+      } else if (setting === 'brass') {
+        const normalized = value.toLowerCase();
+        const target = currentBrass === 'right-click' ? 'right-click' : 'cross';
+        isActive = normalized === target;
+      } else if (setting === 'bridgeCost') {
+        isActive = Number(value) === currentCost;
+      }
+      btn.classList.toggle('active', isActive);
+    });
+  }
+
+  function applySelectedSettings(overrides = {}) {
+    const next = { ...selectedSettings };
+    if (Object.prototype.hasOwnProperty.call(overrides, 'screen')) {
+      const screen = typeof overrides.screen === 'string' ? overrides.screen.toLowerCase() : '';
+      next.screen = screen === 'warp' ? 'warp' : 'flat';
+    }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'brass')) {
+      const brass = typeof overrides.brass === 'string' ? overrides.brass.toLowerCase() : '';
+      next.brass = brass.startsWith('right') ? 'right-click' : 'cross';
+    }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'bridgeCost')) {
+      next.bridgeCost = coerceBridgeCost(overrides.bridgeCost);
+    } else {
+      next.bridgeCost = coerceBridgeCost(next.bridgeCost);
+    }
+
+    selectedSettings = next;
+    selectedMode = deriveModeFromSettings(selectedSettings);
+    updateModeSummaryDisplay(selectedSettings);
+    updateModeOptionButtonStates();
+    updatePlayBotAvailability(true);
+  }
+
+  function buildModeSettingsPayload() {
+    return {
+      screen: selectedSettings.screen,
+      brass: selectedSettings.brass,
+      bridgeCost: coerceBridgeCost(selectedSettings.bridgeCost),
+      baseMode: selectedMode,
+      derivedMode: selectedMode,
+    };
+  }
+
+  function syncSelectedSettingsFromPayload(payload) {
+    if (!payload || typeof payload !== 'object') return;
+    const overrides = {};
+    if (typeof payload.screen === 'string') overrides.screen = payload.screen;
+    if (typeof payload.brass === 'string') overrides.brass = payload.brass;
+    if (Object.prototype.hasOwnProperty.call(payload, 'bridgeCost')) overrides.bridgeCost = payload.bridgeCost;
+    applySelectedSettings(overrides);
+  }
+
   function isWarpLike(mode) {
     const normalized = normalizeMode(mode);
-    return ['warp-old', 'warp', 'i-warp', 'sparse', 'overflow', 'nuke', 'cross', 'brass', 'go'].includes(normalized);
+    return ['warp-old', 'warp', 'i-warp', 'sparse', 'overflow', 'nuke', 'cross', 'brass-old', 'go'].includes(normalized);
   }
 
   // Money transparency system
@@ -1471,7 +1583,7 @@
   }
 
   function isBrassModeActive() {
-    return normalizeMode(gameMode) === 'brass';
+    return normalizeMode(gameMode) === 'brass-old';
   }
 
   function isCrossModeActive() {
@@ -1489,7 +1601,7 @@
 
   function isCrossLikeModeActive() {
     const mode = normalizeMode(gameMode);
-    return mode === 'cross' || mode === 'brass' || mode === 'warp' || mode === 'i-warp' || mode === 'flat' || mode === 'i-flat';
+    return mode === 'cross' || mode === 'brass-old' || mode === 'warp' || mode === 'i-warp' || mode === 'flat' || mode === 'i-flat';
   }
 
   function isTrueCrossModeActive() {
@@ -1498,7 +1610,7 @@
 
   function isNukeLikeModeActive() {
     const mode = normalizeMode(gameMode);
-    return ['nuke', 'cross', 'brass', 'warp', 'i-warp', 'flat', 'i-flat'].includes(mode);
+    return ['nuke', 'cross', 'brass-old', 'warp', 'i-warp', 'flat', 'i-flat'].includes(mode);
   }
 
   function isXbModeActive() {
@@ -1515,15 +1627,6 @@
     return MODE_LABELS[normalizeMode(mode)] || MODE_LABELS.sparse;
   }
 
-  function updateModeButtonsUI() {
-    if (!modeButtons || !modeButtons.length) return;
-    modeButtons.forEach((btn) => {
-      const btnMode = normalizeMode(btn.getAttribute('data-mode'));
-      if (btnMode === selectedMode) btn.classList.add('active');
-      else btn.classList.remove('active');
-    });
-  }
-
   function updatePlayBotAvailability(baseEnabled = true) {
     if (!playBotBtnEl) return;
     const normalized = normalizeMode(selectedMode);
@@ -1535,21 +1638,8 @@
 
   function setSelectedMode(nextMode, options = {}) {
     const normalized = normalizeMode(nextMode);
-    if (!options.force && selectedMode === normalized) {
-      updateModeButtonsUI();
-      updatePlayBotAvailability(true);
-      return selectedMode;
-    }
     selectedMode = normalized;
-    updateModeButtonsUI();
     updatePlayBotAvailability(true);
-    const infoPanel = document.getElementById('modeInfoPanel');
-    const infoButton = document.getElementById('modeInfoButton');
-    if (infoPanel && infoButton) {
-      infoPanel.style.display = 'none';
-      infoPanel.setAttribute('aria-hidden', 'true');
-      infoButton.setAttribute('aria-expanded', 'false');
-    }
     return selectedMode;
   }
 
@@ -1845,7 +1935,6 @@ function clearBridgeSelection() {
     playBotBtnEl = document.getElementById('playBotBtn');
     const buttonContainer = document.querySelector('.button-container');
     const playerCountButtons = document.querySelectorAll('.player-count-option');
-    modeButtons = Array.from(document.querySelectorAll('.mode-option'));
     if (playerCountButtons && playerCountButtons.length) {
       playerCountButtons.forEach((btn) => {
         btn.addEventListener('click', () => {
@@ -1856,59 +1945,64 @@ function clearBridgeSelection() {
         });
       });
     }
+    modeOptionsButton = document.getElementById('modeOptionsButton');
+    modeOptionsPanel = document.getElementById('modeOptionsPanel');
+    modeSummaryEl = document.getElementById('modeSummary');
+    modeOptionButtons = Array.from(document.querySelectorAll('.mode-option-button'));
 
-    if (modeButtons && modeButtons.length) {
-      modeButtons.forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const nextMode = btn.getAttribute('data-mode');
-          setSelectedMode(nextMode);
+    if (modeOptionButtons.length) {
+      modeOptionButtons.forEach((btn) => {
+        btn.addEventListener('click', (event) => {
+          event.stopPropagation();
+          const setting = btn.getAttribute('data-setting');
+          const value = btn.getAttribute('data-value');
+          if (!setting || typeof value === 'undefined') return;
+          applySelectedSettings({ [setting]: value });
         });
       });
-      setSelectedMode(selectedMode, { force: true });
     }
 
-    const modeInfoButton = document.getElementById('modeInfoButton');
-    const modeInfoPanel = document.getElementById('modeInfoPanel');
-    if (modeInfoButton && modeInfoPanel && !modeInfoButton.dataset.bound) {
-      modeInfoButton.dataset.bound = 'true';
-      const hideModePanel = () => {
-        modeInfoPanel.style.display = 'none';
-        modeInfoPanel.setAttribute('aria-hidden', 'true');
-        modeInfoButton.setAttribute('aria-expanded', 'false');
-      };
-      const toggleModePanel = () => {
-        const isVisible = modeInfoPanel.style.display === 'block';
-        if (isVisible) {
-          hideModePanel();
-        } else {
-          modeInfoPanel.style.display = 'block';
-          modeInfoPanel.setAttribute('aria-hidden', 'false');
-          modeInfoButton.setAttribute('aria-expanded', 'true');
-        }
-      };
+    const closeModePanel = () => {
+      if (!modeOptionsPanel) return;
+      modeOptionsPanel.style.display = 'none';
+      modeOptionsPanel.setAttribute('aria-hidden', 'true');
+      if (modeOptionsButton) modeOptionsButton.setAttribute('aria-expanded', 'false');
+      modePanelOpen = false;
+    };
 
-      modeInfoButton.addEventListener('click', (event) => {
+    const openModePanel = () => {
+      if (!modeOptionsPanel) return;
+      modeOptionsPanel.style.display = 'flex';
+      modeOptionsPanel.setAttribute('aria-hidden', 'false');
+      if (modeOptionsButton) modeOptionsButton.setAttribute('aria-expanded', 'true');
+      modePanelOpen = true;
+    };
+
+    if (modeOptionsButton && modeOptionsPanel) {
+      modeOptionsButton.addEventListener('click', (event) => {
         event.stopPropagation();
-        toggleModePanel();
-      });
-
-      modeInfoButton.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter' || event.key === ' ' || event.key === 'Spacebar') {
-          event.preventDefault();
-          event.stopPropagation();
-          toggleModePanel();
-        }
-      });
-
-      modeInfoPanel.addEventListener('click', (event) => {
-        event.stopPropagation();
-      });
-
-      document.addEventListener('click', () => hideModePanel());
-      document.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape') hideModePanel();
+        if (modePanelOpen) closeModePanel();
+        else openModePanel();
       });
     }
+
+    if (modeOptionsPanel) {
+      modeOptionsPanel.addEventListener('click', (event) => {
+        event.stopPropagation();
+      });
+    }
+
+    document.addEventListener('click', () => {
+      if (modePanelOpen) closeModePanel();
+    });
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && modePanelOpen) {
+        closeModePanel();
+      }
+    });
+
+    applySelectedSettings({});
     
     if (playFriendsBtn) {
       playFriendsBtn.disabled = false;
@@ -1920,7 +2014,7 @@ function clearBridgeSelection() {
         if (ws && ws.readyState === WebSocket.OPEN) {
           showLobby();
           // Show selected player count immediately
-          setLobbyStatus(`Waiting for players to join... (${selectedPlayerCount}-player ${formatModeText(selectedMode)} game)`);
+          setLobbyStatus(`Waiting for players to join... (${selectedPlayerCount}-player Brass game · ${formatModeSettingsSummary()})`);
           // Hide both buttons when entering lobby
           if (buttonContainer) {
             buttonContainer.style.display = 'none';
@@ -1932,7 +2026,8 @@ function clearBridgeSelection() {
             token: localStorage.getItem('token') || null,
             autoExpand: persistentAutoExpand,
             playerCount: selectedPlayerCount,
-            mode: selectedMode,
+            mode: MODE_QUEUE_KEY,
+            settings: buildModeSettingsPayload(),
           }));
         }
       });
@@ -1948,7 +2043,7 @@ function clearBridgeSelection() {
         if (ws && ws.readyState === WebSocket.OPEN) {
           console.log(`Starting hard bot game in ${selectedMode} mode`);
           showLobby();
-          setLobbyStatus(`Starting hard bot game (${formatModeText(selectedMode)} mode)...`);
+          setLobbyStatus(`Starting hard bot game (${formatModeSettingsSummary()} rules)...`);
           // Hide buttons when starting bot game
           if (buttonContainer) {
             buttonContainer.style.display = 'none';
@@ -1957,7 +2052,8 @@ function clearBridgeSelection() {
             type: 'startBotGame',
             difficulty: 'hard',
             autoExpand: persistentAutoExpand,
-            mode: selectedMode,
+            mode: MODE_QUEUE_KEY,
+            settings: buildModeSettingsPayload(),
           }));
         }
       });
@@ -2704,6 +2800,22 @@ function clearBridgeSelection() {
     nodeJuiceTexts.clear();
 
     gameMode = normalizeMode(msg.mode || 'basic');
+    if (msg.modeSettings) {
+      syncSelectedSettingsFromPayload(msg.modeSettings);
+      selectedMode = deriveModeFromSettings(selectedSettings);
+      setSelectedMode(selectedMode, { force: true });
+    } else {
+      const inferred = {
+        screen: (gameMode === 'warp' || gameMode === 'i-warp') ? 'warp' : 'flat',
+        brass: (gameMode === 'i-warp' || gameMode === 'i-flat') ? 'right-click' : 'cross',
+      };
+      if (msg.settings && typeof msg.settings.bridgeCostPerUnit === 'number') {
+        inferred.bridgeCost = msg.settings.bridgeCostPerUnit;
+      }
+      applySelectedSettings(inferred);
+      selectedMode = deriveModeFromSettings(selectedSettings);
+      setSelectedMode(selectedMode, { force: true });
+    }
 
     // Clear any lingering edge flow labels between games
     edgeFlowTexts.forEach(text => {
@@ -3093,12 +3205,19 @@ function clearBridgeSelection() {
     showLobby();
     const count = Number.isFinite(msg.playerCount) ? msg.playerCount : selectedPlayerCount;
     const mode = normalizeMode(msg.mode || selectedMode);
-    setSelectedMode(mode, { force: true });
-    const modeLabel = formatModeText(mode);
-    if (msg.status === 'waiting') {
-      setLobbyStatus(`Waiting for players to join... (${count}-player ${modeLabel} game)`);
+    let summaryText = formatModeText(mode);
+    if (msg.modeSettings) {
+      syncSelectedSettingsFromPayload(msg.modeSettings);
+      summaryText = formatModeSettingsSummary();
     } else {
-      setLobbyStatus(`Starting ${count}-player ${modeLabel} game...`);
+      setSelectedMode(mode, { force: true });
+    }
+    const isBrassQueue = msg.mode === MODE_QUEUE_KEY || Boolean(msg.modeSettings);
+    const lobbyLabel = isBrassQueue ? `Brass game · ${summaryText}` : `${formatModeText(mode)} game`;
+    if (msg.status === 'waiting') {
+      setLobbyStatus(`Waiting for players to join... (${count}-player ${lobbyLabel})`);
+    } else {
+      setLobbyStatus(`Starting ${count}-player ${lobbyLabel}...`);
     }
     if (msg.token) localStorage.setItem('token', msg.token);
     // Hide the PLAY button while waiting
@@ -3948,7 +4067,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     
     // Draw border box around play area (warp border handles inner toggle)
     drawPlayAreaBorder();
-    const overflowMode = ['overflow', 'nuke', 'cross', 'brass', 'go', 'warp', 'i-warp', 'flat', 'i-flat'].includes(normalizeMode(gameMode));
+    const overflowMode = ['overflow', 'nuke', 'cross', 'brass-old', 'go', 'warp', 'i-warp', 'flat', 'i-flat'].includes(normalizeMode(gameMode));
     
     // Show gold display when graph is being drawn and we have nodes/game data
     if (goldDisplay && nodes.size > 0) {

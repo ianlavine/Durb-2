@@ -26,6 +26,7 @@ GAME_MODES: Tuple[str, ...] = (
     "overflow",
     "nuke",
     "cross",
+    "brass-old",
     "brass",
     "go",
 )
@@ -45,6 +46,7 @@ NODE_MAX_JUICE_BY_MODE: Dict[str, float] = {
     "overflow": 300.0,
     "nuke": 300.0,
     "cross": 300.0,
+    "brass-old": 300.0,
     "brass": 300.0,
     "go": 300.0,
 }
@@ -60,6 +62,7 @@ OVERFLOW_JUICE_TO_GOLD_RATIO_BY_MODE: Dict[str, float] = {
     "overflow": 15.0,
     "nuke": 15.0,
     "cross": 15.0,
+    "brass-old": 15.0,
     "brass": 15.0,
     "go": 30.0,
     "warp-old": 15.0,
@@ -83,6 +86,7 @@ GOLD_REWARD_FOR_NEUTRAL_CAPTURE_BY_MODE: Dict[str, float] = {
     "overflow": 10.0,
     "nuke": 10.0,
     "cross": 10.0,
+    "brass-old": 10.0,
     "brass": 10.0,
     "go": 10.0,
 }
@@ -111,6 +115,7 @@ BRIDGE_COST_PER_UNIT_DISTANCE_BY_MODE: Dict[str, float] = {
     "overflow": 1.0,
     "nuke": 1.0,
     "cross": 1.0,
+    "brass-old": 1.0,
     "brass": 1.0,
     "go": 1.0,
 }
@@ -135,6 +140,8 @@ def normalize_game_mode(value: str) -> str:
         lowered = "warp-old"
     if lowered == "xb":  # legacy alias now mapped to modern warp
         lowered = "warp"
+    if lowered == "brass":
+        lowered = "brass-old"
     return lowered if lowered in GAME_MODES else DEFAULT_GAME_MODE
 
 

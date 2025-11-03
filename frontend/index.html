@@ -507,15 +507,9 @@
         justify-content: flex-start;
       }
 
-      .mode-options {
-        display: flex;
-        gap: clamp(6px, 1vw, 12px);
-        flex-wrap: nowrap;
-        justify-content: center;
-      }
-
       .player-count-option,
-      .mode-option {
+      .mode-option-button,
+      .mode-options-toggle {
         font-size: 28px;
         padding: 10px 18px;
         border-radius: 8px;
@@ -526,52 +520,72 @@
         transition: transform 0.15s ease, border-color 0.15s ease;
       }
 
-      .mode-option {
+      .mode-option-button {
         flex: 1 1 0;
-        font-size: clamp(22px, 3vw, 28px);
+        font-size: clamp(22px, 3vw, 26px);
         padding: clamp(8px, 1.2vw, 10px) clamp(12px, 2.4vw, 18px);
         white-space: nowrap;
       }
 
       .player-count-option.active,
-      .mode-option.active {
+      .mode-option-button.active {
         border-color: #ffff00;
         transform: translateY(-4px);
         color: #ffff00;
       }
 
       .player-count-option:hover,
-      .mode-option:hover {
+      .mode-option-button:hover,
+      .mode-options-toggle:hover {
         border-color: #aaaaaa;
       }
 
-      .mode-info-panel {
+      .mode-selector {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+      }
+
+      .mode-summary {
+        font-family: monospace;
+        font-size: clamp(16px, 2vw, 20px);
+        color: #ddd;
+      }
+
+      .mode-options-panel {
         position: absolute;
         top: calc(100% + 12px);
-        left: 50%;
-        transform: translateX(-50%);
+        left: 0;
         display: none;
-        min-width: 220px;
-        max-width: 300px;
-        padding: 12px 16px;
+        min-width: clamp(260px, 30vw, 360px);
+        padding: 16px;
         border-radius: 12px;
         border: 1px solid rgba(255,255,255,0.15);
-        background: rgba(20, 20, 30, 0.92);
+        background: rgba(20, 20, 30, 0.95);
         box-shadow: 0 10px 24px rgba(0,0,0,0.45);
-        color: #f2f2f2;
-        font-family: "Fira Code", "Source Code Pro", monospace;
-        font-size: 15px;
+        z-index: 20;
+        gap: 12px;
+      }
+
+      .mode-option-group {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .mode-option-buttons {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      .mode-help {
+        margin: 8px 0 0;
+        font-size: 14px;
         line-height: 1.4;
-        text-align: left;
-        z-index: 30;
-      }
-
-      .mode-info-panel p {
-        margin: 0;
-      }
-
-      .mode-info-panel p + p {
-        margin-top: 8px;
+        color: #f0f0f0;
       }
 
 
@@ -692,21 +706,31 @@
             </div>
           </div>
           <div class="mode-selector">
-            <div class="mode-label-row">
-              <span class="selector-label">Mode</span>
-              <span id="modeInfoButton" class="mode-info" role="button" tabindex="0" aria-label="Explain game modes" aria-controls="modeInfoPanel" aria-expanded="false">ⓘ</span>
-            </div>
-            <div class="mode-options">
-              <button class="mode-option active" data-mode="flat">Flat</button>
-              <button class="mode-option" data-mode="i-flat">I-Flat</button>
-              <button class="mode-option" data-mode="warp">Warp</button>
-              <button class="mode-option" data-mode="i-warp">I-Warp</button>
-            </div>
-            <div id="modeInfoPanel" class="mode-info-panel" role="dialog" aria-hidden="true">
-              <p>Flat keeps the arena non-warping: bridges stop at the edges and there is no wrap preview.</p>
-              <p>I-Flat mirrors Flat but lets you start brass pipes with a right click; normal pipes are cheaper, and only intentional brass pipes may cross.</p>
-              <p>Warp enables wrap-around bridges and the purple border to show where exits and entries connect.</p>
-              <p>I-Warp keeps warp traversal but requires intentional brass pipes for crossings, with reduced normal pipe costs.</p>
+            <button id="modeOptionsButton" class="mode-options-toggle" aria-expanded="false">Modes ▾</button>
+            <div id="modeSummary" class="mode-summary" role="status" aria-live="polite"></div>
+            <div id="modeOptionsPanel" class="mode-options-panel" role="dialog" aria-hidden="true">
+              <div class="mode-option-group" data-setting-group="screen">
+                <span class="selector-label">Screen</span>
+                <div class="mode-option-buttons">
+                  <button class="mode-option-button active" data-setting="screen" data-value="flat">Flat</button>
+                  <button class="mode-option-button" data-setting="screen" data-value="warp">Warp</button>
+                </div>
+              </div>
+              <div class="mode-option-group" data-setting-group="brass">
+                <span class="selector-label">Brass</span>
+                <div class="mode-option-buttons">
+                  <button class="mode-option-button active" data-setting="brass" data-value="cross">Cross</button>
+                  <button class="mode-option-button" data-setting="brass" data-value="right-click">Right-Click</button>
+                </div>
+              </div>
+              <div class="mode-option-group" data-setting-group="bridgeCost">
+                <span class="selector-label">Bridge Cost</span>
+                <div class="mode-option-buttons">
+                  <button class="mode-option-button active" data-setting="bridgeCost" data-value="1.0">1.0</button>
+                  <button class="mode-option-button" data-setting="bridgeCost" data-value="0.7">0.7</button>
+                </div>
+              </div>
+              <p class="mode-help">Pick how the arena behaves: Screen sets wrap vs. flat geometry, Brass toggles automatic crossings or intentional right-click brass pipes, and Bridge Cost adjusts the price per unit.</p>
             </div>
           </div>
         </div>

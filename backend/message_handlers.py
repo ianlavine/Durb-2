@@ -109,6 +109,7 @@ class MessageRouter:
         requested_mode = str(msg.get("mode") or DEFAULT_GAME_MODE).strip().lower()
         game_modes = set(GAME_MODES)
         mode = requested_mode if requested_mode in game_modes else DEFAULT_GAME_MODE
+        mode_settings = self._sanitize_mode_settings(msg.get("settings"))
 
         lobbies: Dict[int, Dict[str, List[Dict[str, Any]]]] = server_context.setdefault("lobbies", {})
         lobby_modes = lobbies.setdefault(player_count, {m: [] for m in GAME_MODES})
@@ -128,6 +129,7 @@ class MessageRouter:
                 "joined_at": time.time(),
                 "guest_name": guest_name,
                 "mode": mode,
+                "settings": dict(mode_settings),
             }
         )
 
@@ -142,6 +144,7 @@ class MessageRouter:
                     "playerCount": player_count,
                     "guestName": guest_name,
                     "mode": mode,
+                    "modeSettings": mode_settings,
                 }
             )
         )
@@ -157,7 +160,8 @@ class MessageRouter:
 
         if len(lobby_queue) >= player_count:
             players = [lobby_queue.pop(0) for _ in range(player_count)]
-            await self._start_friend_game(players, player_count, mode, server_context)
+            host_settings = dict(players[0].get("settings", {})) if players else {}
+            await self._start_friend_game(players, player_count, mode, server_context, host_settings)
 
     async def handle_leave_lobby(
         self,
@@ -181,17 +185,80 @@ class MessageRouter:
         # Acknowledge (optional for frontend UX)
         await self._send_safe(websocket, json.dumps({"type": "lobbyLeft"}))
 
+    def _sanitize_mode_settings(self, payload: Any) -> Dict[str, Any]:
+        settings: Dict[str, Any] = {
+            "screen": "flat",
+            "brass": "cross",
+            "bridgeCost": 1.0,
+        }
+        if not isinstance(payload, dict):
+            return settings
+
+        screen_option = str(payload.get("screen", settings["screen"])).strip().lower()
+        if screen_option in {"warp", "flat"}:
+            settings["screen"] = screen_option
+
+        brass_option = str(payload.get("brass", settings["brass"])).strip().lower()
+        if brass_option in {"cross", "right-click", "rightclick", "right_click"}:
+            settings["brass"] = "right-click" if brass_option.startswith("right") else "cross"
+
+        bridge_cost_value = payload.get("bridgeCost", settings["bridgeCost"])
+        if isinstance(bridge_cost_value, str):
+            bridge_cost_value = bridge_cost_value.strip()
+        try:
+            parsed_cost = float(bridge_cost_value)
+        except (TypeError, ValueError):
+            parsed_cost = None
+        if parsed_cost is not None and parsed_cost > 0:
+            settings["bridgeCost"] = parsed_cost
+
+        base_mode = payload.get("baseMode")
+        if isinstance(base_mode, str):
+            settings["baseMode"] = base_mode.strip()
+
+        derived_mode = payload.get("derivedMode")
+        if isinstance(derived_mode, str):
+            settings["derivedMode"] = derived_mode.strip()
+
+        return settings
+
+    def _derive_mode_from_settings(self, settings: Dict[str, Any], fallback_mode: str) -> str:
+        fallback_normalized = normalize_game_mode(fallback_mode)
+
+        derived_mode = settings.get("derivedMode")
+        if isinstance(derived_mode, str):
+            normalized = normalize_game_mode(derived_mode)
+            if normalized in {"flat", "warp", "i-flat", "i-warp"}:
+                return normalized
+
+        screen_variant = str(settings.get("screen", "flat")).strip().lower()
+        brass_variant = str(settings.get("brass", "cross")).strip().lower()
+
+        if screen_variant == "warp":
+            return "i-warp" if brass_variant.startswith("right") else "warp"
+        if screen_variant == "flat":
+            return "i-flat" if brass_variant.startswith("right") else "flat"
+
+        return fallback_normalized
+
     async def _start_friend_game(
         self,
         players: List[Dict[str, Any]],
         player_count: int,
         mode: str,
         server_context: Dict[str, Any],
+        host_settings: Optional[Dict[str, Any]] = None,
     ) -> None:
         engine = GameEngine()
         color_pool = PLAYER_COLOR_SCHEMES[:player_count]
 
         sanitized_mode = mode if mode in GAME_MODES else DEFAULT_GAME_MODE
+        resolved_host_settings = dict(host_settings or {})
+        if not resolved_host_settings and players:
+            resolved_host_settings = dict(players[0].get("settings", {}))
+
+        actual_mode = self._derive_mode_from_settings(resolved_host_settings, sanitized_mode)
+        resolved_host_settings["derivedMode"] = actual_mode
 
         player_slots: List[Dict[str, Any]] = []
         auto_expand_state: Dict[str, bool] = {}
@@ -219,7 +286,7 @@ class MessageRouter:
             auto_attack_state[player["token"]] = auto_attack
             guest_names[player["token"]] = guest_name
 
-        engine.start_game(player_slots, mode=sanitized_mode)
+        engine.start_game(player_slots, mode=actual_mode, options=resolved_host_settings)
         game_id = uuid.uuid4().hex
 
         tick_interval = float(server_context.get("tick_interval", TICK_INTERVAL_SECONDS))
@@ -235,7 +302,8 @@ class MessageRouter:
             "auto_expand_state": auto_expand_state,
             "auto_attack_state": auto_attack_state,
             "guest_names": guest_names,
-            "mode": sanitized_mode,
+            "mode": actual_mode,
+            "mode_settings": dict(engine.state.mode_settings or {}),
         }
 
         games = server_context.setdefault("games", {})
@@ -870,7 +938,10 @@ class MessageRouter:
         difficulty = msg.get("difficulty", "easy")
         auto_expand = bool(msg.get("autoExpand", False))
         auto_attack = bool(msg.get("autoAttack", False))
-        mode = normalize_game_mode(msg.get("mode", DEFAULT_GAME_MODE))
+        raw_mode = msg.get("mode", DEFAULT_GAME_MODE)
+        mode_settings = self._sanitize_mode_settings(msg.get("settings"))
+        mode = self._derive_mode_from_settings(mode_settings, raw_mode)
+        mode_settings["derivedMode"] = mode
 
         success, error_msg = bot_game_manager.start_bot_game(
             token,
@@ -878,6 +949,7 @@ class MessageRouter:
             auto_expand,
             auto_attack,
             mode=mode,
+            options=mode_settings,
         )
         if not success:
             await self._send_safe(
