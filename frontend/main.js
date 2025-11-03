@@ -68,6 +68,23 @@
 
   const DOUBLE_CLICK_DELAY_MS = 220;
   const EDGE_REMOVAL_STEP_DURATION = 0.2; // seconds per triangle removal step
+  const EDGE_REMOVAL_ANIMATION_MODE = 'explosion'; // 'explosion' keeps triangles, 'classic' restores the legacy fade
+  const EDGE_REMOVAL_EXPLOSION_CONFIG = {
+    driftPixelsMin: 24,
+    driftPixelsMax: 56,
+    driftDurationMin: 0.45,
+    driftDurationMax: 0.9,
+    spinRotationsMin: 3.0,
+    spinRotationsMax: 7.0,
+    greyDelay: 0,
+    restDuration: 5.0,
+    fadeDuration: 0.6,
+    greyColor: 0xf0f0f0,
+    alphaDuringDriftStart: 0.55,
+    alphaDuringDriftEnd: 0.95,
+    alphaAtRest: 0.65,
+    driftLightenFactor: 0.25,
+  };
   let pendingSingleClickTimeout = null;
   let pendingSingleClickData = null;
 
@@ -1597,6 +1614,103 @@
     }
 
     return path;
+  }
+
+  function buildEdgeWorldPath(edge, fromNode, toNode, fromRadiusWorld, toRadiusWorld) {
+    const worldSegments = getEdgeWarpSegments(edge);
+    if (!worldSegments.length) return [];
+
+    const path = [];
+    for (const seg of worldSegments) {
+      const sx = Number(seg.sx);
+      const sy = Number(seg.sy);
+      const ex = Number(seg.ex);
+      const ey = Number(seg.ey);
+      if (![sx, sy, ex, ey].every((value) => Number.isFinite(value))) continue;
+      const dx = ex - sx;
+      const dy = ey - sy;
+      const length = Math.hypot(dx, dy);
+      if (length <= 1e-6) continue;
+      const ux = dx / length;
+      const uy = dy / length;
+      path.push({ sx, sy, ex, ey, length, ux, uy, angle: Math.atan2(uy, ux) });
+    }
+
+    if (!path.length) return [];
+
+    trimPathStart(path, fromRadiusWorld);
+    trimPathEnd(path, toRadiusWorld);
+
+    return path.filter((seg) => seg.length > 1e-6);
+  }
+
+  function trimPathStart(path, distance) {
+    let remaining = Math.max(0, Number(distance) || 0);
+    for (let i = 0; i < path.length && remaining > 0; ) {
+      const seg = path[i];
+      if (!seg || seg.length <= 0) {
+        path.splice(i, 1);
+        continue;
+      }
+      if (seg.length <= remaining + 1e-6) {
+        remaining -= seg.length;
+        path.splice(i, 1);
+        continue;
+      }
+      seg.sx += seg.ux * remaining;
+      seg.sy += seg.uy * remaining;
+      seg.length -= remaining;
+      remaining = 0;
+      i += 1;
+    }
+  }
+
+  function trimPathEnd(path, distance) {
+    let remaining = Math.max(0, Number(distance) || 0);
+    for (let i = path.length - 1; i >= 0 && remaining > 0; i--) {
+      const seg = path[i];
+      if (!seg || seg.length <= 0) {
+        path.splice(i, 1);
+        continue;
+      }
+      if (seg.length <= remaining + 1e-6) {
+        remaining -= seg.length;
+        path.splice(i, 1);
+        continue;
+      }
+      seg.ex -= seg.ux * remaining;
+      seg.ey -= seg.uy * remaining;
+      seg.length -= remaining;
+      remaining = 0;
+    }
+  }
+
+  function samplePointOnPath(path, distance) {
+    if (!Array.isArray(path) || !path.length) return null;
+    let remaining = Math.max(0, Number(distance) || 0);
+    for (let i = 0; i < path.length; i++) {
+      const seg = path[i];
+      if (!seg || seg.length <= 0) continue;
+      if (remaining <= seg.length || i === path.length - 1) {
+        const clamped = Math.min(seg.length, Math.max(0, remaining));
+        const x = seg.sx + seg.ux * clamped;
+        const y = seg.sy + seg.uy * clamped;
+        return { x, y, angle: seg.angle, seg };
+      }
+      remaining -= seg.length;
+    }
+    const last = path[path.length - 1];
+    return last ? { x: last.ex, y: last.ey, angle: last.angle, seg: last } : null;
+  }
+
+  function randomBetween(min, max) {
+    const a = Number(min);
+    const b = Number(max);
+    if (!Number.isFinite(a) && !Number.isFinite(b)) return 0;
+    if (!Number.isFinite(b)) return a;
+    if (!Number.isFinite(a)) return b;
+    if (b <= a) return a;
+    return a + Math.random() * (b - a);
   }
 
   function formatCost(value) {
@@ -3756,6 +3870,143 @@ function buildRemovalSteps(count) {
   return steps;
 }
 
+function createClassicRemoval(triangleCount) {
+  if (!Number.isFinite(triangleCount) || triangleCount <= 0) {
+    return null;
+  }
+  const steps = buildRemovalSteps(triangleCount);
+  if (!steps.length) {
+    return null;
+  }
+  return {
+    mode: 'classic',
+    startTime: animationTime,
+    stepDuration: EDGE_REMOVAL_STEP_DURATION,
+    steps,
+    hidden: new Array(triangleCount).fill(false),
+    hiddenCount: 0,
+    lastAppliedStep: -1,
+    triangleCount,
+    complete: false,
+  };
+}
+
+function createExplosionRemoval(edge, triangleCount, options = {}) {
+  if (!edge || !Number.isFinite(triangleCount) || triangleCount <= 0) {
+    return null;
+  }
+  const worldPath = Array.isArray(options.worldPath) ? options.worldPath : [];
+  if (!worldPath.length) {
+    return null;
+  }
+  const baseScale = (Number(options.baseScale) > 0) ? Number(options.baseScale) : 1;
+  const totalLength = Number(options.totalLength) || 0;
+  if (!(totalLength > 0)) {
+    return null;
+  }
+
+  const triWidth = Number(options.triWidth) || 12;
+  const triHeight = Number(options.triHeight) || 16;
+  const actualSpacingScreen = totalLength / triangleCount;
+  const actualSpacingWorld = actualSpacingScreen / baseScale;
+
+  const settings = EDGE_REMOVAL_EXPLOSION_CONFIG || {};
+  const driftPixelsMin = Number.isFinite(settings.driftPixelsMin) ? settings.driftPixelsMin : 24;
+  const driftPixelsMax = Number.isFinite(settings.driftPixelsMax) ? settings.driftPixelsMax : driftPixelsMin;
+  const driftDurationMin = Number.isFinite(settings.driftDurationMin) ? settings.driftDurationMin : 0.45;
+  const driftDurationMax = Number.isFinite(settings.driftDurationMax) ? settings.driftDurationMax : driftDurationMin;
+  const spinRotationsMin = Number.isFinite(settings.spinRotationsMin) ? settings.spinRotationsMin : 3;
+  const spinRotationsMax = Number.isFinite(settings.spinRotationsMax) ? settings.spinRotationsMax : spinRotationsMin;
+  const greyDelayDefault = Math.max(0, Number(settings.greyDelay) || 0);
+  const restDuration = Math.max(0, Number(settings.restDuration) || 5);
+  const fadeDuration = Math.max(0, Number(settings.fadeDuration) || 0.6);
+  const greyColor = Number.isFinite(settings.greyColor) ? settings.greyColor : 0xf0f0f0;
+  const driftAlphaStart = Number.isFinite(settings.alphaDuringDriftStart) ? settings.alphaDuringDriftStart : 0.55;
+  const driftAlphaEnd = Number.isFinite(settings.alphaDuringDriftEnd) ? settings.alphaDuringDriftEnd : 0.95;
+  const restAlpha = Number.isFinite(settings.alphaAtRest) ? settings.alphaAtRest : 0.65;
+  const driftLighten = Number.isFinite(settings.driftLightenFactor) ? settings.driftLightenFactor : 0.25;
+
+  const particles = [];
+  let maxDriftPhaseDuration = 0;
+  for (let i = 0; i < triangleCount; i++) {
+    const distanceWorld = (i + 0.5) * actualSpacingWorld;
+    const point = samplePointOnPath(worldPath, distanceWorld);
+    if (!point) continue;
+    const tangent = point.seg ? { x: point.seg.ux, y: point.seg.uy } : { x: Math.cos(point.angle), y: Math.sin(point.angle) };
+    let nx = -tangent.y;
+    let ny = tangent.x;
+    const tangentLen = Math.hypot(tangent.x, tangent.y) || 1;
+    const normalLen = Math.hypot(nx, ny) || 1;
+    const ux = tangent.x / tangentLen;
+    const uy = tangent.y / tangentLen;
+    nx /= normalLen;
+    ny /= normalLen;
+
+    const randomAngle = Math.random() * Math.PI * 2;
+    const randX = Math.cos(randomAngle);
+    const randY = Math.sin(randomAngle);
+    const normalSign = Math.random() < 0.5 ? -1 : 1;
+    const normalStrength = 0.5 + Math.random() * 0.8;
+    const tangentStrength = (Math.random() - 0.5) * 0.5;
+    let dirX = nx * normalStrength * normalSign + ux * tangentStrength + randX * 0.25;
+    let dirY = ny * normalStrength * normalSign + uy * tangentStrength + randY * 0.25;
+    const dirLen = Math.hypot(dirX, dirY) || 1;
+    dirX /= dirLen;
+    dirY /= dirLen;
+
+    const driftPixels = randomBetween(driftPixelsMin, driftPixelsMax);
+    const driftWorldDistance = driftPixels / baseScale;
+    const driftDuration = randomBetween(driftDurationMin, driftDurationMax);
+    const greyDelay = greyDelayDefault;
+    const driftPhaseDuration = driftDuration + greyDelay;
+    if (driftPhaseDuration > maxDriftPhaseDuration) {
+      maxDriftPhaseDuration = driftPhaseDuration;
+    }
+
+    const rotations = randomBetween(spinRotationsMin, spinRotationsMax);
+    const direction = Math.random() < 0.5 ? -1 : 1;
+    const spinAmount = direction * rotations * Math.PI * 2;
+
+    particles.push({
+      index: i,
+      startX: point.x,
+      startY: point.y,
+      startAngle: point.angle,
+      offsetX: dirX * driftWorldDistance,
+      offsetY: dirY * driftWorldDistance,
+      driftDuration: Math.max(0.05, driftDuration),
+      spinAmount,
+      greyDelay,
+      triWidth,
+      triHeight,
+    });
+  }
+
+  if (!particles.length) {
+    return null;
+  }
+
+  return {
+    mode: 'explosion',
+    startTime: animationTime,
+    triangleCount,
+    particles,
+    triWidth,
+    triHeight,
+    driftMaxDuration: maxDriftPhaseDuration,
+    restDuration,
+    fadeDuration,
+    greyColor,
+    actualSpacing: actualSpacingScreen,
+    totalLength,
+    driftAlphaStart,
+    driftAlphaEnd,
+    restAlpha,
+    driftLighten,
+    complete: false,
+  };
+}
+
 function beginEdgeRemoval(edgeId) {
   const id = toEdgeId(edgeId);
   if (id == null) return;
@@ -3770,10 +4021,11 @@ function beginEdgeRemoval(edgeId) {
   const sourceNode = nodes.get(edge.source);
   const targetNode = nodes.get(edge.target);
 
-  const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
-  const fromRadius = sourceNode ? Math.max(1, calculateNodeRadius(sourceNode, baseScale)) + 1 : 0;
-  const toRadius = targetNode ? Math.max(1, calculateNodeRadius(targetNode, baseScale)) + 1 : 0;
-  const path = buildEdgeScreenPath(edge, sourceNode, targetNode, fromRadius, toRadius);
+  let baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
+  if (!(baseScale > 0)) baseScale = 1;
+  const fromRadiusScreen = sourceNode ? Math.max(1, calculateNodeRadius(sourceNode, baseScale)) + 1 : 0;
+  const toRadiusScreen = targetNode ? Math.max(1, calculateNodeRadius(targetNode, baseScale)) + 1 : 0;
+  const path = buildEdgeScreenPath(edge, sourceNode, targetNode, fromRadiusScreen, toRadiusScreen);
 
   const totalLength = path.reduce((sum, seg) => sum + seg.length, 0);
   const triH = 16;
@@ -3784,20 +4036,33 @@ function beginEdgeRemoval(edgeId) {
     return;
   }
 
-  const removal = {
-    startTime: animationTime,
-    stepDuration: EDGE_REMOVAL_STEP_DURATION,
-    steps: buildRemovalSteps(triangleCount),
-    hidden: new Array(triangleCount).fill(false),
-    hiddenCount: 0,
-    lastAppliedStep: -1,
-    triangleCount,
-    complete: false,
-  };
+  const removalMode = EDGE_REMOVAL_ANIMATION_MODE === 'classic' ? 'classic' : 'explosion';
+  let removal = null;
 
-  if (!removal.steps.length) {
+  if (removalMode === 'explosion') {
+    const fromRadiusWorld = fromRadiusScreen / baseScale;
+    const toRadiusWorld = toRadiusScreen / baseScale;
+    const worldPath = buildEdgeWorldPath(edge, sourceNode, targetNode, fromRadiusWorld, toRadiusWorld);
+    removal = createExplosionRemoval(edge, triangleCount, {
+      worldPath,
+      baseScale,
+      totalLength,
+      triWidth: 12,
+      triHeight: triH,
+    });
+  }
+
+  if (!removal) {
+    removal = createClassicRemoval(triangleCount);
+  }
+
+  if (!removal) {
     forceRemoveEdge(id);
     return;
+  }
+
+  if (removal.mode === 'explosion') {
+    removal.baseColor = edgeColor(edge, sourceNode);
   }
 
   edge.on = false;
@@ -3826,7 +4091,7 @@ function beginEdgeRemoval(edgeId) {
 }
 
 function applyRemovalSteps(removal, triangleCount) {
-  if (!removal) return null;
+  if (!removal || removal.mode !== 'classic') return null;
 
   if (!Number.isFinite(triangleCount) || triangleCount <= 0) {
     removal.complete = true;
@@ -3902,6 +4167,12 @@ function updateEdgeRemovalAnimations() {
   const finalizeIds = [];
   let anyActive = false;
   edgeRemovalAnimations.forEach((removal, edgeId) => {
+    if (removal && removal.mode === 'explosion') {
+      const totalDuration = (removal.driftMaxDuration || 0) + (removal.restDuration || 0) + (removal.fadeDuration || 0);
+      if (totalDuration > 0 && animationTime - removal.startTime >= totalDuration) {
+        removal.complete = true;
+      }
+    }
     if (removal.complete) {
       finalizeIds.push(edgeId);
     } else {
@@ -6208,6 +6479,10 @@ function drawPreviewTriangle(cx, cy, baseW, height, angle, color, useBrass = fal
     const actualSpacing = totalLength / packedCount;
     
     const removal = e.removing || null;
+    if (removal && removal.mode === 'explosion') {
+      drawRemovalExplosion(e, removal, from);
+      return;
+    }
     const canLeftClick = !removal && (from && from.owner === myPlayerId) && !e.building;
     const canReverse = removal ? false : canReverseEdge(e);
 
@@ -6267,6 +6542,69 @@ function drawPreviewTriangle(cx, cy, baseW, height, angle, color, useBrass = fal
       const cx = segment.sx + segment.ux * remaining;
       const cy = segment.sy + segment.uy * remaining;
       drawTriangle(cx, cy, triW, triH, segment.angle, e, from, triangleOverrideColor, triangleHoverFlag, i, packedCount, removalHighlight);
+    }
+  }
+
+function drawRemovalExplosion(edge, removal, fromNode) {
+    if (!removal || removal.mode !== 'explosion') return;
+    const particles = removal.particles;
+    if (!Array.isArray(particles) || !particles.length) return;
+
+    const now = animationTime;
+    const elapsed = now - removal.startTime;
+    const baseColor = Number.isFinite(removal.baseColor) ? removal.baseColor : edgeColor(edge, fromNode);
+    const greyColor = Number.isFinite(removal.greyColor) ? removal.greyColor : 0xf0f0f0;
+    const fadeStartTime = removal.startTime + (Number(removal.driftMaxDuration) || 0) + (Number(removal.restDuration) || 0);
+    const fadeEndTime = fadeStartTime + (Number(removal.fadeDuration) || 0);
+    const pipeType = edge?.pipeType || 'normal';
+    const outlineColor = pipeType === 'gold' ? BRASS_PIPE_OUTLINE_COLOR : 0x000000;
+    const driftAlphaStart = Number.isFinite(removal.driftAlphaStart) ? removal.driftAlphaStart : 0.6;
+    const driftAlphaEnd = Number.isFinite(removal.driftAlphaEnd) ? removal.driftAlphaEnd : 0.95;
+    const restAlpha = Number.isFinite(removal.restAlpha) ? removal.restAlpha : 0.65;
+    const driftLighten = Math.max(0, Number(removal.driftLighten) || 0.25);
+
+    for (const particle of particles) {
+      if (!particle) continue;
+      const driftDuration = Math.max(0.1, Number(particle.driftDuration) || 0.5);
+      const greyDelay = Math.max(0, Number(particle.greyDelay) || 0);
+      const driftPhase = driftDuration + greyDelay;
+      const driftProgress = Math.min(1, Math.max(0, elapsed / Math.max(1e-6, driftDuration)));
+      const easedDrift = easeOutCubic(driftProgress);
+      const currentX = (Number(particle.startX) || 0) + (Number(particle.offsetX) || 0) * easedDrift;
+      const currentY = (Number(particle.startY) || 0) + (Number(particle.offsetY) || 0) * easedDrift;
+
+      const spinAmount = Number(particle.spinAmount) || 0;
+      const spinProgress = easeOutCubic(Math.min(1, Math.max(0, elapsed / driftDuration)));
+      let angle = Number(particle.startAngle) || 0;
+      angle += spinAmount * spinProgress;
+
+      let color = baseColor;
+      let alpha = 0.9;
+
+      if (elapsed >= driftPhase) {
+        color = greyColor;
+        alpha = restAlpha;
+      } else {
+        // Lighten slightly while drifting to emphasize motion
+        color = lerpColor(baseColor, greyColor, Math.min(1, driftProgress * driftLighten));
+        alpha = driftAlphaStart + (driftAlphaEnd - driftAlphaStart) * driftProgress;
+      }
+
+      if (fadeEndTime > fadeStartTime && now >= fadeStartTime) {
+        const fadeProgress = Math.min(1, (now - fadeStartTime) / (fadeEndTime - fadeStartTime));
+        alpha *= (1 - fadeProgress);
+      }
+
+      if (alpha <= 0.01) continue;
+
+      const [screenX, screenY] = worldToScreen(currentX, currentY);
+      const triWidth = Number(particle.triWidth) || 12;
+      const triHeight = Number(particle.triHeight) || 16;
+      drawExplosionTriangle(screenX, screenY, triWidth, triHeight, angle, color, alpha, outlineColor);
+    }
+
+    if (fadeEndTime > fadeStartTime && now >= fadeEndTime) {
+      removal.complete = true;
     }
   }
 
@@ -6344,6 +6682,39 @@ function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, 
       graphicsEdges.lineStyle(2, color, 1);
       graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
     }
+  }
+
+  function drawExplosionTriangle(cx, cy, baseW, height, angle, color, alpha, outlineColor) {
+    const halfW = baseW / 2;
+    const p1 = rotatePoint(cx + height / 2, cy, cx, cy, angle);
+    const p2 = rotatePoint(cx - height / 2, cy - halfW, cx, cy, angle);
+    const p3 = rotatePoint(cx - height / 2, cy + halfW, cx, cy, angle);
+
+    graphicsEdges.fillStyle(color, Math.max(0, Math.min(1, alpha)));
+    graphicsEdges.fillTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
+    const outlineAlpha = Math.max(0, Math.min(1, alpha * 0.9));
+    graphicsEdges.lineStyle(2, outlineColor, outlineAlpha);
+    graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
+  }
+
+  function easeOutCubic(t) {
+    const clamped = Math.max(0, Math.min(1, t));
+    const inv = 1 - clamped;
+    return 1 - inv * inv * inv;
+  }
+
+  function lerpColor(colorA, colorB, t) {
+    const clamped = Math.max(0, Math.min(1, t));
+    const aR = (colorA >> 16) & 0xFF;
+    const aG = (colorA >> 8) & 0xFF;
+    const aB = colorA & 0xFF;
+    const bR = (colorB >> 16) & 0xFF;
+    const bG = (colorB >> 8) & 0xFF;
+    const bB = colorB & 0xFF;
+    const r = Math.round(aR + (bR - aR) * clamped);
+    const g = Math.round(aG + (bG - aG) * clamped);
+    const b = Math.round(aB + (bB - aB) * clamped);
+    return (r << 16) | (g << 8) | b;
   }
 
   function edgeColor(e, fromNodeOrNull) {

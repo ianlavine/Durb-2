@@ -1317,6 +1317,7 @@ class MessageRouter:
                 "auto_attack": auto_attack_map,
                 "guest_names": guest_name_map,
                 "mode": game_info.get("mode", DEFAULT_GAME_MODE),
+                "mode_settings": dict(game_info.get("mode_settings") or {}),
             }
 
             # Notify clients that postgame rematch is available
@@ -1372,6 +1373,7 @@ class MessageRouter:
         if len(tokens) > 0 and len(votes) == len(tokens):
             # Build players array for _start_friend_game
             mode = str(group.get("mode", DEFAULT_GAME_MODE))
+            host_settings = dict(group.get("mode_settings") or {})
             players = []
             for t in tokens:
                 players.append({
@@ -1384,7 +1386,7 @@ class MessageRouter:
                 })
             # Remove group before starting to avoid reentrancy issues
             groups.pop(group_id, None)
-            await self._start_friend_game(players, len(players), mode, server_context)
+            await self._start_friend_game(players, len(players), mode, server_context, host_settings)
 
     async def handle_postgame_quit(
         self,
