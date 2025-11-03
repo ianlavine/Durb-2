@@ -152,6 +152,7 @@
   const DEFAULT_MODE_SETTINGS = {
     screen: 'flat',
     brass: 'cross',
+    brassStart: 'owned',
     bridgeCost: 1.0,
   };
 
@@ -164,6 +165,11 @@
   let modeSummaryEl = null;
   let modeOptionButtons = [];
   let modePanelOpen = false;
+  let bridgeCostSlider = null;
+  let bridgeCostValueLabel = null;
+  const BRIDGE_COST_MIN = 0.5;
+  const BRIDGE_COST_MAX = 1.0;
+  const BRIDGE_COST_STEP = 0.1;
   const MODE_LABELS = {
     sparse: 'Sparse',
     brass: 'Brass',
@@ -190,7 +196,8 @@
   function coerceBridgeCost(value) {
     const numeric = Number(value);
     if (Number.isFinite(numeric) && numeric > 0) {
-      return numeric;
+      const clamped = Math.min(BRIDGE_COST_MAX, Math.max(BRIDGE_COST_MIN, numeric));
+      return Math.round(clamped / BRIDGE_COST_STEP) * BRIDGE_COST_STEP;
     }
     return DEFAULT_MODE_SETTINGS.bridgeCost;
   }
@@ -208,20 +215,29 @@
   function formatModeSettingsSummary(settings = selectedSettings) {
     const screenLabel = (settings.screen === 'warp') ? 'Warp' : 'Flat';
     const brassLabel = (settings.brass === 'right-click') ? 'Right-Click' : 'Cross';
-    const costValue = coerceBridgeCost(settings.bridgeCost);
-    const costLabel = Number(costValue).toFixed(1).replace(/\.0$/, '.0');
-    return `Screen: ${screenLabel} · Brass: ${brassLabel} · Bridge Cost: ${costLabel}`;
+    const startLabel = (settings.brassStart === 'anywhere') ? 'Anywhere' : 'Owned';
+    const costLabel = coerceBridgeCost(settings.bridgeCost).toFixed(1);
+    return `${screenLabel} · ${brassLabel} · ${startLabel} · ${costLabel}`;
   }
 
   function updateModeSummaryDisplay(settings = selectedSettings) {
     if (!modeSummaryEl) return;
-    modeSummaryEl.textContent = formatModeSettingsSummary(settings);
+    if (modePanelOpen) {
+      modeSummaryEl.textContent = formatModeSettingsSummary(settings);
+      modeSummaryEl.style.display = 'block';
+      modeSummaryEl.setAttribute('aria-hidden', 'false');
+    } else {
+      modeSummaryEl.textContent = '';
+      modeSummaryEl.style.display = 'none';
+      modeSummaryEl.setAttribute('aria-hidden', 'true');
+    }
   }
 
   function updateModeOptionButtonStates() {
     if (!Array.isArray(modeOptionButtons)) return;
     const currentScreen = (selectedSettings.screen || 'flat').toLowerCase();
     const currentBrass = (selectedSettings.brass || 'cross').toLowerCase();
+    const currentStart = (selectedSettings.brassStart || 'owned').toLowerCase();
     const currentCost = Number(coerceBridgeCost(selectedSettings.bridgeCost));
     modeOptionButtons.forEach((btn) => {
       const setting = btn?.dataset?.setting;
@@ -236,6 +252,10 @@
       } else if (setting === 'brass') {
         const normalized = value.toLowerCase();
         const target = currentBrass === 'right-click' ? 'right-click' : 'cross';
+        isActive = normalized === target;
+      } else if (setting === 'brassStart') {
+        const normalized = value.toLowerCase();
+        const target = currentStart === 'anywhere' ? 'anywhere' : 'owned';
         isActive = normalized === target;
       } else if (setting === 'bridgeCost') {
         isActive = Number(value) === currentCost;
@@ -254,6 +274,10 @@
       const brass = typeof overrides.brass === 'string' ? overrides.brass.toLowerCase() : '';
       next.brass = brass.startsWith('right') ? 'right-click' : 'cross';
     }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'brassStart')) {
+      const start = typeof overrides.brassStart === 'string' ? overrides.brassStart.toLowerCase() : '';
+      next.brassStart = start === 'anywhere' ? 'anywhere' : 'owned';
+    }
     if (Object.prototype.hasOwnProperty.call(overrides, 'bridgeCost')) {
       next.bridgeCost = coerceBridgeCost(overrides.bridgeCost);
     } else {
@@ -264,6 +288,7 @@
     selectedMode = deriveModeFromSettings(selectedSettings);
     updateModeSummaryDisplay(selectedSettings);
     updateModeOptionButtonStates();
+    syncBridgeCostSlider();
     updatePlayBotAvailability(true);
   }
 
@@ -271,7 +296,8 @@
     return {
       screen: selectedSettings.screen,
       brass: selectedSettings.brass,
-      bridgeCost: coerceBridgeCost(selectedSettings.bridgeCost),
+      brassStart: selectedSettings.brassStart,
+      bridgeCost: Number(coerceBridgeCost(selectedSettings.bridgeCost).toFixed(1)),
       baseMode: selectedMode,
       derivedMode: selectedMode,
     };
@@ -282,8 +308,24 @@
     const overrides = {};
     if (typeof payload.screen === 'string') overrides.screen = payload.screen;
     if (typeof payload.brass === 'string') overrides.brass = payload.brass;
+    if (typeof payload.brassStart === 'string') overrides.brassStart = payload.brassStart;
     if (Object.prototype.hasOwnProperty.call(payload, 'bridgeCost')) overrides.bridgeCost = payload.bridgeCost;
     applySelectedSettings(overrides);
+  }
+
+  function syncBridgeCostSlider() {
+    if (!bridgeCostSlider || !bridgeCostValueLabel) return;
+    const value = Math.max(
+      BRIDGE_COST_MIN,
+      Math.min(BRIDGE_COST_MAX, coerceBridgeCost(selectedSettings.bridgeCost))
+    );
+    bridgeCostSlider.value = value.toFixed(1);
+    bridgeCostValueLabel.textContent = value.toFixed(1);
+  }
+
+  function brassRequiresOwnedStart() {
+    if (!isCrossLikeModeActive() && !isIntentionalBrassModeActive()) return true;
+    return (selectedSettings.brassStart || 'owned') !== 'anywhere';
   }
 
   function isWarpLike(mode) {
@@ -1949,6 +1991,8 @@ function clearBridgeSelection() {
     modeOptionsPanel = document.getElementById('modeOptionsPanel');
     modeSummaryEl = document.getElementById('modeSummary');
     modeOptionButtons = Array.from(document.querySelectorAll('.mode-option-button'));
+    bridgeCostSlider = document.getElementById('bridgeCostSlider');
+    bridgeCostValueLabel = document.getElementById('bridgeCostValue');
 
     if (modeOptionButtons.length) {
       modeOptionButtons.forEach((btn) => {
@@ -1962,12 +2006,27 @@ function clearBridgeSelection() {
       });
     }
 
+    if (bridgeCostSlider) {
+      bridgeCostSlider.min = String(BRIDGE_COST_MIN);
+      bridgeCostSlider.max = String(BRIDGE_COST_MAX);
+      bridgeCostSlider.step = String(BRIDGE_COST_STEP);
+      bridgeCostSlider.addEventListener('input', (event) => {
+        const sliderValue = Number(event.target.value);
+        applySelectedSettings({ bridgeCost: sliderValue });
+      });
+      bridgeCostSlider.addEventListener('change', (event) => {
+        const sliderValue = Number(event.target.value);
+        applySelectedSettings({ bridgeCost: sliderValue });
+      });
+    }
+
     const closeModePanel = () => {
       if (!modeOptionsPanel) return;
       modeOptionsPanel.style.display = 'none';
       modeOptionsPanel.setAttribute('aria-hidden', 'true');
       if (modeOptionsButton) modeOptionsButton.setAttribute('aria-expanded', 'false');
       modePanelOpen = false;
+      updateModeSummaryDisplay(selectedSettings);
     };
 
     const openModePanel = () => {
@@ -1976,6 +2035,7 @@ function clearBridgeSelection() {
       modeOptionsPanel.setAttribute('aria-hidden', 'false');
       if (modeOptionsButton) modeOptionsButton.setAttribute('aria-expanded', 'true');
       modePanelOpen = true;
+      updateModeSummaryDisplay(selectedSettings);
     };
 
     if (modeOptionsButton && modeOptionsPanel) {
@@ -2041,7 +2101,7 @@ function clearBridgeSelection() {
           return;
         }
         if (ws && ws.readyState === WebSocket.OPEN) {
-          console.log(`Starting hard bot game in ${selectedMode} mode`);
+          console.log(`Starting hard bot game with ${formatModeSettingsSummary()} options`);
           showLobby();
           setLobbyStatus(`Starting hard bot game (${formatModeSettingsSummary()} rules)...`);
           // Hide buttons when starting bot game
@@ -5052,7 +5112,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
       wantBrass = !!useBrass;
     }
 
-    if (wantBrass && node.owner !== myPlayerId) {
+    if (wantBrass && brassRequiresOwnedStart() && node.owner !== myPlayerId) {
       showErrorMessage('Must control Brass Pipes', 'money');
       brassActivationDenied = true;
       return false;
@@ -5086,7 +5146,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
         if (bridgeFirstNode === null) {
           // Start bridge building from any node
           const useBrassFirst = bridgeIsBrass && isIntentionalBrassModeActive();
-          if (useBrassFirst && node.owner !== myPlayerId) {
+          if (useBrassFirst && brassRequiresOwnedStart() && node.owner !== myPlayerId) {
             showErrorMessage('Must control Brass Pipes', 'money');
             return true;
           }
@@ -5110,7 +5170,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
             showErrorMessage('Cannot cross brass pipe');
             return true;
           }
-          if (modeIsXb && bridgePreviewWillBeBrass) {
+          if (modeIsXb && bridgePreviewWillBeBrass && brassRequiresOwnedStart()) {
             const firstOwner = firstNode.owner;
             if (firstOwner !== myPlayerId) {
               showErrorMessage('Must control Brass Pipes', 'money');

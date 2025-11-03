@@ -422,7 +422,7 @@
         display: flex;
         flex-wrap: wrap;
         justify-content: flex-start;
-        align-items: flex-start;
+        align-items: flex-end;
         gap: 20px;
         width: 100%;
         max-width: 640px;
@@ -446,6 +446,7 @@
         align-items: center;
         justify-items: center;
         text-align: center;
+        align-self: flex-end;
       }
 
       .player-count-selector .selector-label {
@@ -544,14 +545,19 @@
         position: relative;
         display: flex;
         flex-direction: column;
-        align-items: flex-start;
+        align-items: flex-end;
         gap: 8px;
+        margin-left: auto;
+        max-width: none;
+        flex: 0 0 auto;
       }
 
       .mode-summary {
         font-family: monospace;
         font-size: clamp(16px, 2vw, 20px);
         color: #ddd;
+        text-align: right;
+        align-self: flex-end;
       }
 
       .mode-options-panel {
@@ -581,11 +587,29 @@
         flex-wrap: wrap;
       }
 
-      .mode-help {
-        margin: 8px 0 0;
-        font-size: 14px;
-        line-height: 1.4;
-        color: #f0f0f0;
+      .bridge-cost-group {
+        width: 100%;
+      }
+
+      .bridge-cost-slider {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        width: 100%;
+      }
+
+      .bridge-cost-slider input[type="range"] {
+        flex: 1;
+        accent-color: #ffff00;
+      }
+
+      .bridge-cost-slider span {
+        font-family: monospace;
+        min-width: 48px;
+        text-align: right;
+        font-size: clamp(20px, 2.6vw, 26px);
+        color: #ffffff;
+        font-weight: 600;
       }
 
 
@@ -706,7 +730,7 @@
             </div>
           </div>
           <div class="mode-selector">
-            <button id="modeOptionsButton" class="mode-options-toggle" aria-expanded="false">Modes ▾</button>
+            <button id="modeOptionsButton" class="mode-options-toggle" aria-expanded="false">Options ▾</button>
             <div id="modeSummary" class="mode-summary" role="status" aria-live="polite"></div>
             <div id="modeOptionsPanel" class="mode-options-panel" role="dialog" aria-hidden="true">
               <div class="mode-option-group" data-setting-group="screen">
@@ -723,14 +747,20 @@
                   <button class="mode-option-button" data-setting="brass" data-value="right-click">Right-Click</button>
                 </div>
               </div>
-              <div class="mode-option-group" data-setting-group="bridgeCost">
-                <span class="selector-label">Bridge Cost</span>
+              <div class="mode-option-group" data-setting-group="brassStart">
+                <span class="selector-label">Brass Start</span>
                 <div class="mode-option-buttons">
-                  <button class="mode-option-button active" data-setting="bridgeCost" data-value="1.0">1.0</button>
-                  <button class="mode-option-button" data-setting="bridgeCost" data-value="0.7">0.7</button>
+                  <button class="mode-option-button active" data-setting="brassStart" data-value="owned">Owned</button>
+                  <button class="mode-option-button" data-setting="brassStart" data-value="anywhere">Anywhere</button>
                 </div>
               </div>
-              <p class="mode-help">Pick how the arena behaves: Screen sets wrap vs. flat geometry, Brass toggles automatic crossings or intentional right-click brass pipes, and Bridge Cost adjusts the price per unit.</p>
+              <div class="mode-option-group bridge-cost-group" data-setting-group="bridgeCost">
+                <span class="selector-label">Bridge Cost</span>
+                <div class="bridge-cost-slider">
+                  <input type="range" id="bridgeCostSlider" min="0.5" max="1" step="0.1" value="1.0" aria-label="Bridge cost multiplier" />
+                  <span id="bridgeCostValue">1.0</span>
+                </div>
+              </div>
             </div>
           </div>
         </div>

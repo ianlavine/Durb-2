@@ -110,6 +110,7 @@ class GameEngine:
         auto_brass_on_cross = normalized_mode in {"warp", "flat"}
         manual_brass_selection = normalized_mode in {"i-warp", "i-flat", "cross"}
         brass_double_cost = manual_brass_selection or normalized_mode == "cross"
+        allow_brass_start_anywhere = False
         bridge_cost_override: Optional[float] = None
 
         if isinstance(options, dict):
@@ -122,6 +123,10 @@ class GameEngine:
                 manual_brass_selection = brass_option in {"right-click", "rightclick", "right_click"}
                 auto_brass_on_cross = brass_option == "cross"
 
+            brass_start_option = str(options.get("brassStart", "")).strip().lower()
+            if brass_start_option in {"owned", "anywhere"}:
+                allow_brass_start_anywhere = brass_start_option == "anywhere"
+
             bridge_cost_value = options.get("bridgeCost")
             if isinstance(bridge_cost_value, str):
                 bridge_cost_value = bridge_cost_value.strip()
@@ -133,13 +138,15 @@ class GameEngine:
                 bridge_cost_override = parsed_cost
 
         if bridge_cost_override is not None:
-            self.state.bridge_cost_per_unit = bridge_cost_override
+            clamped_cost = max(0.5, min(1.0, float(bridge_cost_override)))
+            self.state.bridge_cost_per_unit = round(clamped_cost, 1)
 
         brass_double_cost = manual_brass_selection or normalized_mode == "cross"
 
         sanitized_options: Dict[str, Any] = {
             "screen": screen_variant,
             "brass": "right-click" if manual_brass_selection else "cross",
+            "brassStart": "anywhere" if allow_brass_start_anywhere else "owned",
             "bridgeCost": self.state.bridge_cost_per_unit,
             "derivedMode": normalized_mode,
         }
@@ -152,6 +159,7 @@ class GameEngine:
         self.state.auto_brass_on_cross = auto_brass_on_cross
         self.state.manual_brass_selection = manual_brass_selection
         self.state.brass_double_cost = brass_double_cost
+        self.state.allow_brass_start_anywhere = allow_brass_start_anywhere
         self.state.mode_settings = sanitized_options
 
     def is_game_active(self) -> bool:
@@ -799,7 +807,9 @@ class GameEngine:
             else:
                 normalized_pipe_type = "normal"
 
-            if normalized_pipe_type == "gold" and from_node.owner != player_id:
+            allow_brass_anywhere = bool(getattr(self.state, "allow_brass_start_anywhere", False))
+
+            if normalized_pipe_type == "gold" and from_node.owner != player_id and not allow_brass_anywhere:
                 raise GameValidationError("Must control Brass Pipes")
 
             if from_node_id == to_node_id:
@@ -930,7 +940,11 @@ class GameEngine:
                         # Should not happen because blocking_edges would have triggered, but guard anyway
                         raise GameValidationError("Only golden pipes can cross others")
 
-            if normalized_pipe_type == "gold" and from_node.owner != player_id:
+            if (
+                normalized_pipe_type == "gold"
+                and from_node.owner != player_id
+                and not allow_brass_anywhere
+            ):
                 raise GameValidationError("Must control Brass Pipes")
 
             # Create the edge (always one-way from source to target)

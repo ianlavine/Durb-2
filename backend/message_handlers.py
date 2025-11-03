@@ -189,6 +189,7 @@ class MessageRouter:
         settings: Dict[str, Any] = {
             "screen": "flat",
             "brass": "cross",
+            "brassStart": "owned",
             "bridgeCost": 1.0,
         }
         if not isinstance(payload, dict):
@@ -202,6 +203,10 @@ class MessageRouter:
         if brass_option in {"cross", "right-click", "rightclick", "right_click"}:
             settings["brass"] = "right-click" if brass_option.startswith("right") else "cross"
 
+        brass_start_option = str(payload.get("brassStart", settings["brassStart"])).strip().lower()
+        if brass_start_option in {"owned", "anywhere"}:
+            settings["brassStart"] = "anywhere" if brass_start_option == "anywhere" else "owned"
+
         bridge_cost_value = payload.get("bridgeCost", settings["bridgeCost"])
         if isinstance(bridge_cost_value, str):
             bridge_cost_value = bridge_cost_value.strip()
@@ -210,7 +215,8 @@ class MessageRouter:
         except (TypeError, ValueError):
             parsed_cost = None
         if parsed_cost is not None and parsed_cost > 0:
-            settings["bridgeCost"] = parsed_cost
+            clamped = max(0.5, min(1.0, parsed_cost))
+            settings["bridgeCost"] = round(clamped, 1)
 
         base_mode = payload.get("baseMode")
         if isinstance(base_mode, str):

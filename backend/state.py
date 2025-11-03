@@ -73,6 +73,7 @@ class GraphState:
         self.auto_brass_on_cross: bool = False
         self.manual_brass_selection: bool = False
         self.brass_double_cost: bool = False
+        self.allow_brass_start_anywhere: bool = False
         self.mode_settings: Dict[str, Any] = {}
 
         # Replay helpers
