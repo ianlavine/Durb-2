@@ -216,6 +216,12 @@
   const BRASS_PIPE_COLOR = 0x8b6f14;
   const BRASS_PIPE_DIM_COLOR = 0x46320a;
   const BRASS_PIPE_OUTLINE_COLOR = 0x6f5410;
+  const PIPE_TRIANGLE_HEIGHT = 16;
+  const PIPE_TRIANGLE_WIDTH = 12;
+  const BRASS_TRIANGLE_OUTER_SCALE = 1.15; // tweak (>1) to adjust how much farther brass extends outward
+  const BRASS_TRIANGLE_OUTER_HEIGHT_BONUS = PIPE_TRIANGLE_HEIGHT * (BRASS_TRIANGLE_OUTER_SCALE - 1);
+  const BRASS_TRIANGLE_OUTER_WIDTH_BONUS = PIPE_TRIANGLE_WIDTH * (BRASS_TRIANGLE_OUTER_SCALE - 1);
+  const BRASS_OUTER_OUTLINE_THICKNESS = 3;
   const MONEY_SPEND_COLOR = '#b87333';
   const MONEY_SPEND_STROKE = '#4e2a10';
   const MONEY_GAIN_COLOR = '#ffd700';
@@ -4134,8 +4140,8 @@ function createExplosionRemoval(edge, triangleCount, options = {}) {
     return null;
   }
 
-  const triWidth = Number(options.triWidth) || 12;
-  const triHeight = Number(options.triHeight) || 16;
+  const triWidth = Number(options.triWidth) || PIPE_TRIANGLE_WIDTH;
+  const triHeight = Number(options.triHeight) || PIPE_TRIANGLE_HEIGHT;
   const actualSpacingScreen = totalLength / triangleCount;
   const actualSpacingWorld = actualSpacingScreen / baseScale;
 
@@ -4257,7 +4263,7 @@ function beginEdgeRemoval(edgeId) {
   const path = buildEdgeScreenPath(edge, sourceNode, targetNode, fromRadiusScreen, toRadiusScreen);
 
   const totalLength = path.reduce((sum, seg) => sum + seg.length, 0);
-  const triH = 16;
+  const triH = PIPE_TRIANGLE_HEIGHT;
   const triangleCount = Math.max(1, Math.floor(totalLength / triH));
 
   if (!Number.isFinite(totalLength) || totalLength <= 0 || !Number.isFinite(triangleCount)) {
@@ -4276,7 +4282,7 @@ function beginEdgeRemoval(edgeId) {
       worldPath,
       baseScale,
       totalLength,
-      triWidth: 12,
+      triWidth: PIPE_TRIANGLE_WIDTH,
       triHeight: triH,
     });
   }
@@ -6702,8 +6708,8 @@ function drawBridgePreviewSegment(segment, color, baseScale, useBrass = false) {
     const uy = dy / len;
     const angle = Math.atan2(uy, ux);
 
-    const triH = 16;
-    const triW = 12;
+    const triH = PIPE_TRIANGLE_HEIGHT;
+    const triW = PIPE_TRIANGLE_WIDTH;
     const packedSpacing = triH;
     const packedCount = Math.max(1, Math.floor(len / packedSpacing));
     const actualSpacing = len / packedCount;
@@ -6810,15 +6816,31 @@ function updateBrassPreviewIntersections() {
   }
 }
 
-function drawPreviewTriangle(cx, cy, baseW, height, angle, color, useBrass = false) {
+function computeTrianglePoints(cx, cy, baseW, height, angle) {
   const halfW = baseW / 2;
-  // Triangle points oriented such that tip points along +x before rotation
-  const p1 = rotatePoint(cx + height / 2, cy, cx, cy, angle); // tip
-  const p2 = rotatePoint(cx - height / 2, cy - halfW, cx, cy, angle); // base left
-  const p3 = rotatePoint(cx - height / 2, cy + halfW, cx, cy, angle); // base right
-  
-  const outlineColor = useBrass ? BRASS_PIPE_OUTLINE_COLOR : color;
+  const tip = rotatePoint(cx + height / 2, cy, cx, cy, angle); // tip
+  const baseLeft = rotatePoint(cx - height / 2, cy - halfW, cx, cy, angle); // base left
+  const baseRight = rotatePoint(cx - height / 2, cy + halfW, cx, cy, angle); // base right
+  return [tip, baseLeft, baseRight];
+}
+
+function drawPreviewTriangle(cx, cy, baseW, height, angle, color, useBrass = false) {
+  const [p1, p2, p3] = computeTrianglePoints(cx, cy, baseW, height, angle);
+
+  if (useBrass) {
+    const [bp1, bp2, bp3] = computeTrianglePoints(
+      cx,
+      cy,
+      baseW + BRASS_TRIANGLE_OUTER_WIDTH_BONUS,
+      height + BRASS_TRIANGLE_OUTER_HEIGHT_BONUS,
+      angle,
+    );
+    graphicsEdges.lineStyle(BRASS_OUTER_OUTLINE_THICKNESS, BRASS_PIPE_OUTLINE_COLOR, 0.9);
+    graphicsEdges.strokeTriangle(bp1[0], bp1[1], bp2[0], bp2[1], bp3[0], bp3[1]);
+  }
+
   const outlineAlpha = useBrass ? 0.95 : 0.9;
+  const outlineColor = color;
   graphicsEdges.lineStyle(2, outlineColor, outlineAlpha);
   graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
 }
@@ -6839,8 +6861,8 @@ function drawPreviewTriangle(cx, cy, baseW, height, angle, color, useBrass = fal
     if (totalLength <= 0) return;
 
     // All edges are single direction: chain of triangles along the path
-    const triH = 16;
-    const triW = 12;
+    const triH = PIPE_TRIANGLE_HEIGHT;
+    const triW = PIPE_TRIANGLE_WIDTH;
     const packedCount = Math.max(1, Math.floor(totalLength / triH));
     const actualSpacing = totalLength / packedCount;
     
@@ -6964,9 +6986,9 @@ function drawRemovalExplosion(edge, removal, fromNode) {
       if (alpha <= 0.01) continue;
 
       const [screenX, screenY] = worldToScreen(currentX, currentY);
-      const triWidth = Number(particle.triWidth) || 12;
-      const triHeight = Number(particle.triHeight) || 16;
-      drawExplosionTriangle(screenX, screenY, triWidth, triHeight, angle, color, alpha, outlineColor);
+      const triWidth = Number(particle.triWidth) || PIPE_TRIANGLE_WIDTH;
+      const triHeight = Number(particle.triHeight) || PIPE_TRIANGLE_HEIGHT;
+      drawExplosionTriangle(screenX, screenY, triWidth, triHeight, angle, color, alpha, outlineColor, pipeType);
     }
 
     if (fadeEndTime > fadeStartTime && now >= fadeEndTime) {
@@ -6976,11 +6998,11 @@ function drawRemovalExplosion(edge, removal, fromNode) {
 
 function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, isHovered, triangleIndex, totalTriangles, removalOutline = false) {
     const pipeType = e?.pipeType || 'normal';
-    const inactiveColor = pipeType === 'gold' ? BRASS_PIPE_DIM_COLOR : 0x999999;
+    const isBrass = pipeType === 'gold';
+    const inactiveColor = isBrass ? BRASS_PIPE_DIM_COLOR : 0x999999;
     const isRemovalOutline = !!removalOutline;
     const color = (overrideColor != null) ? overrideColor : edgeColor(e, fromNode);
-    const halfW = baseW / 2;
-    // Triangle points oriented such that tip points along +x before rotation
+
     let finalAngle = angle;
     if (e._spin) {
       const elapsed = Math.max(0, animationTime - e._spin.spinStartTime);
@@ -6990,10 +7012,29 @@ function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, 
       // Start from previous orientation (new angle + PI) and settle on new angle
       finalAngle = angle + Math.PI * (1 - spinPhase);
     }
-    const p1 = rotatePoint(cx + height / 2, cy, cx, cy, finalAngle); // tip
-    const p2 = rotatePoint(cx - height / 2, cy - halfW, cx, cy, finalAngle); // base left
-    const p3 = rotatePoint(cx - height / 2, cy + halfW, cx, cy, finalAngle); // base right
-    
+
+    const [p1, p2, p3] = computeTrianglePoints(cx, cy, baseW, height, finalAngle);
+    const brassPoints = (isBrass && !isRemovalOutline)
+      ? computeTrianglePoints(
+          cx,
+          cy,
+          baseW + BRASS_TRIANGLE_OUTER_WIDTH_BONUS,
+          height + BRASS_TRIANGLE_OUTER_HEIGHT_BONUS,
+          finalAngle,
+        )
+      : null;
+    let brassFilled = false;
+    const fillBrass = () => {
+      if (!brassPoints || brassFilled) return;
+      graphicsEdges.fillStyle(BRASS_PIPE_COLOR, 1);
+      graphicsEdges.fillTriangle(
+        brassPoints[0][0], brassPoints[0][1],
+        brassPoints[1][0], brassPoints[1][1],
+        brassPoints[2][0], brassPoints[2][1],
+      );
+      brassFilled = true;
+    };
+
     if (e.flowing) {
       // Animated juice flow effect - filled triangles
       const animatedColor = getAnimatedJuiceColor(color, triangleIndex || 0, totalTriangles || 1, e.flowStartTime);
@@ -7005,7 +7046,8 @@ function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, 
           graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
         }
       } else {
-        // Triangle is filled - show animated color
+        // Triangle is filled - draw expanded brass first, then color core
+        fillBrass();
         graphicsEdges.fillStyle(animatedColor.color, animatedColor.alpha);
         graphicsEdges.fillTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
       }
@@ -7032,15 +7074,19 @@ function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, 
       }
     }
 
-    if (pipeType === 'gold' && !isRemovalOutline) {
-      graphicsEdges.lineStyle(2, BRASS_PIPE_OUTLINE_COLOR, 0.95);
-      graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
-    }
-
-    if (removalOutline) {
+    if (isRemovalOutline) {
       graphicsEdges.lineStyle(3, 0x000000, 1);
       graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
       return;
+    }
+
+    if (brassPoints) {
+      graphicsEdges.lineStyle(BRASS_OUTER_OUTLINE_THICKNESS, BRASS_PIPE_OUTLINE_COLOR, 0.95);
+      graphicsEdges.strokeTriangle(
+        brassPoints[0][0], brassPoints[0][1],
+        brassPoints[1][0], brassPoints[1][1],
+        brassPoints[2][0], brassPoints[2][1],
+      );
     }
 
     // Add hover border using the same color
@@ -7050,11 +7096,23 @@ function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, 
     }
   }
 
-  function drawExplosionTriangle(cx, cy, baseW, height, angle, color, alpha, outlineColor) {
-    const halfW = baseW / 2;
-    const p1 = rotatePoint(cx + height / 2, cy, cx, cy, angle);
-    const p2 = rotatePoint(cx - height / 2, cy - halfW, cx, cy, angle);
-    const p3 = rotatePoint(cx - height / 2, cy + halfW, cx, cy, angle);
+  function drawExplosionTriangle(cx, cy, baseW, height, angle, color, alpha, outlineColor, pipeType) {
+    const [p1, p2, p3] = computeTrianglePoints(cx, cy, baseW, height, angle);
+    const isBrass = pipeType === 'gold';
+
+    if (isBrass) {
+      const [bp1, bp2, bp3] = computeTrianglePoints(
+        cx,
+        cy,
+        baseW + BRASS_TRIANGLE_OUTER_WIDTH_BONUS,
+        height + BRASS_TRIANGLE_OUTER_HEIGHT_BONUS,
+        angle,
+      );
+      graphicsEdges.fillStyle(BRASS_PIPE_COLOR, Math.max(0, Math.min(1, alpha)));
+      graphicsEdges.fillTriangle(bp1[0], bp1[1], bp2[0], bp2[1], bp3[0], bp3[1]);
+      graphicsEdges.lineStyle(BRASS_OUTER_OUTLINE_THICKNESS, BRASS_PIPE_OUTLINE_COLOR, Math.max(0, Math.min(1, alpha * 0.95)));
+      graphicsEdges.strokeTriangle(bp1[0], bp1[1], bp2[0], bp2[1], bp3[0], bp3[1]);
+    }
 
     graphicsEdges.fillStyle(color, Math.max(0, Math.min(1, alpha)));
     graphicsEdges.fillTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
