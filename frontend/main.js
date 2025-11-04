@@ -189,6 +189,7 @@
   let selectedSettings = { ...DEFAULT_MODE_SETTINGS };
   let modeOptionsButton = null;
   let modeOptionsPanel = null;
+  let modeSelectorContainer = null;
   let modeOptionButtons = [];
   let modePanelOpen = false;
   let bridgeCostSlider = null;
@@ -218,6 +219,35 @@
   const MONEY_SPEND_COLOR = '#b87333';
   const MONEY_SPEND_STROKE = '#4e2a10';
   const MONEY_GAIN_COLOR = '#ffd700';
+
+  function setModeSelectorVisibility(visible) {
+    if (!modeSelectorContainer || !modeSelectorContainer.isConnected) {
+      modeSelectorContainer = document.querySelector('.mode-selector');
+    }
+    if (!modeSelectorContainer) return;
+
+    if (visible) {
+      modeSelectorContainer.style.display = '';
+      return;
+    }
+
+    modeSelectorContainer.style.display = 'none';
+
+    if (!modePanelOpen) return;
+
+    if (!modeOptionsPanel || !modeOptionsPanel.isConnected) {
+      modeOptionsPanel = document.getElementById('modeOptionsPanel');
+    }
+    if (modeOptionsPanel) {
+      modeOptionsPanel.style.display = 'none';
+      modeOptionsPanel.setAttribute('aria-hidden', 'true');
+    }
+    if (!modeOptionsButton || !modeOptionsButton.isConnected) {
+      modeOptionsButton = document.getElementById('modeOptionsButton');
+    }
+    if (modeOptionsButton) modeOptionsButton.setAttribute('aria-expanded', 'false');
+    modePanelOpen = false;
+  }
 
   function coerceBridgeCost(value) {
     const numeric = Number(value);
@@ -2187,6 +2217,7 @@ function clearBridgeSelection() {
     }
     modeOptionsButton = document.getElementById('modeOptionsButton');
     modeOptionsPanel = document.getElementById('modeOptionsPanel');
+    modeSelectorContainer = document.querySelector('.mode-selector');
     modeOptionButtons = Array.from(document.querySelectorAll('.mode-option-button'));
     bridgeCostSlider = document.getElementById('bridgeCostSlider');
     bridgeCostValueLabel = document.getElementById('bridgeCostValue');
@@ -2275,6 +2306,7 @@ function clearBridgeSelection() {
           if (buttonContainer) {
             buttonContainer.style.display = 'none';
           }
+          setModeSelectorVisibility(false);
           // Show lobby back button
           if (lobbyBackButton) lobbyBackButton.style.display = 'block';
           ws.send(JSON.stringify({
@@ -2307,6 +2339,7 @@ function clearBridgeSelection() {
           if (buttonContainer) {
             buttonContainer.style.display = 'none';
           }
+          setModeSelectorVisibility(false);
           ws.send(JSON.stringify({
             type: 'startBotGame',
             difficulty: 'hard',
@@ -3517,6 +3550,7 @@ function clearBridgeSelection() {
 
   function handleLobby(msg) {
     showLobby();
+    setModeSelectorVisibility(false);
     const count = Number.isFinite(msg.playerCount) ? msg.playerCount : selectedPlayerCount;
     const mode = normalizeMode(msg.mode || selectedMode);
     let summaryText = formatModeText(mode);
@@ -6195,6 +6229,22 @@ function fallbackRemoveEdgesForNode(nodeId) {
       progressNameContainer = document.getElementById('progressBarNames');
     }
 
+    const menuEl = document.getElementById('menu');
+    const menuVisible = menuEl ? !menuEl.classList.contains('hidden') : false;
+    if (menuVisible) {
+      progressBarInner.innerHTML = '';
+      progressSegments.clear();
+      if (progressBar) progressBar.style.display = 'none';
+      if (progressMarkerLeft) progressMarkerLeft.style.display = 'none';
+      if (progressMarkerRight) progressMarkerRight.style.display = 'none';
+      if (progressNameContainer) {
+        progressNameContainer.innerHTML = '';
+        progressNameContainer.style.display = 'none';
+      }
+      progressNameSegments.clear();
+      return;
+    }
+
     const orderedIds = playerOrder.length ? playerOrder : Array.from(players.keys()).sort((a, b) => a - b);
     const activeIds = orderedIds.filter((id) => players.has(id) && !eliminatedPlayers.has(id));
 
@@ -6325,6 +6375,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     if (menu) menu.classList.remove('hidden');
     if (homeButtons) homeButtons.style.display = 'flex';
     if (playBtnEl) playBtnEl.style.display = 'block';
+    setModeSelectorVisibility(true);
     if (lobbyBackButton) lobbyBackButton.style.display = 'none';
 
     if (quitButton) quitButton.style.display = 'none';
