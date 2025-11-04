@@ -85,6 +85,8 @@
     alphaAtRest: 0.65,
     driftLightenFactor: 0.25,
   };
+  const NODE_MOVE_DURATION_SEC = 1.8;
+  const NODE_MOVE_EPSILON = 1e-4;
   let pendingSingleClickTimeout = null;
   let pendingSingleClickData = null;
 
@@ -1494,12 +1496,34 @@
   function getEdgeWarpSegments(edge) {
     if (!edge) return [];
     if (edge && Array.isArray(edge.warpSegments) && edge.warpSegments.length) {
-      return edge.warpSegments.map((seg) => ({
+      const result = edge.warpSegments.map((seg) => ({
         sx: Number(seg.sx),
         sy: Number(seg.sy),
         ex: Number(seg.ex),
         ey: Number(seg.ey),
       })).filter((seg) => [seg.sx, seg.sy, seg.ex, seg.ey].every((value) => Number.isFinite(value)));
+
+      if (result.length) {
+        const sourceNode = nodes.get(edge.source);
+        const targetNode = nodes.get(edge.target);
+        if (sourceNode) {
+          result[0] = {
+            ...result[0],
+            sx: Number(sourceNode.x),
+            sy: Number(sourceNode.y),
+          };
+        }
+        if (targetNode) {
+          const lastIndex = result.length - 1;
+          result[lastIndex] = {
+            ...result[lastIndex],
+            ex: Number(targetNode.x),
+            ey: Number(targetNode.y),
+          };
+        }
+      }
+
+      return result;
     }
     const sourceNode = edge ? nodes.get(edge.source) : null;
     const targetNode = edge ? nodes.get(edge.target) : null;
@@ -1555,7 +1579,18 @@
     const worldSegments = getEdgeWarpSegments(edge);
     if (!worldSegments.length) return [];
 
-    const screenSegments = worldSegments.map((seg) => {
+    const adjustedSegments = worldSegments.map((seg) => ({ ...seg }));
+    if (fromNode && adjustedSegments.length > 0) {
+      adjustedSegments[0].sx = fromNode.x;
+      adjustedSegments[0].sy = fromNode.y;
+    }
+    if (toNode && adjustedSegments.length > 0) {
+      const last = adjustedSegments[adjustedSegments.length - 1];
+      last.ex = toNode.x;
+      last.ey = toNode.y;
+    }
+
+    const screenSegments = adjustedSegments.map((seg) => {
       const [sx, sy] = worldToScreen(seg.sx, seg.sy);
       const [ex, ey] = worldToScreen(seg.ex, seg.ey);
       return { sx, sy, ex, ey };
@@ -2765,10 +2800,55 @@ function clearBridgeSelection() {
     });
   }
 
+  function easeOutCubic(t) {
+    return 1 - Math.pow(1 - t, 3);
+  }
+
+  function updateNodeAnimations() {
+    let needsRedraw = false;
+    nodes.forEach((node) => {
+      const startTime = node.moveStartTime;
+      if (startTime == null) {
+        return;
+      }
+      const duration = Math.max(NODE_MOVE_EPSILON, node.moveDuration || NODE_MOVE_DURATION_SEC);
+      const elapsed = animationTime - startTime;
+      const targetX = Number.isFinite(node.targetX) ? node.targetX : node.x;
+      const targetY = Number.isFinite(node.targetY) ? node.targetY : node.y;
+      const startX = Number.isFinite(node.startX) ? node.startX : node.x;
+      const startY = Number.isFinite(node.startY) ? node.startY : node.y;
+      if (elapsed >= duration) {
+        const hadChange =
+          !Number.isFinite(node.x) ||
+          !Number.isFinite(node.y) ||
+          Math.abs(node.x - targetX) > NODE_MOVE_EPSILON ||
+          Math.abs(node.y - targetY) > NODE_MOVE_EPSILON;
+        node.x = targetX;
+        node.y = targetY;
+        node.startX = targetX;
+        node.startY = targetY;
+        node.moveStartTime = null;
+        node.moveDuration = null;
+        if (hadChange) {
+          needsRedraw = true;
+        }
+        return;
+      }
+
+      const t = Math.max(0, Math.min(1, elapsed / Math.max(duration, NODE_MOVE_EPSILON)));
+      const eased = easeOutCubic(t);
+      node.x = startX + (targetX - startX) * eased;
+      node.y = startY + (targetY - startY) * eased;
+      needsRedraw = true;
+    });
+    return needsRedraw;
+  }
+
   function update() {
     // Update animation timer for juice flow
     animationTime += 1/60; // Assuming 60 FPS, increment by frame time
-    
+    const nodesAnimating = updateNodeAnimations();
+
     // Update money indicators
     updateMoneyIndicators();
     
@@ -2792,7 +2872,7 @@ function clearBridgeSelection() {
     const anySpinning = updateReverseSpinAnimations();
     const removalAnimating = updateEdgeRemovalAnimations();
     
-    if (hasFlowingEdges || anySpinning || removalAnimating || moneyIndicators.length > 0 || (persistentTargeting && currentTargetNodeId !== null)) {
+    if (hasFlowingEdges || anySpinning || removalAnimating || moneyIndicators.length > 0 || (persistentTargeting && currentTargetNodeId !== null) || nodesAnimating) {
       redrawStatic();
     }
   }
@@ -3009,6 +3089,12 @@ function clearBridgeSelection() {
         nodes.set(id, {
           x,
           y,
+          startX: x,
+          startY: y,
+          targetX: x,
+          targetY: y,
+          moveStartTime: null,
+          moveDuration: null,
           size,
           owner,
           pendingGold: Number(pendingGold) || 0,
@@ -3469,8 +3555,30 @@ function clearBridgeSelection() {
       const ny = Number(y);
       if (!Number.isFinite(nx) || !Number.isFinite(ny)) return;
 
-      node.x = nx;
-      node.y = ny;
+      const currentX = Number.isFinite(node.x) ? node.x : nx;
+      const currentY = Number.isFinite(node.y) ? node.y : ny;
+      const previousTargetX = Number.isFinite(node.targetX) ? node.targetX : currentX;
+      const previousTargetY = Number.isFinite(node.targetY) ? node.targetY : currentY;
+
+      const deltaX = nx - previousTargetX;
+      const deltaY = ny - previousTargetY;
+      if (Math.abs(deltaX) < NODE_MOVE_EPSILON && Math.abs(deltaY) < NODE_MOVE_EPSILON) {
+        // No meaningful movement; ensure target is aligned and skip animation reset
+        node.targetX = nx;
+        node.targetY = ny;
+        if (!Number.isFinite(node.x) || !Number.isFinite(node.y)) {
+          node.x = nx;
+          node.y = ny;
+        }
+        return;
+      }
+
+      node.startX = currentX;
+      node.startY = currentY;
+      node.targetX = nx;
+      node.targetY = ny;
+      node.moveStartTime = animationTime;
+      node.moveDuration = NODE_MOVE_DURATION_SEC;
     });
   }
 
