@@ -218,10 +218,12 @@
   const BRASS_PIPE_OUTLINE_COLOR = 0x6f5410;
   const PIPE_TRIANGLE_HEIGHT = 16;
   const PIPE_TRIANGLE_WIDTH = 12;
-  const BRASS_TRIANGLE_OUTER_SCALE = 1.15; // tweak (>1) to adjust how much farther brass extends outward
+  const BRASS_TRIANGLE_OUTER_SCALE = 1.12; // tweak (>1) to adjust how much farther brass extends outward
   const BRASS_TRIANGLE_OUTER_HEIGHT_BONUS = PIPE_TRIANGLE_HEIGHT * (BRASS_TRIANGLE_OUTER_SCALE - 1);
   const BRASS_TRIANGLE_OUTER_WIDTH_BONUS = PIPE_TRIANGLE_WIDTH * (BRASS_TRIANGLE_OUTER_SCALE - 1);
   const BRASS_OUTER_OUTLINE_THICKNESS = 3;
+  const BUILDING_TRIANGLE_INITIAL_SCALE = 1.8; // >1 means newly placed triangles start this many times larger
+  const BUILDING_TRIANGLE_SHRINK_DURATION = 0.8; // seconds for construction triangles to shrink back to normal size
   const MONEY_SPEND_COLOR = '#b87333';
   const MONEY_SPEND_STROKE = '#4e2a10';
   const MONEY_GAIN_COLOR = '#ffd700';
@@ -6906,6 +6908,30 @@ function drawPreviewTriangle(cx, cy, baseW, height, angle, color, useBrass = fal
       trianglesToDraw = packedCount;
     }
 
+    let buildingAnimation = null;
+    if (e.building) {
+      if (!e._buildingPop) {
+        e._buildingPop = { spawnTimes: new Map(), lastCount: 0 };
+      }
+      buildingAnimation = e._buildingPop;
+
+      if (trianglesToDraw < buildingAnimation.lastCount) {
+        for (const key of buildingAnimation.spawnTimes.keys()) {
+          if (key >= trianglesToDraw) {
+            buildingAnimation.spawnTimes.delete(key);
+          }
+        }
+      } else if (trianglesToDraw > buildingAnimation.lastCount) {
+        for (let idx = buildingAnimation.lastCount; idx < trianglesToDraw; idx++) {
+          buildingAnimation.spawnTimes.set(idx, animationTime);
+        }
+      }
+
+      buildingAnimation.lastCount = trianglesToDraw;
+    } else if (e._buildingPop) {
+      delete e._buildingPop;
+    }
+
     let hiddenTriangles = null;
     if (removal) {
       hiddenTriangles = applyRemovalSteps(removal, packedCount);
@@ -6929,7 +6955,22 @@ function drawPreviewTriangle(cx, cy, baseW, height, angle, color, useBrass = fal
       }
       const cx = segment.sx + segment.ux * remaining;
       const cy = segment.sy + segment.uy * remaining;
-      drawTriangle(cx, cy, triW, triH, segment.angle, e, from, triangleOverrideColor, triangleHoverFlag, i, packedCount, removalHighlight);
+
+      let triangleScale = 1;
+      if (buildingAnimation) {
+        const spawnTime = buildingAnimation.spawnTimes.get(i);
+        if (typeof spawnTime === 'number') {
+          const elapsed = Math.max(0, animationTime - spawnTime);
+          const t = Math.min(1, elapsed / BUILDING_TRIANGLE_SHRINK_DURATION);
+          const eased = easeOutCubic(t);
+          triangleScale = 1 + (BUILDING_TRIANGLE_INITIAL_SCALE - 1) * (1 - eased);
+          if (t >= 1) {
+            buildingAnimation.spawnTimes.delete(i);
+          }
+        }
+      }
+
+      drawTriangle(cx, cy, triW, triH, segment.angle, e, from, triangleOverrideColor, triangleHoverFlag, i, packedCount, removalHighlight, triangleScale);
     }
   }
 
@@ -6996,7 +7037,7 @@ function drawRemovalExplosion(edge, removal, fromNode) {
     }
   }
 
-function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, isHovered, triangleIndex, totalTriangles, removalOutline = false) {
+function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, isHovered, triangleIndex, totalTriangles, removalOutline = false, scaleOverride = 1) {
     const pipeType = e?.pipeType || 'normal';
     const isBrass = pipeType === 'gold';
     const inactiveColor = isBrass ? BRASS_PIPE_DIM_COLOR : 0x999999;
@@ -7013,13 +7054,15 @@ function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, 
       finalAngle = angle + Math.PI * (1 - spinPhase);
     }
 
-    const [p1, p2, p3] = computeTrianglePoints(cx, cy, baseW, height, finalAngle);
+    const scaledBaseW = baseW * Math.max(scaleOverride, 0.01);
+    const scaledHeight = height * Math.max(scaleOverride, 0.01);
+    const [p1, p2, p3] = computeTrianglePoints(cx, cy, scaledBaseW, scaledHeight, finalAngle);
     const brassPoints = (isBrass && !isRemovalOutline)
       ? computeTrianglePoints(
           cx,
           cy,
-          baseW + BRASS_TRIANGLE_OUTER_WIDTH_BONUS,
-          height + BRASS_TRIANGLE_OUTER_HEIGHT_BONUS,
+          scaledBaseW + BRASS_TRIANGLE_OUTER_WIDTH_BONUS,
+          scaledHeight + BRASS_TRIANGLE_OUTER_HEIGHT_BONUS,
           finalAngle,
         )
       : null;
@@ -7046,8 +7089,10 @@ function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, 
           graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
         }
       } else {
-        // Triangle is filled - draw expanded brass first, then color core
-        fillBrass();
+        // Triangle is filled - overlay animated color core atop brass shell
+        if (!isRemovalOutline) {
+          fillBrass();
+        }
         graphicsEdges.fillStyle(animatedColor.color, animatedColor.alpha);
         graphicsEdges.fillTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
       }
