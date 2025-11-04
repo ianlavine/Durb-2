@@ -12,6 +12,7 @@ import websockets
 
 from .constants import (
     DEFAULT_GAME_MODE,
+    GAME_DURATION_SECONDS,
     STARTING_GOLD,
     TICK_INTERVAL_SECONDS,
     get_node_max_juice,
@@ -187,7 +188,7 @@ def build_engine_from_replay(
         if duration_ticks > 0 and tick_interval > 0:
             state.game_duration = duration_ticks * tick_interval
         else:
-            state.game_duration = 7 * 60
+            state.game_duration = GAME_DURATION_SECONDS
 
     return engine, player_tokens
 

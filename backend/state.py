@@ -8,6 +8,7 @@ from .constants import (
     BRIDGE_COST_PER_UNIT_DISTANCE,
     BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE,
     DEFAULT_GAME_MODE,
+    GAME_DURATION_SECONDS,
     GOLD_REWARD_FOR_ENEMY_CAPTURE,
     INTAKE_TRANSFER_RATIO,
     MAX_TRANSFER_RATIO,
@@ -53,7 +54,7 @@ class GraphState:
         
         # Timer system
         self.game_start_time: Optional[float] = None
-        self.game_duration: float = 7 * 60  # 7 minutes in seconds
+        self.game_duration: float = GAME_DURATION_SECONDS
         
         # Auto-expand settings per player
         self.player_auto_expand: Dict[int, bool] = {}

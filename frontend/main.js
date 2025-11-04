@@ -132,7 +132,7 @@
   // Timer system
   let timerDisplay = null;
   let gameStartTime = null;
-  let gameDuration = 7 * 60; // 7 minutes in seconds
+  let gameDuration = 10 * 60; // default to 10 minutes in seconds; server can override
   
   // Auto-expand system
   let autoExpandToggle = null;

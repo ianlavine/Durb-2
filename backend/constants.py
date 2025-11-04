@@ -13,6 +13,8 @@ MAX_FRIEND_PLAYERS = 4
 
 # Core timing
 TICK_INTERVAL_SECONDS: float = 0.1
+GAME_DURATION_MINUTES: int = 10
+GAME_DURATION_SECONDS: float = float(GAME_DURATION_MINUTES * 60)
 
 # Game modes
 GAME_MODES: Tuple[str, ...] = (
