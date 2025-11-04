@@ -13,6 +13,8 @@ MAX_FRIEND_PLAYERS = 4
 
 # Core timing
 TICK_INTERVAL_SECONDS: float = 0.1
+GAME_DURATION_MINUTES: int = 10
+GAME_DURATION_SECONDS: float = float(GAME_DURATION_MINUTES * 60)
 
 # Game modes
 GAME_MODES: Tuple[str, ...] = (
@@ -35,62 +37,19 @@ DEFAULT_GAME_MODE: str = "sparse"
 
 # Gameplay flow tuning
 NODE_MIN_JUICE: float = 0.0
-NODE_MAX_JUICE_BY_MODE: Dict[str, float] = {
-    "basic": 500.0,
-    "warp-old": 500.0,
-    "warp": 300.0,
-    "i-warp": 300.0,
-    "i-flat": 300.0,
-    "flat": 300.0,
-    "sparse": 500.0,
-    "overflow": 300.0,
-    "nuke": 300.0,
-    "cross": 300.0,
-    "brass-old": 300.0,
-    "brass": 300.0,
-    "go": 300.0,
-}
-NODE_MAX_JUICE: float = NODE_MAX_JUICE_BY_MODE[DEFAULT_GAME_MODE]
-PRODUCTION_RATE_PER_NODE: float = 0.4
+NODE_MAX_JUICE: float = 300.0
+PRODUCTION_RATE_PER_NODE: float = 0.2
 MAX_TRANSFER_RATIO: float = 0.95
 INTAKE_TRANSFER_RATIO: float = 0.7
-RESERVE_TRANSFER_RATIO: float = 0.006
+RESERVE_TRANSFER_RATIO: float = 0.004
 
 # Overflow tuning
-OVERFLOW_JUICE_TO_GOLD_RATIO_DEFAULT: float = 15.0  # 15 juice -> 1 pending gold
-OVERFLOW_JUICE_TO_GOLD_RATIO_BY_MODE: Dict[str, float] = {
-    "overflow": 15.0,
-    "nuke": 15.0,
-    "cross": 15.0,
-    "brass-old": 15.0,
-    "brass": 15.0,
-    "go": 30.0,
-    "warp-old": 15.0,
-    "warp": 30.0,
-    "i-warp": 30.0,
-    "i-flat": 30.0,
-    "flat": 30.0,
-}
+OVERFLOW_JUICE_TO_GOLD_RATIO: float = 15.0  # 15 juice -> 1 pending gold
 OVERFLOW_PENDING_GOLD_PAYOUT: float = 10.0   # payout after 10 pending gold -> $10
 
 
 # Economy tuning
-GOLD_REWARD_FOR_NEUTRAL_CAPTURE_BY_MODE: Dict[str, float] = {
-    "basic": 10.0,
-    "warp-old": 10.0,
-    "warp": 10.0,
-    "i-warp": 10.0,
-    "i-flat": 10.0,
-    "flat": 10.0,
-    "sparse": 10.0,
-    "overflow": 10.0,
-    "nuke": 10.0,
-    "cross": 10.0,
-    "brass-old": 10.0,
-    "brass": 10.0,
-    "go": 10.0,
-}
-GOLD_REWARD_FOR_NEUTRAL_CAPTURE: float = GOLD_REWARD_FOR_NEUTRAL_CAPTURE_BY_MODE[DEFAULT_GAME_MODE]
+GOLD_REWARD_FOR_NEUTRAL_CAPTURE: float = 10.0
 GOLD_REWARD_FOR_ENEMY_CAPTURE: float = 0.0
 PASSIVE_INCOME_ENABLED: bool = False
 PASSIVE_GOLD_PER_TICK: float = 1.0 / 30.0
@@ -100,6 +59,7 @@ STARTING_GOLD: float = 0.0
 
 # Node sizing
 UNOWNED_NODE_BASE_JUICE: float = 50.0
+STARTING_NODE_JUICE: float = 150.0
 
 
 # Bridge costs
@@ -128,6 +88,10 @@ BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE: float = 0.6
 WARP_MARGIN_RATIO_X: float = 0.06
 WARP_MARGIN_RATIO_Y: float = 0.10
 
+# Geometry tuning
+# Minimum separation angle (in degrees) between bridges meeting at a node before we auto-relax them
+MIN_PIPE_JOIN_ANGLE_DEGREES: float = 22.5
+
 
 def normalize_game_mode(value: str) -> str:
     """Return a supported game mode, treating legacy names as aliases."""
@@ -147,8 +111,7 @@ def normalize_game_mode(value: str) -> str:
 
 def get_neutral_capture_reward(mode: str) -> float:
     """Return the gold reward for capturing a neutral node for the given mode."""
-    key = normalize_game_mode(mode)
-    return GOLD_REWARD_FOR_NEUTRAL_CAPTURE_BY_MODE.get(key, GOLD_REWARD_FOR_NEUTRAL_CAPTURE)
+    return GOLD_REWARD_FOR_NEUTRAL_CAPTURE
 
 
 def get_bridge_cost_per_unit(mode: str) -> float:
@@ -159,11 +122,9 @@ def get_bridge_cost_per_unit(mode: str) -> float:
 
 def get_node_max_juice(mode: str) -> float:
     """Return the node max juice value for the given mode."""
-    key = normalize_game_mode(mode)
-    return NODE_MAX_JUICE_BY_MODE.get(key, NODE_MAX_JUICE)
+    return NODE_MAX_JUICE
 
 
 def get_overflow_juice_to_gold_ratio(mode: str) -> float:
     """Return the juice-to-gold conversion ratio for overflow-style modes."""
-    key = normalize_game_mode(mode)
-    return OVERFLOW_JUICE_TO_GOLD_RATIO_BY_MODE.get(key, OVERFLOW_JUICE_TO_GOLD_RATIO_DEFAULT)
+    return OVERFLOW_JUICE_TO_GOLD_RATIO

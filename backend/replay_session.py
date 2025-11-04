@@ -12,6 +12,7 @@ import websockets
 
 from .constants import (
     DEFAULT_GAME_MODE,
+    GAME_DURATION_SECONDS,
     STARTING_GOLD,
     TICK_INTERVAL_SECONDS,
     get_node_max_juice,
@@ -187,7 +188,7 @@ def build_engine_from_replay(
         if duration_ticks > 0 and tick_interval > 0:
             state.game_duration = duration_ticks * tick_interval
         else:
-            state.game_duration = 7 * 60
+            state.game_duration = GAME_DURATION_SECONDS
 
     return engine, player_tokens
 
@@ -420,7 +421,7 @@ class ReplaySession:
                     "segments": warp_segments,
                 }
             if from_node >= 0 and to_node >= 0:
-                success, new_edge, _, _, removed_edges = self.engine.handle_build_bridge(
+                success, new_edge, _, _, removed_edges, node_movements = self.engine.handle_build_bridge(
                     token,
                     from_node,
                     to_node,
@@ -435,6 +436,21 @@ class ReplaySession:
                             "edgeIds": removed_edges,
                             "replay": True,
                         })
+                    movement_arrays: List[List[float]] = []
+                    if node_movements:
+                        for movement in node_movements:
+                            if not isinstance(movement, dict):
+                                continue
+                            node_id = movement.get("nodeId")
+                            x = movement.get("x")
+                            y = movement.get("y")
+                            try:
+                                node_int = int(node_id)
+                                x_val = round(float(x), 3)
+                                y_val = round(float(y), 3)
+                            except (TypeError, ValueError):
+                                continue
+                            movement_arrays.append([node_int, x_val, y_val])
                     warp_payload = {
                         "axis": new_edge.warp_axis,
                         "segments": [
@@ -462,6 +478,8 @@ class ReplaySession:
                         },
                         "replay": True,
                     }
+                    if movement_arrays:
+                        message["nodeMovements"] = movement_arrays
                     await self._send_json(message)
         elif event_type == "redirectEnergy":
             target_node = _coerce_int(payload.get("targetNodeId"), -1)

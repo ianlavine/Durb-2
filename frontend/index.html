@@ -47,6 +47,7 @@
         margin-top: clamp(20px, 4vh, 40px);
       }
       #playBtn:hover, #playBotBtn:hover { filter: brightness(1.1); }
+
       .button-container {
         display: flex;
         flex-direction: column;
@@ -418,51 +419,31 @@
         transform: translateX(28px);
       }
 
-      .selection-row {
-        display: flex;
-        flex-wrap: wrap;
-        justify-content: flex-start;
-        align-items: flex-end;
-        gap: 20px;
-        width: 100%;
-        max-width: 640px;
-        margin-bottom: 12px;
-      }
-
-      .player-count-selector,
-      .mode-selector {
-        position: relative;
-        flex: 1 1 240px;
-        max-width: 300px;
+      .player-count-selector {
         display: flex;
         flex-direction: column;
         align-items: center;
-        gap: 8px;
+        justify-content: center;
+        gap: clamp(10px, 2vh, 16px);
+        width: min(480px, 100%);
         text-align: center;
-      }
-
-      .player-count-selector {
-        display: inline-grid;
-        align-items: center;
-        justify-items: center;
-        text-align: center;
-        align-self: flex-end;
       }
 
       .player-count-selector .selector-label {
-        justify-self: start;
-        margin-left: 55px;
+        margin: 0;
       }
 
-      .player-count-selector .player-count-options {
-        justify-self: start;
-      }
-
-      @media (max-width: 640px) {
-        .player-count-selector,
-        .mode-selector {
-          flex: 1 1 220px;
-        }
+      .mode-selector {
+        position: absolute;
+        top: clamp(8px, 4vh, 20px);
+        right: clamp(6px, 2vw, 8px);
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: clamp(8px, 1.6vh, 16px);
+        max-width: clamp(260px, 28vw, 340px);
+        text-align: right;
+        z-index: 30;
       }
 
       .selector-label {
@@ -505,7 +486,7 @@
         display: flex;
         gap: 10px;
         flex-wrap: wrap;
-        justify-content: flex-start;
+        justify-content: center;
       }
 
       .player-count-option,
@@ -522,10 +503,20 @@
       }
 
       .mode-option-button {
-        flex: 1 1 0;
+        flex: 0 0 auto;
+        min-width: 120px;
         font-size: clamp(22px, 3vw, 26px);
         padding: clamp(8px, 1.2vw, 10px) clamp(12px, 2.4vw, 18px);
         white-space: nowrap;
+      }
+
+      .mode-option-button.disabled,
+      .mode-option-button:disabled {
+        cursor: not-allowed;
+        opacity: 0.4;
+        border-color: #555;
+        color: #888;
+        transform: none;
       }
 
       .player-count-option.active,
@@ -536,55 +527,64 @@
       }
 
       .player-count-option:hover,
-      .mode-option-button:hover,
+      .mode-option-button:not(.disabled):not(:disabled):hover,
       .mode-options-toggle:hover {
         border-color: #aaaaaa;
-      }
-
-      .mode-selector {
-        position: relative;
-        display: flex;
-        flex-direction: column;
-        align-items: flex-end;
-        gap: 8px;
-        margin-left: auto;
-        max-width: none;
-        flex: 0 0 auto;
-      }
-
-      .mode-summary {
-        font-family: monospace;
-        font-size: clamp(16px, 2vw, 20px);
-        color: #ddd;
-        text-align: right;
-        align-self: flex-end;
       }
 
       .mode-options-panel {
         position: absolute;
         top: calc(100% + 12px);
-        left: 0;
+        right: 0;
+        left: auto;
+        transform: none;
         display: none;
+        flex-direction: column;
+        align-items: stretch;
         min-width: clamp(260px, 30vw, 360px);
         padding: 16px;
         border-radius: 12px;
         border: 1px solid rgba(255,255,255,0.15);
         background: rgba(20, 20, 30, 0.95);
         box-shadow: 0 10px 24px rgba(0,0,0,0.45);
-        z-index: 20;
+        z-index: 31;
         gap: 12px;
+      }
+
+      @media (max-width: 720px) {
+        .mode-selector {
+          position: static;
+          align-items: center;
+          max-width: 100%;
+          text-align: center;
+          margin-top: 12px;
+        }
+
+        .mode-options-panel {
+          left: 50%;
+          right: auto;
+          transform: translateX(-50%);
+        }
       }
 
       .mode-option-group {
         display: flex;
-        flex-direction: column;
-        gap: 6px;
+        align-items: center;
+        gap: 12px;
+        width: 100%;
+        flex-wrap: wrap;
+      }
+
+      .mode-option-group .selector-label {
+        flex: 0 0 auto;
       }
 
       .mode-option-buttons {
         display: flex;
-        gap: 10px;
+        flex: 1 1 auto;
         flex-wrap: wrap;
+        gap: 10px;
+        justify-content: flex-start;
       }
 
       .bridge-cost-group {
@@ -620,10 +620,12 @@
 
       .replay-uploader {
         position: fixed;
-        top: 8px;
-        right: 8px;
-        width: clamp(220px, 32vw, 280px);
-        display: flex;
+        top: auto;
+        bottom: clamp(24px, 7vh, 96px);
+        left: 50%;
+        transform: translateX(-50%);
+        width: clamp(220px, 48vw, 320px);
+        display: none;
         flex-direction: column;
         border-radius: 12px;
         border: 1px solid rgba(255,255,255,0.12);
@@ -634,7 +636,7 @@
         overflow-y: auto;
         z-index: 40;
         pointer-events: auto;
-        max-height: calc(100vh - clamp(48px, 16vh, 200px));
+        max-height: calc(40vh);
       }
 
       .replay-header {
@@ -720,48 +722,12 @@
     <div id="menu">
       <div id="title">DURB 2</div>
       <div class="button-container">
-        <div class="selection-row">
-          <div class="player-count-selector">
-            <span class="selector-label">Players</span>
-            <div class="player-count-options">
-              <button class="player-count-option active" data-count="2">2</button>
-              <button class="player-count-option" data-count="3">3</button>
-              <button class="player-count-option" data-count="4">4</button>
-            </div>
-          </div>
-          <div class="mode-selector">
-            <button id="modeOptionsButton" class="mode-options-toggle" aria-expanded="false">Options ▾</button>
-            <div id="modeSummary" class="mode-summary" role="status" aria-live="polite"></div>
-            <div id="modeOptionsPanel" class="mode-options-panel" role="dialog" aria-hidden="true">
-              <div class="mode-option-group" data-setting-group="screen">
-                <span class="selector-label">Screen</span>
-                <div class="mode-option-buttons">
-                  <button class="mode-option-button active" data-setting="screen" data-value="flat">Flat</button>
-                  <button class="mode-option-button" data-setting="screen" data-value="warp">Warp</button>
-                </div>
-              </div>
-              <div class="mode-option-group" data-setting-group="brass">
-                <span class="selector-label">Brass</span>
-                <div class="mode-option-buttons">
-                  <button class="mode-option-button active" data-setting="brass" data-value="cross">Cross</button>
-                  <button class="mode-option-button" data-setting="brass" data-value="right-click">Right-Click</button>
-                </div>
-              </div>
-              <div class="mode-option-group" data-setting-group="brassStart">
-                <span class="selector-label">Brass Start</span>
-                <div class="mode-option-buttons">
-                  <button class="mode-option-button active" data-setting="brassStart" data-value="owned">Owned</button>
-                  <button class="mode-option-button" data-setting="brassStart" data-value="anywhere">Anywhere</button>
-                </div>
-              </div>
-              <div class="mode-option-group bridge-cost-group" data-setting-group="bridgeCost">
-                <span class="selector-label">Bridge Cost</span>
-                <div class="bridge-cost-slider">
-                  <input type="range" id="bridgeCostSlider" min="0.5" max="1" step="0.1" value="1.0" aria-label="Bridge cost multiplier" />
-                  <span id="bridgeCostValue">1.0</span>
-                </div>
-              </div>
-            </div>
+        <div class="player-count-selector">
+          <span class="selector-label">Players</span>
+          <div class="player-count-options">
+            <button class="player-count-option active" data-count="2">2</button>
+            <button class="player-count-option" data-count="3">3</button>
+            <button class="player-count-option" data-count="4">4</button>
           </div>
         </div>
         <button id="playBtn">PLAY FRIENDS</button>
@@ -780,6 +746,46 @@
           </div>
         </div>
 
+      </div>
+      <div class="mode-selector">
+        <button id="modeOptionsButton" class="mode-options-toggle" aria-expanded="false">Options ▾</button>
+        <div id="modeOptionsPanel" class="mode-options-panel" role="dialog" aria-hidden="true">
+          <div class="mode-option-group" data-setting-group="screen">
+            <span class="selector-label">Screen</span>
+            <div class="mode-option-buttons">
+              <button class="mode-option-button active" data-setting="screen" data-value="flat">Flat</button>
+              <button class="mode-option-button" data-setting="screen" data-value="warp">Warp</button>
+            </div>
+          </div>
+          <div class="mode-option-group" data-setting-group="brass">
+            <span class="selector-label">Brass</span>
+            <div class="mode-option-buttons">
+              <button class="mode-option-button active" data-setting="brass" data-value="cross">Cross</button>
+              <button class="mode-option-button" data-setting="brass" data-value="right-click">Right-Click</button>
+            </div>
+          </div>
+          <div class="mode-option-group" data-setting-group="brassStart">
+            <span class="selector-label">Brass Start</span>
+            <div class="mode-option-buttons">
+              <button class="mode-option-button active" data-setting="brassStart" data-value="owned">Owned</button>
+              <button class="mode-option-button" data-setting="brassStart" data-value="anywhere">Anywhere</button>
+            </div>
+          </div>
+          <div class="mode-option-group" data-setting-group="gameStart">
+            <span class="selector-label">Game Start</span>
+            <div class="mode-option-buttons">
+              <button class="mode-option-button active" data-setting="gameStart" data-value="open">Open</button>
+              <button class="mode-option-button" data-setting="gameStart" data-value="hidden-split">Hidden Split</button>
+            </div>
+          </div>
+          <div class="mode-option-group bridge-cost-group" data-setting-group="bridgeCost">
+            <span class="selector-label">Bridge Cost</span>
+            <div class="bridge-cost-slider">
+              <input type="range" id="bridgeCostSlider" min="0.5" max="1" step="0.1" value="1.0" aria-label="Bridge cost multiplier" />
+              <span id="bridgeCostValue">1.0</span>
+            </div>
+          </div>
+        </div>
       </div>
       <div id="lobby">Joining lobby...</div>
     </div>

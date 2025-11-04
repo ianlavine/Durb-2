@@ -156,6 +156,19 @@ class Bot1(BotTemplate):
             if node.owner is not None:
                 continue  # Skip owned nodes
 
+            if (
+                self.game_engine.state.hidden_start_active
+                and not self.game_engine.state.hidden_start_revealed
+            ):
+                side = self.game_engine.state.hidden_start_sides.get(self.player_id)
+                boundary = self.game_engine.state.hidden_start_boundary
+                if side and boundary is not None:
+                    tolerance = 1e-6
+                    if side == "left" and node.x > boundary + tolerance:
+                        continue
+                    if side == "right" and node.x < boundary - tolerance:
+                        continue
+
             # Count how many unowned nodes can be reached without flipping edges
             expansion_count = self._count_expandable_nodes(node_id)
 
@@ -463,7 +476,7 @@ class Bot1(BotTemplate):
             if current_gold < cost or current_gold - cost < self.bridge_gold_reserve:
                 continue
 
-            success, new_edge, actual_cost, error_msg, _ = self.game_engine.handle_build_bridge(
+            success, new_edge, actual_cost, error_msg, _, _ = self.game_engine.handle_build_bridge(
                 self.bot_token, owned_node_id, target_node_id, cost
             )
             if success and new_edge:
@@ -556,7 +569,7 @@ class Bot1(BotTemplate):
                 if current_gold < cost or current_gold - cost < self.bridge_gold_reserve:
                     continue
 
-                success, new_edge, actual_cost, error_msg, _ = self.game_engine.handle_build_bridge(
+                success, new_edge, actual_cost, error_msg, _, _ = self.game_engine.handle_build_bridge(
                     self.bot_token, owned_node_id, target_node_id, cost
                 )
                 if success and new_edge:
@@ -785,7 +798,7 @@ class Bot2(Bot1):
             if reconnect_target is not None and reconnect_cost is not None:
                 current_gold = state.player_gold.get(self.player_id, 0)
                 if current_gold >= reconnect_cost and current_gold - reconnect_cost >= self.bridge_gold_reserve:
-                    success, new_edge, actual_cost, error_msg, _ = self.game_engine.handle_build_bridge(
+                    success, new_edge, actual_cost, error_msg, _, _ = self.game_engine.handle_build_bridge(
                         self.bot_token, leaf.id, reconnect_target.id, reconnect_cost
                     )
                     if success and new_edge:
@@ -801,7 +814,7 @@ class Bot2(Bot1):
             if enemy_target is not None and attack_cost is not None:
                 current_gold = state.player_gold.get(self.player_id, 0)
                 if current_gold >= attack_cost and current_gold - attack_cost >= self.bridge_gold_reserve:
-                    success, new_edge, actual_cost, error_msg, _ = self.game_engine.handle_build_bridge(
+                    success, new_edge, actual_cost, error_msg, _, _ = self.game_engine.handle_build_bridge(
                         self.bot_token, leaf.id, enemy_target.id, attack_cost
                     )
                     if success and new_edge:
@@ -1038,7 +1051,7 @@ class Bot2(Bot1):
             current_gold = state.player_gold.get(self.player_id, 0)
             if current_gold < cost or current_gold - cost < self.bridge_gold_reserve:
                 continue
-            success, new_edge, actual_cost, error_msg, _ = self.game_engine.handle_build_bridge(
+            success, new_edge, actual_cost, error_msg, _, _ = self.game_engine.handle_build_bridge(
                 self.bot_token, owned_node_id, target_node_id, cost
             )
             if success and new_edge:

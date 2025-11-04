@@ -22,6 +22,7 @@
   };
 
   const SHOW_PLAY_AREA_BORDER = false; // toggle to render the play-area outline
+  const ENABLE_REPLAY_UPLOAD = false; // gate replay upload UI while retaining implementation
 
   const game = new Phaser.Game(config);
 
@@ -32,6 +33,7 @@
   let tickIntervalSec = 0.2; // provided by backend init; used to show per-second edge flow
   let settingsOpen = false; // persisted visibility of settings/toggles panel
 
+  let graphicsStartZones;
   let graphicsEdges;
   let graphicsNodes;
   let statusText;
@@ -47,6 +49,11 @@
   let myPlayerId = null;
   let phase = 'picking';
   let myPicked = false;
+  let hiddenStartActive = false;
+  let hiddenStartRevealed = false;
+  let hiddenStartSide = null;
+  let hiddenStartBoundary = null;
+  let hiddenStartBounds = null;
   let goldValue = 0; // no limit
   let nodeMaxJuice = 50;
   let hoveredNodeId = null;
@@ -85,6 +92,8 @@
     alphaAtRest: 0.65,
     driftLightenFactor: 0.25,
   };
+  const NODE_MOVE_DURATION_SEC = 1.8;
+  const NODE_MOVE_EPSILON = 1e-4;
   let pendingSingleClickTimeout = null;
   let pendingSingleClickData = null;
 
@@ -132,7 +141,7 @@
   // Timer system
   let timerDisplay = null;
   let gameStartTime = null;
-  let gameDuration = 7 * 60; // 7 minutes in seconds
+  let gameDuration = 10 * 60; // default to 10 minutes in seconds; server can override
   
   // Auto-expand system
   let autoExpandToggle = null;
@@ -171,6 +180,7 @@
     brass: 'cross',
     brassStart: 'owned',
     bridgeCost: 1.0,
+    gameStart: 'open',
   };
 
   let selectedPlayerCount = 2;
@@ -179,7 +189,6 @@
   let selectedSettings = { ...DEFAULT_MODE_SETTINGS };
   let modeOptionsButton = null;
   let modeOptionsPanel = null;
-  let modeSummaryEl = null;
   let modeOptionButtons = [];
   let modePanelOpen = false;
   let bridgeCostSlider = null;
@@ -233,21 +242,9 @@
     const screenLabel = (settings.screen === 'warp') ? 'Warp' : 'Flat';
     const brassLabel = (settings.brass === 'right-click') ? 'Right-Click' : 'Cross';
     const startLabel = (settings.brassStart === 'anywhere') ? 'Anywhere' : 'Owned';
+    const startModeLabel = (settings.gameStart === 'hidden-split') ? 'Hidden' : 'Open';
     const costLabel = coerceBridgeCost(settings.bridgeCost).toFixed(1);
-    return `${screenLabel} · ${brassLabel} · ${startLabel} · ${costLabel}`;
-  }
-
-  function updateModeSummaryDisplay(settings = selectedSettings) {
-    if (!modeSummaryEl) return;
-    if (modePanelOpen) {
-      modeSummaryEl.textContent = formatModeSettingsSummary(settings);
-      modeSummaryEl.style.display = 'block';
-      modeSummaryEl.setAttribute('aria-hidden', 'false');
-    } else {
-      modeSummaryEl.textContent = '';
-      modeSummaryEl.style.display = 'none';
-      modeSummaryEl.setAttribute('aria-hidden', 'true');
-    }
+    return `${screenLabel} · ${brassLabel} · ${startLabel} · ${startModeLabel} · ${costLabel}`;
   }
 
   function updateModeOptionButtonStates() {
@@ -256,6 +253,8 @@
     const currentBrass = (selectedSettings.brass || 'cross').toLowerCase();
     const currentStart = (selectedSettings.brassStart || 'owned').toLowerCase();
     const currentCost = Number(coerceBridgeCost(selectedSettings.bridgeCost));
+    const currentGameStart = (selectedSettings.gameStart || 'open').toLowerCase();
+    const hiddenAllowed = isHiddenStartAllowed();
     modeOptionButtons.forEach((btn) => {
       const setting = btn?.dataset?.setting;
       const value = btn?.dataset?.value;
@@ -263,6 +262,8 @@
         btn.classList.remove('active');
         return;
       }
+      btn.disabled = false;
+      btn.classList.remove('disabled');
       let isActive = false;
       if (setting === 'screen') {
         isActive = value.toLowerCase() === currentScreen;
@@ -274,11 +275,35 @@
         const normalized = value.toLowerCase();
         const target = currentStart === 'anywhere' ? 'anywhere' : 'owned';
         isActive = normalized === target;
+      } else if (setting === 'gameStart') {
+        const normalized = value.toLowerCase();
+        const target = normalized.startsWith('hidden') ? 'hidden-split' : 'open';
+        const current = currentGameStart.startsWith('hidden') ? 'hidden-split' : 'open';
+        const shouldDisable = target === 'hidden-split' && !hiddenAllowed;
+        if (shouldDisable) {
+          btn.disabled = true;
+          btn.classList.add('disabled');
+          isActive = false;
+        } else {
+          isActive = target === current;
+        }
       } else if (setting === 'bridgeCost') {
         isActive = Number(value) === currentCost;
       }
       btn.classList.toggle('active', isActive);
     });
+  }
+
+  function isHiddenStartAllowed() {
+    return selectedPlayerCount === 2;
+  }
+
+  function enforceGameStartAvailability() {
+    if (!isHiddenStartAllowed() && selectedSettings.gameStart === 'hidden-split') {
+      applySelectedSettings({ gameStart: 'open' });
+    } else {
+      updateModeOptionButtonStates();
+    }
   }
 
   function applySelectedSettings(overrides = {}) {
@@ -295,15 +320,24 @@
       const start = typeof overrides.brassStart === 'string' ? overrides.brassStart.toLowerCase() : '';
       next.brassStart = start === 'anywhere' ? 'anywhere' : 'owned';
     }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'gameStart')) {
+      const startMode = typeof overrides.gameStart === 'string' ? overrides.gameStart.toLowerCase() : '';
+      next.gameStart = startMode.startsWith('hidden') ? 'hidden-split' : 'open';
+    } else {
+      next.gameStart = (next.gameStart === 'hidden-split') ? 'hidden-split' : 'open';
+    }
     if (Object.prototype.hasOwnProperty.call(overrides, 'bridgeCost')) {
       next.bridgeCost = coerceBridgeCost(overrides.bridgeCost);
     } else {
       next.bridgeCost = coerceBridgeCost(next.bridgeCost);
     }
 
+    if (next.gameStart === 'hidden-split' && !isHiddenStartAllowed()) {
+      next.gameStart = 'open';
+    }
+
     selectedSettings = next;
     selectedMode = deriveModeFromSettings(selectedSettings);
-    updateModeSummaryDisplay(selectedSettings);
     updateModeOptionButtonStates();
     syncBridgeCostSlider();
     updatePlayBotAvailability(true);
@@ -315,6 +349,7 @@
       brass: selectedSettings.brass,
       brassStart: selectedSettings.brassStart,
       bridgeCost: Number(coerceBridgeCost(selectedSettings.bridgeCost).toFixed(1)),
+      gameStart: selectedSettings.gameStart,
       baseMode: selectedMode,
       derivedMode: selectedMode,
     };
@@ -326,6 +361,7 @@
     if (typeof payload.screen === 'string') overrides.screen = payload.screen;
     if (typeof payload.brass === 'string') overrides.brass = payload.brass;
     if (typeof payload.brassStart === 'string') overrides.brassStart = payload.brassStart;
+    if (typeof payload.gameStart === 'string') overrides.gameStart = payload.gameStart;
     if (Object.prototype.hasOwnProperty.call(payload, 'bridgeCost')) overrides.bridgeCost = payload.bridgeCost;
     applySelectedSettings(overrides);
   }
@@ -622,7 +658,7 @@
     }
   }
 
-    function ensureReplayElements() {
+  function ensureReplayElements() {
     if (!replayWatchBtnEl) replayWatchBtnEl = document.getElementById('replayWatchBtn');
     if (!replayFileLabelEl) replayFileLabelEl = document.getElementById('replayFileLabel');
     if (!replayFileInputEl) replayFileInputEl = document.getElementById('replayFileInput');
@@ -630,6 +666,10 @@
     if (!replayBodyEl) replayBodyEl = document.getElementById('replayBody');
     if (!replayHeaderEl) replayHeaderEl = document.getElementById('replayHeader');
     if (!replayToggleIconEl) replayToggleIconEl = document.getElementById('replayToggleIcon');
+    if (replayPanelEl) {
+      replayPanelEl.style.display = ENABLE_REPLAY_UPLOAD ? 'flex' : 'none';
+    }
+    if (!ENABLE_REPLAY_UPLOAD) return;
     if (replayHeaderEl && !replayHeaderEl.dataset.toggleBound) {
       replayHeaderEl.addEventListener('click', () => toggleReplayPanel());
       replayHeaderEl.dataset.toggleBound = 'true';
@@ -640,6 +680,10 @@
 
 
   function setReplayControlsDisabled(disabled) {
+    if (!ENABLE_REPLAY_UPLOAD) {
+      updateReplayRestartButtonState();
+      return;
+    }
     ensureReplayElements();
     const disable = !!disabled;
     if (replayFileInputEl) {
@@ -660,6 +704,7 @@
   function clearReplaySelection() {
     ensureReplayElements();
     pendingReplayPayload = null;
+    if (!ENABLE_REPLAY_UPLOAD) return;
     toggleReplayPanel(false);
     if (replayFileInputEl) replayFileInputEl.value = '';
     if (replayFileLabelEl) replayFileLabelEl.textContent = 'Choose replay file…';
@@ -667,6 +712,7 @@
   }
 
   function toggleReplayPanel(forceExpand) {
+    if (!ENABLE_REPLAY_UPLOAD) return;
     ensureReplayElements();
     if (!replayBodyEl || !replayToggleIconEl) return;
     const expand = forceExpand !== undefined ? forceExpand : (replayBodyEl.style.display !== 'flex');
@@ -835,6 +881,7 @@
   }
 
   async function handleReplayFileSelect(event) {
+    if (!ENABLE_REPLAY_UPLOAD) return;
     ensureReplayElements();
     toggleReplayPanel(true);
     if (isReplayActive()) {
@@ -866,6 +913,7 @@
   }
 
   function startReplayFromSelection() {
+    if (!ENABLE_REPLAY_UPLOAD) return;
     ensureReplayElements();
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       return;
@@ -1494,12 +1542,34 @@
   function getEdgeWarpSegments(edge) {
     if (!edge) return [];
     if (edge && Array.isArray(edge.warpSegments) && edge.warpSegments.length) {
-      return edge.warpSegments.map((seg) => ({
+      const result = edge.warpSegments.map((seg) => ({
         sx: Number(seg.sx),
         sy: Number(seg.sy),
         ex: Number(seg.ex),
         ey: Number(seg.ey),
       })).filter((seg) => [seg.sx, seg.sy, seg.ex, seg.ey].every((value) => Number.isFinite(value)));
+
+      if (result.length) {
+        const sourceNode = nodes.get(edge.source);
+        const targetNode = nodes.get(edge.target);
+        if (sourceNode) {
+          result[0] = {
+            ...result[0],
+            sx: Number(sourceNode.x),
+            sy: Number(sourceNode.y),
+          };
+        }
+        if (targetNode) {
+          const lastIndex = result.length - 1;
+          result[lastIndex] = {
+            ...result[lastIndex],
+            ex: Number(targetNode.x),
+            ey: Number(targetNode.y),
+          };
+        }
+      }
+
+      return result;
     }
     const sourceNode = edge ? nodes.get(edge.source) : null;
     const targetNode = edge ? nodes.get(edge.target) : null;
@@ -1555,7 +1625,18 @@
     const worldSegments = getEdgeWarpSegments(edge);
     if (!worldSegments.length) return [];
 
-    const screenSegments = worldSegments.map((seg) => {
+    const adjustedSegments = worldSegments.map((seg) => ({ ...seg }));
+    if (fromNode && adjustedSegments.length > 0) {
+      adjustedSegments[0].sx = fromNode.x;
+      adjustedSegments[0].sy = fromNode.y;
+    }
+    if (toNode && adjustedSegments.length > 0) {
+      const last = adjustedSegments[adjustedSegments.length - 1];
+      last.ex = toNode.x;
+      last.ey = toNode.y;
+    }
+
+    const screenSegments = adjustedSegments.map((seg) => {
       const [sx, sy] = worldToScreen(seg.sx, seg.sy);
       const [ex, ey] = worldToScreen(seg.ex, seg.ey);
       return { sx, sy, ex, ey };
@@ -2039,6 +2120,8 @@ function clearBridgeSelection() {
 
   function create() {
     sceneRef = this;
+    graphicsStartZones = this.add.graphics();
+    if (graphicsStartZones) graphicsStartZones.setDepth(-1);
     graphicsEdges = this.add.graphics();
     graphicsNodes = this.add.graphics();
     statusText = this.add.text(10, 10, 'Connect to start a game', { font: '16px monospace', color: '#cccccc' });
@@ -2098,12 +2181,12 @@ function clearBridgeSelection() {
           btn.classList.add('active');
           const desired = parseInt(btn.getAttribute('data-count'), 10);
           selectedPlayerCount = Number.isFinite(desired) ? desired : 2;
+          enforceGameStartAvailability();
         });
       });
     }
     modeOptionsButton = document.getElementById('modeOptionsButton');
     modeOptionsPanel = document.getElementById('modeOptionsPanel');
-    modeSummaryEl = document.getElementById('modeSummary');
     modeOptionButtons = Array.from(document.querySelectorAll('.mode-option-button'));
     bridgeCostSlider = document.getElementById('bridgeCostSlider');
     bridgeCostValueLabel = document.getElementById('bridgeCostValue');
@@ -2112,6 +2195,7 @@ function clearBridgeSelection() {
       modeOptionButtons.forEach((btn) => {
         btn.addEventListener('click', (event) => {
           event.stopPropagation();
+          if (btn.disabled) return;
           const setting = btn.getAttribute('data-setting');
           const value = btn.getAttribute('data-value');
           if (!setting || typeof value === 'undefined') return;
@@ -2140,7 +2224,6 @@ function clearBridgeSelection() {
       modeOptionsPanel.setAttribute('aria-hidden', 'true');
       if (modeOptionsButton) modeOptionsButton.setAttribute('aria-expanded', 'false');
       modePanelOpen = false;
-      updateModeSummaryDisplay(selectedSettings);
     };
 
     const openModePanel = () => {
@@ -2149,7 +2232,6 @@ function clearBridgeSelection() {
       modeOptionsPanel.setAttribute('aria-hidden', 'false');
       if (modeOptionsButton) modeOptionsButton.setAttribute('aria-expanded', 'true');
       modePanelOpen = true;
-      updateModeSummaryDisplay(selectedSettings);
     };
 
     if (modeOptionsButton && modeOptionsPanel) {
@@ -2214,6 +2296,9 @@ function clearBridgeSelection() {
           setReplayStatus('Stop the current replay before starting a bot match.', 'warn');
           return;
         }
+        if (selectedSettings.gameStart === 'hidden-split') {
+          applySelectedSettings({ gameStart: 'open' });
+        }
         if (ws && ws.readyState === WebSocket.OPEN) {
           console.log(`Starting hard bot game with ${formatModeSettingsSummary()} options`);
           showLobby();
@@ -2234,15 +2319,17 @@ function clearBridgeSelection() {
     }
 
     ensureReplayElements();
-    if (replayFileInputEl) {
-      replayFileInputEl.addEventListener('change', handleReplayFileSelect);
-    }
-    if (replayWatchBtnEl) {
-      replayWatchBtnEl.addEventListener('click', startReplayFromSelection);
-    }
-    if (replayHeaderEl && !replayHeaderEl.dataset.toggleBound) {
-      replayHeaderEl.addEventListener('click', () => toggleReplayPanel());
-      replayHeaderEl.dataset.toggleBound = 'true';
+    if (ENABLE_REPLAY_UPLOAD) {
+      if (replayFileInputEl && !replayFileInputEl.dataset.boundChange) {
+        replayFileInputEl.addEventListener('change', handleReplayFileSelect);
+        replayFileInputEl.dataset.boundChange = 'true';
+      }
+      if (replayWatchBtnEl && !replayWatchBtnEl.dataset.boundClick) {
+        replayWatchBtnEl.addEventListener('click', startReplayFromSelection);
+        replayWatchBtnEl.dataset.boundClick = 'true';
+      }
+    } else if (replayPanelEl) {
+      replayPanelEl.style.display = 'none';
     }
     ensureReplaySpeedElements();
     replaySpeedValue = 1;
@@ -2765,10 +2852,55 @@ function clearBridgeSelection() {
     });
   }
 
+  function easeOutCubic(t) {
+    return 1 - Math.pow(1 - t, 3);
+  }
+
+  function updateNodeAnimations() {
+    let needsRedraw = false;
+    nodes.forEach((node) => {
+      const startTime = node.moveStartTime;
+      if (startTime == null) {
+        return;
+      }
+      const duration = Math.max(NODE_MOVE_EPSILON, node.moveDuration || NODE_MOVE_DURATION_SEC);
+      const elapsed = animationTime - startTime;
+      const targetX = Number.isFinite(node.targetX) ? node.targetX : node.x;
+      const targetY = Number.isFinite(node.targetY) ? node.targetY : node.y;
+      const startX = Number.isFinite(node.startX) ? node.startX : node.x;
+      const startY = Number.isFinite(node.startY) ? node.startY : node.y;
+      if (elapsed >= duration) {
+        const hadChange =
+          !Number.isFinite(node.x) ||
+          !Number.isFinite(node.y) ||
+          Math.abs(node.x - targetX) > NODE_MOVE_EPSILON ||
+          Math.abs(node.y - targetY) > NODE_MOVE_EPSILON;
+        node.x = targetX;
+        node.y = targetY;
+        node.startX = targetX;
+        node.startY = targetY;
+        node.moveStartTime = null;
+        node.moveDuration = null;
+        if (hadChange) {
+          needsRedraw = true;
+        }
+        return;
+      }
+
+      const t = Math.max(0, Math.min(1, elapsed / Math.max(duration, NODE_MOVE_EPSILON)));
+      const eased = easeOutCubic(t);
+      node.x = startX + (targetX - startX) * eased;
+      node.y = startY + (targetY - startY) * eased;
+      needsRedraw = true;
+    });
+    return needsRedraw;
+  }
+
   function update() {
     // Update animation timer for juice flow
     animationTime += 1/60; // Assuming 60 FPS, increment by frame time
-    
+    const nodesAnimating = updateNodeAnimations();
+
     // Update money indicators
     updateMoneyIndicators();
     
@@ -2792,7 +2924,7 @@ function clearBridgeSelection() {
     const anySpinning = updateReverseSpinAnimations();
     const removalAnimating = updateEdgeRemovalAnimations();
     
-    if (hasFlowingEdges || anySpinning || removalAnimating || moneyIndicators.length > 0 || (persistentTargeting && currentTargetNodeId !== null)) {
+    if (hasFlowingEdges || anySpinning || removalAnimating || moneyIndicators.length > 0 || (persistentTargeting && currentTargetNodeId !== null) || nodesAnimating) {
       redrawStatic();
     }
   }
@@ -2945,6 +3077,7 @@ function clearBridgeSelection() {
     updateQuitButtonLabel();
     currentTargetNodeId = null;
     currentTargetSetTime = null;
+    resetHiddenStartState();
 
     if (typeof msg.gameDuration === 'number' && Number.isFinite(msg.gameDuration) && msg.gameDuration > 0) {
       gameDuration = msg.gameDuration;
@@ -2952,6 +3085,7 @@ function clearBridgeSelection() {
     hideTimerDisplay();
 
     screen = msg.screen || null;
+    updateHiddenStartState(msg.hiddenStart);
     if (typeof msg.tickInterval === 'number' && Number.isFinite(msg.tickInterval) && msg.tickInterval > 0) {
       tickIntervalSec = msg.tickInterval;
     }
@@ -3009,6 +3143,12 @@ function clearBridgeSelection() {
         nodes.set(id, {
           x,
           y,
+          startX: x,
+          startY: y,
+          targetX: x,
+          targetY: y,
+          moveStartTime: null,
+          moveDuration: null,
           size,
           owner,
           pendingGold: Number(pendingGold) || 0,
@@ -3444,7 +3584,61 @@ function clearBridgeSelection() {
     // Don't show menu immediately - wait for user to click Quit button
   }
 
+  function applyNodeMovements(movements) {
+    if (!Array.isArray(movements) || movements.length === 0) return;
+    movements.forEach((entry) => {
+      let nodeId;
+      let x;
+      let y;
+      if (Array.isArray(entry)) {
+        [nodeId, x, y] = entry;
+      } else if (entry && typeof entry === 'object') {
+        nodeId = entry.nodeId ?? entry.id ?? entry[0];
+        x = entry.x;
+        y = entry.y;
+      } else {
+        return;
+      }
+
+      const id = Number(nodeId);
+      if (!Number.isFinite(id)) return;
+      const node = nodes.get(id);
+      if (!node) return;
+
+      const nx = Number(x);
+      const ny = Number(y);
+      if (!Number.isFinite(nx) || !Number.isFinite(ny)) return;
+
+      const currentX = Number.isFinite(node.x) ? node.x : nx;
+      const currentY = Number.isFinite(node.y) ? node.y : ny;
+      const previousTargetX = Number.isFinite(node.targetX) ? node.targetX : currentX;
+      const previousTargetY = Number.isFinite(node.targetY) ? node.targetY : currentY;
+
+      const deltaX = nx - previousTargetX;
+      const deltaY = ny - previousTargetY;
+      if (Math.abs(deltaX) < NODE_MOVE_EPSILON && Math.abs(deltaY) < NODE_MOVE_EPSILON) {
+        // No meaningful movement; ensure target is aligned and skip animation reset
+        node.targetX = nx;
+        node.targetY = ny;
+        if (!Number.isFinite(node.x) || !Number.isFinite(node.y)) {
+          node.x = nx;
+          node.y = ny;
+        }
+        return;
+      }
+
+      node.startX = currentX;
+      node.startY = currentY;
+      node.targetX = nx;
+      node.targetY = ny;
+      node.moveStartTime = animationTime;
+      node.moveDuration = NODE_MOVE_DURATION_SEC;
+    });
+  }
+
   function handleTick(msg) {
+    applyNodeMovements(msg.nodeMovements);
+    updateHiddenStartState(msg.hiddenStart);
     const removalEvents = Array.isArray(msg.removedEdgeEvents) ? msg.removedEdgeEvents : null;
     if (Array.isArray(msg.removedEdges) && msg.removedEdges.length > 0) {
       removeEdges(msg.removedEdges);
@@ -3636,6 +3830,7 @@ function clearBridgeSelection() {
 
   function handleNewEdge(msg) {
     // Add new edge to the frontend map
+    applyNodeMovements(msg.nodeMovements);
     if (Array.isArray(msg.removedEdges) && msg.removedEdges.length > 0) {
       removeEdges(msg.removedEdges);
     }
@@ -4370,6 +4565,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
   function redrawStatic() {
     // Draw edges first, then nodes
+    if (graphicsStartZones) graphicsStartZones.clear();
     graphicsEdges.clear();
     const menuVisible = !document.getElementById('menu')?.classList.contains('hidden');
     if (menuVisible) {
@@ -4394,10 +4590,11 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
     // Show UI bars when game is active
     if (topUiBar) topUiBar.style.display = 'block';
-    if (bottomUiBar) bottomUiBar.style.display = 'block';
+      if (bottomUiBar) bottomUiBar.style.display = 'block';
     
     // Draw border box around play area (warp border handles inner toggle)
     drawPlayAreaBorder();
+    drawHiddenStartOverlay();
     const overflowMode = ['overflow', 'nuke', 'cross', 'brass-old', 'go', 'warp', 'i-warp', 'flat', 'i-flat'].includes(normalizeMode(gameMode));
     
     // Show gold display when graph is being drawn and we have nodes/game data
@@ -4547,7 +4744,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
       }
 
       // Hover effect: player's color border when eligible for starting node pick
-      if (hoveredNodeId === id && !myPicked && (n.owner == null)) {
+      if (hoveredNodeId === id && !myPicked && (n.owner == null) && isNodeWithinStartZone(n)) {
         const myColor = ownerToColor(myPlayerId);
         graphicsNodes.lineStyle(3, myColor, 1);
         graphicsNodes.strokeCircle(nx, ny, r + 3);
@@ -4829,6 +5026,116 @@ function fallbackRemoveEdgesForNode(nodeId) {
       warpBoundsWorld = null;
       warpBoundsScreen = null;
     }
+  }
+
+  function drawHiddenStartOverlay() {
+    if (!graphicsStartZones) return;
+    if (!hiddenStartActive || hiddenStartRevealed || phase !== 'picking') return;
+    if (!view) return;
+
+    const bounds = hiddenStartBounds || {};
+    const fallbackMinX = Number.isFinite(screen?.minX) ? screen.minX : 0;
+    const fallbackWidth = Number.isFinite(screen?.width) ? screen.width : 100;
+    const fallbackMinY = Number.isFinite(screen?.minY) ? screen.minY : 0;
+    const fallbackHeight = Number.isFinite(screen?.height) ? screen.height : 100;
+
+    const boardMinX = Number.isFinite(bounds.minX) ? bounds.minX : fallbackMinX;
+    const boardMaxX = Number.isFinite(bounds.maxX) ? bounds.maxX : fallbackMinX + fallbackWidth;
+
+    const splitWorldX = Number.isFinite(hiddenStartBoundary)
+      ? hiddenStartBoundary
+      : (boardMinX + boardMaxX) / 2;
+    const clampedSplitWorld = Math.min(Math.max(splitWorldX, boardMinX), boardMaxX);
+    const [splitScreenX] = worldToScreen(clampedSplitWorld, fallbackMinY);
+
+    const canvasWidth = game.scale.gameSize.width;
+    const canvasHeight = game.scale.gameSize.height;
+
+    const topBarEl = document.getElementById('topUiBar');
+    const bottomBarEl = document.getElementById('bottomUiBar');
+    const topOffset = Math.max(0, topBarEl?.offsetHeight ?? 0);
+    const bottomOffset = Math.max(0, bottomBarEl?.offsetHeight ?? 0);
+
+    let leftEdge;
+    let rightEdge;
+    if (hiddenStartSide === 'left') {
+      leftEdge = 0;
+      rightEdge = Math.min(canvasWidth, Math.max(0, splitScreenX));
+    } else if (hiddenStartSide === 'right') {
+      leftEdge = Math.max(0, Math.min(canvasWidth, splitScreenX));
+      rightEdge = canvasWidth;
+    } else {
+      return;
+    }
+
+    const topEdge = topOffset;
+    const bottomEdge = canvasHeight - bottomOffset;
+
+    if (rightEdge <= leftEdge || bottomEdge <= topEdge) return;
+
+    const rectX = Math.floor(leftEdge);
+    const rectY = Math.floor(topEdge);
+    const width = Math.ceil(rightEdge - leftEdge);
+    const height = Math.ceil(bottomEdge - topEdge);
+
+    const colorEntry = players.get(myPlayerId);
+    const baseColor = colorEntry?.color || '#ffffff';
+    const fillColor = hexToInt(lightenColor(baseColor, 0.2));
+    const outlineColor = hexToInt(baseColor);
+
+    if (!myPicked) {
+      graphicsStartZones.fillStyle(fillColor, 0.26);
+      graphicsStartZones.fillRect(rectX, rectY, width, height);
+    }
+    graphicsStartZones.lineStyle(7, outlineColor, 0.95);
+    graphicsStartZones.strokeRect(rectX, rectY, width, height);
+  }
+
+  function resetHiddenStartState() {
+    hiddenStartActive = false;
+    hiddenStartRevealed = false;
+    hiddenStartSide = null;
+    hiddenStartBoundary = null;
+    hiddenStartBounds = null;
+  }
+
+  function updateHiddenStartState(payload) {
+    if (!payload || !payload.active) {
+      resetHiddenStartState();
+      return;
+    }
+
+    hiddenStartActive = true;
+    hiddenStartRevealed = !!payload.revealed;
+    hiddenStartSide = typeof payload.side === 'string' ? payload.side : null;
+    hiddenStartBoundary = Number.isFinite(payload.boundary) ? Number(payload.boundary) : null;
+
+    hiddenStartBounds = null;
+    const bounds = payload.bounds;
+    if (bounds && Number.isFinite(bounds.minX) && Number.isFinite(bounds.maxX)) {
+      hiddenStartBounds = {
+        minX: Number(bounds.minX),
+        maxX: Number(bounds.maxX),
+        minY: Number.isFinite(bounds.minY) ? Number(bounds.minY) : (Number.isFinite(screen?.minY) ? screen.minY : 0),
+        maxY: Number.isFinite(bounds.maxY)
+          ? Number(bounds.maxY)
+          : (Number.isFinite(screen?.minY) ? screen.minY : 0) + (Number.isFinite(screen?.height) ? screen.height : 100),
+      };
+    }
+  }
+
+  function isNodeWithinStartZone(node) {
+    if (!hiddenStartActive || hiddenStartRevealed || phase !== 'picking') return true;
+    if (!node || !Number.isFinite(node.x)) return true;
+    if (!hiddenStartSide || !Number.isFinite(hiddenStartBoundary)) return true;
+    const tolerance = 1e-4;
+    if (hiddenStartSide === 'left') {
+      return node.x <= hiddenStartBoundary + tolerance;
+    }
+    if (hiddenStartSide === 'right') {
+      return node.x >= hiddenStartBoundary - tolerance;
+    }
+    return true;
   }
 
   function hexToInt(color) {
@@ -5613,6 +5920,13 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
     // Handle clicks - check for starting node pick first
     if (!myPicked && nodeId != null && ws && ws.readyState === WebSocket.OPEN) {
+      if (hiddenStartActive && !hiddenStartRevealed && phase === 'picking') {
+        const candidateNode = nodes.get(nodeId);
+        if (candidateNode && !isNodeWithinStartZone(candidateNode)) {
+          showErrorMessage('Pick a node in your start zone');
+          return;
+        }
+      }
       const token = localStorage.getItem('token');
       ws.send(JSON.stringify({ type: 'clickNode', nodeId: nodeId, token }));
       return; // Return after handling starting node pick
@@ -6054,6 +6368,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     // Clear targeting indicator
     currentTargetNodeId = null;
     currentTargetSetTime = null;
+    resetHiddenStartState();
     
     nodes.clear();
     edges.clear();

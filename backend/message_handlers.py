@@ -1,3 +1,4 @@
+import copy
 import json
 import time
 import uuid
@@ -191,6 +192,7 @@ class MessageRouter:
             "brass": "cross",
             "brassStart": "owned",
             "bridgeCost": 1.0,
+            "gameStart": "open",
         }
         if not isinstance(payload, dict):
             return settings
@@ -206,6 +208,10 @@ class MessageRouter:
         brass_start_option = str(payload.get("brassStart", settings["brassStart"])).strip().lower()
         if brass_start_option in {"owned", "anywhere"}:
             settings["brassStart"] = "anywhere" if brass_start_option == "anywhere" else "owned"
+
+        game_start_option = str(payload.get("gameStart", settings["gameStart"])).strip().lower()
+        if game_start_option in {"open", "hidden", "hidden-split", "hidden_split", "hidden split"}:
+            settings["gameStart"] = "hidden-split" if game_start_option.startswith("hidden") else "open"
 
         bridge_cost_value = payload.get("bridgeCost", settings["bridgeCost"])
         if isinstance(bridge_cost_value, str):
@@ -265,6 +271,14 @@ class MessageRouter:
 
         actual_mode = self._derive_mode_from_settings(resolved_host_settings, sanitized_mode)
         resolved_host_settings["derivedMode"] = actual_mode
+
+        game_start_option = str(resolved_host_settings.get("gameStart", "open")).strip().lower()
+        if player_count != 2:
+            resolved_host_settings["gameStart"] = "open"
+        elif game_start_option.startswith("hidden"):
+            resolved_host_settings["gameStart"] = "hidden-split"
+        else:
+            resolved_host_settings["gameStart"] = "open"
 
         player_slots: List[Dict[str, Any]] = []
         auto_expand_state: Dict[str, bool] = {}
@@ -528,7 +542,7 @@ class MessageRouter:
             return
 
         engine = game_info["engine"]
-        success, new_edge, actual_cost, error_msg, removed_edges = engine.handle_build_bridge(
+        success, new_edge, actual_cost, error_msg, removed_edges, node_movements = engine.handle_build_bridge(
             token,
             int(from_node_id),
             int(to_node_id),
@@ -536,6 +550,25 @@ class MessageRouter:
             warp_info=warp_info,
             pipe_type=pipe_type if isinstance(pipe_type, str) else "normal",
         )
+
+        movement_payloads: List[Dict[str, float]] = []
+        movement_arrays: List[List[float]] = []
+
+        if node_movements:
+            for movement in node_movements:
+                if not isinstance(movement, dict):
+                    continue
+                node_id = movement.get("nodeId")
+                x = movement.get("x")
+                y = movement.get("y")
+                try:
+                    node_int = int(node_id)
+                    x_val = round(float(x), 3)
+                    y_val = round(float(y), 3)
+                except (TypeError, ValueError):
+                    continue
+                movement_payloads.append({"nodeId": node_int, "x": x_val, "y": y_val})
+                movement_arrays.append([node_int, x_val, y_val])
 
         if not success:
             await self._send_safe(
@@ -570,6 +603,8 @@ class MessageRouter:
                     "pipeType": getattr(new_edge, "pipe_type", "normal"),
                 },
             }
+            if movement_arrays:
+                edge_update_message["nodeMovements"] = movement_arrays
             if removed_edges:
                 edge_update_message["removedEdges"] = removed_edges
             
@@ -598,6 +633,8 @@ class MessageRouter:
                 for sx, sy, ex, ey in (new_edge.warp_segments or [])
             ]
             event_payload["pipeType"] = getattr(new_edge, "pipe_type", "normal")
+            if movement_payloads:
+                event_payload["nodeMovements"] = movement_payloads
         if removed_edges:
             event_payload["removedEdges"] = removed_edges
         self._record_game_event(game_info, token, "buildBridge", event_payload)
@@ -948,6 +985,8 @@ class MessageRouter:
         mode_settings = self._sanitize_mode_settings(msg.get("settings"))
         mode = self._derive_mode_from_settings(mode_settings, raw_mode)
         mode_settings["derivedMode"] = mode
+        if mode_settings.get("gameStart") == "hidden-split":
+            mode_settings["gameStart"] = "open"
 
         success, error_msg = bot_game_manager.start_bot_game(
             token,
@@ -978,6 +1017,8 @@ class MessageRouter:
             message["type"] = "init"
             message["myPlayerId"] = 1
             message["token"] = token
+            player_id = bot_game_engine.token_to_player_id.get(token)
+            message = bot_game_engine.state.build_player_view(message, player_id)
             await self._send_safe(websocket, json.dumps(message))
 
         if bot_game_manager.bot_player:
@@ -1090,7 +1131,7 @@ class MessageRouter:
             warp_info = msg.get("warpInfo")
             pipe_type = msg.get("pipeType")
             if from_node_id is not None and to_node_id is not None:
-                success, new_edge, actual_cost, error_msg, removed_edges = bot_game_engine.handle_build_bridge(
+                success, new_edge, actual_cost, error_msg, removed_edges, node_movements = bot_game_engine.handle_build_bridge(
                     token,
                     int(from_node_id),
                     int(to_node_id),
@@ -1104,6 +1145,21 @@ class MessageRouter:
                         json.dumps({"type": "bridgeError", "message": error_msg or "Failed to build bridge"}),
                     )
                 elif new_edge:
+                    movement_arrays: List[List[float]] = []
+                    if node_movements:
+                        for movement in node_movements:
+                            if not isinstance(movement, dict):
+                                continue
+                            node_id = movement.get("nodeId")
+                            x = movement.get("x")
+                            y = movement.get("y")
+                            try:
+                                node_int = int(node_id)
+                                x_val = round(float(x), 3)
+                                y_val = round(float(y), 3)
+                            except (TypeError, ValueError):
+                                continue
+                            movement_arrays.append([node_int, x_val, y_val])
                     warp_payload = {
                         "axis": new_edge.warp_axis,
                         "segments": [[sx, sy, ex, ey] for sx, sy, ex, ey in (new_edge.warp_segments or [])],
@@ -1127,6 +1183,8 @@ class MessageRouter:
                     }
                     if removed_edges:
                         message["removedEdges"] = removed_edges
+                    if movement_arrays:
+                        message["nodeMovements"] = movement_arrays
                     await self._send_safe(websocket, json.dumps(message))
 
         elif msg_type == "redirectEnergy":
@@ -1199,6 +1257,8 @@ class MessageRouter:
                 message["type"] = "init"
                 message["myPlayerId"] = 1
                 message["token"] = token
+                player_id = bot_game_engine.token_to_player_id.get(token)
+                message = bot_game_engine.state.build_player_view(message, player_id)
                 await self._send_safe(websocket, json.dumps(message))
 
     # ------------------------------------------------------------------
@@ -1242,9 +1302,22 @@ class MessageRouter:
         if player_id is not None:
             message["myPlayerId"] = player_id
         message["token"] = token
+        if engine.state:
+            message = engine.state.build_player_view(message, player_id)
         await self._send_safe(websocket, json.dumps(message))
 
     async def _broadcast_to_game(self, game_info: Dict[str, Any], message: Dict[str, Any]) -> None:
+        engine: Optional[GameEngine] = game_info.get("engine")
+        state = engine.state if engine else None
+        if state and state.hidden_start_active:
+            for token, websocket in list(game_info.get("clients", {}).items()):
+                if not websocket:
+                    continue
+                player_id = engine.token_to_player_id.get(token) if engine else None
+                per_player_message = state.build_player_view(copy.deepcopy(message), player_id)
+                await self._send_safe(websocket, json.dumps(per_player_message))
+            return
+
         payload = json.dumps(message)
         for token, websocket in list(game_info.get("clients", {}).items()):
             if not websocket:

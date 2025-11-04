@@ -8,6 +8,7 @@ from .constants import (
     BRIDGE_COST_PER_UNIT_DISTANCE,
     BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE,
     DEFAULT_GAME_MODE,
+    GAME_DURATION_SECONDS,
     GOLD_REWARD_FOR_ENEMY_CAPTURE,
     INTAKE_TRANSFER_RATIO,
     MAX_TRANSFER_RATIO,
@@ -53,7 +54,7 @@ class GraphState:
         
         # Timer system
         self.game_start_time: Optional[float] = None
-        self.game_duration: float = 7 * 60  # 7 minutes in seconds
+        self.game_duration: float = GAME_DURATION_SECONDS
         
         # Auto-expand settings per player
         self.player_auto_expand: Dict[int, bool] = {}
@@ -79,6 +80,19 @@ class GraphState:
         # Replay helpers
         self.tick_count: int = 0
         self.pending_edge_removals: List[Dict[str, Any]] = []
+
+        # Geometry updates queued for the next tick payload
+        self.pending_node_movements: Dict[int, Dict[str, float]] = {}
+        
+        # Hidden game start state
+        self.game_start_mode: str = "open"
+        self.hidden_start_active: bool = False
+        self.hidden_start_revealed: bool = False
+        self.hidden_start_boundary: Optional[float] = None
+        self.hidden_start_sides: Dict[int, str] = {}
+        self.hidden_start_picks: Dict[int, int] = {}
+        self.hidden_start_bounds: Optional[Dict[str, float]] = None
+        self.hidden_start_original_sizes: Dict[int, float] = {}
         
 
     def add_player(self, player: Player) -> None:
@@ -286,6 +300,21 @@ class GraphState:
 
         return removed_ids
 
+    def record_node_movement(self, node_id: int, x: float, y: float) -> None:
+        """Queue a node position update for inclusion in the next tick."""
+        self.pending_node_movements[int(node_id)] = {
+            "nodeId": int(node_id),
+            "x": float(x),
+            "y": float(y),
+        }
+
+    def pop_pending_node_movements(self) -> List[Dict[str, float]]:
+        if not self.pending_node_movements:
+            return []
+        movements = list(self.pending_node_movements.values())
+        self.pending_node_movements = {}
+        return movements
+
     def to_init_message(self, screen: Dict[str, int], tick_interval: float, current_time: float = 0.0) -> Dict:
         node_max = getattr(self, "node_max_juice", get_node_max_juice(self.mode))
         nodes_arr = [
@@ -419,6 +448,7 @@ class GraphState:
         
         removed_edge_events = [dict(event) for event in self.pending_edge_removals]
         self.pending_edge_removals = []
+        node_movements = self.pop_pending_node_movements()
 
         message = {
             "type": "tick",
@@ -439,6 +469,12 @@ class GraphState:
             "mode": self.mode,
             "modeSettings": dict(self.mode_settings or {}),
         }
+
+        if node_movements:
+            message["nodeMovements"] = [
+                [movement["nodeId"], round(movement["x"], 3), round(movement["y"], 3)]
+                for movement in node_movements
+            ]
 
         if removed_edge_events:
             message["removedEdges"] = [event.get("edgeId") for event in removed_edge_events]
@@ -877,6 +913,102 @@ class GraphState:
 
         self.player_auto_attack[player_id] = not self.player_auto_attack[player_id]
         return self.player_auto_attack[player_id]
+
+    def _hidden_start_info_for_player(self, player_id: Optional[int]) -> Dict[str, Any]:
+        revealed = self.hidden_start_revealed or self.phase != "picking"
+        info: Dict[str, Any] = {
+            "active": bool(self.hidden_start_active),
+            "mode": self.game_start_mode,
+            "revealed": bool(revealed),
+        }
+
+        if not self.hidden_start_active:
+            return info
+
+        info["boundary"] = self.hidden_start_boundary
+        if self.hidden_start_bounds:
+            info["bounds"] = dict(self.hidden_start_bounds)
+
+        side = self.hidden_start_sides.get(player_id) if player_id is not None else None
+        info["side"] = side
+
+        if side and self.hidden_start_bounds and self.hidden_start_boundary is not None:
+            min_x = self.hidden_start_bounds.get("minX")
+            max_x = self.hidden_start_bounds.get("maxX")
+            min_y = self.hidden_start_bounds.get("minY")
+            max_y = self.hidden_start_bounds.get("maxY")
+            boundary = self.hidden_start_boundary
+
+            if min_x is not None and max_x is not None:
+                if side == "left":
+                    side_min = min_x
+                    side_max = boundary
+                else:
+                    side_min = boundary
+                    side_max = max_x
+                if side_min is not None and side_max is not None:
+                    info["sideBounds"] = {
+                        "minX": side_min,
+                        "maxX": side_max,
+                        "minY": min_y,
+                        "maxY": max_y,
+                    }
+
+        return info
+
+    def build_player_view(self, payload: Dict[str, Any], player_id: Optional[int]) -> Dict[str, Any]:
+        if not isinstance(payload, dict):
+            return payload
+
+        info = self._hidden_start_info_for_player(player_id)
+        if info.get("active"):
+            payload["hiddenStart"] = info
+        elif "hiddenStart" in payload:
+            payload.pop("hiddenStart", None)
+
+        should_mask = info.get("active") and not info.get("revealed")
+        if not should_mask:
+            return payload
+
+        if not isinstance(payload.get("nodes"), list):
+            return payload
+
+        # Identify players whose selections should be hidden from this viewer
+        mask_player_ids = {
+            pid for pid in self.hidden_start_sides.keys()
+            if pid is not None and pid != player_id
+        }
+        if not mask_player_ids:
+            return payload
+
+        node_entries = payload.get("nodes")
+        payload_type = payload.get("type")
+        owner_index = 2 if payload_type == "tick" else 4
+
+        for entry in node_entries:
+            if not isinstance(entry, list):
+                continue
+            if owner_index >= len(entry):
+                continue
+            owner_id = entry[owner_index]
+            try:
+                owner_int = int(owner_id) if owner_id is not None else None
+            except (TypeError, ValueError):
+                owner_int = None
+            if owner_int in mask_player_ids:
+                entry[owner_index] = None
+                node_id = entry[0] if entry else None
+                try:
+                    node_int = int(node_id)
+                except (TypeError, ValueError):
+                    node_int = node_id
+                size_index = 1 if payload_type == "tick" else 3
+                if isinstance(node_int, int) and size_index < len(entry):
+                    original_size = self.hidden_start_original_sizes.get(node_int)
+                    if original_size is not None:
+                        entry[size_index] = round(original_size, 3)
+
+        return payload
 
 
 def load_graph(graph_path: Path) -> Tuple[GraphState, Dict[str, int]]:

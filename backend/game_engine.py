@@ -10,6 +10,8 @@ from .constants import (
     BRIDGE_COST_PER_UNIT_DISTANCE,
     BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE,
     DEFAULT_GAME_MODE,
+    MIN_PIPE_JOIN_ANGLE_DEGREES,
+    STARTING_NODE_JUICE,
     WARP_MARGIN_RATIO_X,
     WARP_MARGIN_RATIO_Y,
     get_bridge_cost_per_unit,
@@ -67,7 +69,7 @@ class GameEngine:
         self.state.eliminated_players.clear()
         self.state.pending_eliminations = []
 
-        self._configure_gameplay_options(normalized_mode, options)
+        sanitized_options = self._configure_gameplay_options(normalized_mode, options)
 
         self._refresh_edge_geometry()
 
@@ -98,13 +100,18 @@ class GameEngine:
 
         self.game_active = True
 
+        self._configure_hidden_start_mode(sanitized_options or options or {}, player_slots)
+        # Ensure mode settings reflect actual start mode after validation
+        if self.state.mode_settings is not None:
+            self.state.mode_settings["gameStart"] = self.state.game_start_mode
+
     def _configure_gameplay_options(
         self,
         normalized_mode: str,
         options: Optional[Dict[str, Any]] = None,
-    ) -> None:
+    ) -> Dict[str, Any]:
         if not self.state:
-            return
+            return {}
 
         screen_variant = "warp" if normalized_mode in {"warp-old", "warp", "i-warp"} else "flat"
         auto_brass_on_cross = normalized_mode in {"warp", "flat"}
@@ -112,6 +119,7 @@ class GameEngine:
         brass_double_cost = manual_brass_selection or normalized_mode == "cross"
         allow_brass_start_anywhere = False
         bridge_cost_override: Optional[float] = None
+        game_start_mode = "open"
 
         if isinstance(options, dict):
             screen_option = str(options.get("screen", "")).strip().lower()
@@ -126,6 +134,10 @@ class GameEngine:
             brass_start_option = str(options.get("brassStart", "")).strip().lower()
             if brass_start_option in {"owned", "anywhere"}:
                 allow_brass_start_anywhere = brass_start_option == "anywhere"
+
+            game_start_option = str(options.get("gameStart", "")).strip().lower()
+            if game_start_option in {"hidden", "hidden-split", "hidden_split", "hidden split"}:
+                game_start_mode = "hidden-split"
 
             bridge_cost_value = options.get("bridgeCost")
             if isinstance(bridge_cost_value, str):
@@ -149,6 +161,7 @@ class GameEngine:
             "brassStart": "anywhere" if allow_brass_start_anywhere else "owned",
             "bridgeCost": self.state.bridge_cost_per_unit,
             "derivedMode": normalized_mode,
+            "gameStart": game_start_mode,
         }
         if isinstance(options, dict):
             base_mode = options.get("baseMode")
@@ -161,6 +174,82 @@ class GameEngine:
         self.state.brass_double_cost = brass_double_cost
         self.state.allow_brass_start_anywhere = allow_brass_start_anywhere
         self.state.mode_settings = sanitized_options
+
+        return sanitized_options
+
+    def _configure_hidden_start_mode(
+        self,
+        options: Dict[str, Any],
+        player_slots: List[Dict[str, Any]],
+    ) -> None:
+        if not self.state:
+            return
+
+        requested_mode = str(options.get("gameStart", "open")).strip().lower()
+        allow_hidden = len(player_slots) == 2 and requested_mode.startswith("hidden")
+
+        if not allow_hidden:
+            self.state.game_start_mode = "open"
+            self.state.hidden_start_active = False
+            self.state.hidden_start_revealed = False
+            self.state.hidden_start_boundary = None
+            self.state.hidden_start_sides = {}
+            self.state.hidden_start_picks = {}
+            self.state.hidden_start_bounds = None
+            self.state.hidden_start_original_sizes = {}
+            return
+
+        self.state.game_start_mode = "hidden-split"
+        self.state.hidden_start_active = True
+        self.state.hidden_start_revealed = False
+        self.state.hidden_start_picks = {}
+        self.state.hidden_start_original_sizes = {}
+
+        screen_min_x = float(self.screen.get("minX", 0.0))
+        screen_width = float(self.screen.get("width", 0.0))
+        screen_min_y = float(self.screen.get("minY", 0.0))
+        screen_height = float(self.screen.get("height", 0.0))
+
+        if screen_width > 0:
+            min_x = screen_min_x
+            max_x = screen_min_x + screen_width
+        else:
+            nodes = list(self.state.nodes.values())
+            if nodes:
+                min_x = min(node.x for node in nodes)
+                max_x = max(node.x for node in nodes)
+            else:
+                min_x = screen_min_x
+                max_x = screen_min_x
+
+        if screen_height > 0:
+            min_y = screen_min_y
+            max_y = screen_min_y + screen_height
+        else:
+            nodes = list(self.state.nodes.values())
+            if nodes:
+                min_y = min(node.y for node in nodes)
+                max_y = max(node.y for node in nodes)
+            else:
+                min_y = screen_min_y
+                max_y = screen_min_y
+
+        boundary = (min_x + max_x) / 2.0
+        self.state.hidden_start_boundary = boundary
+        self.state.hidden_start_bounds = {
+            "minX": min_x,
+            "maxX": max_x,
+            "minY": min_y,
+            "maxY": max_y,
+        }
+
+        left_player = player_slots[0]["player_id"] if player_slots else None
+        right_player = player_slots[1]["player_id"] if len(player_slots) > 1 else None
+        self.state.hidden_start_sides = {}
+        if left_player is not None:
+            self.state.hidden_start_sides[left_player] = "left"
+        if right_player is not None:
+            self.state.hidden_start_sides[right_player] = "right"
 
     def is_game_active(self) -> bool:
         """Check if a game is currently active."""
@@ -182,6 +271,9 @@ class GameEngine:
             return
 
         self.state.phase = "playing"
+        if self.state.hidden_start_active:
+            self.state.hidden_start_revealed = True
+            self.state.hidden_start_original_sizes.clear()
         self.state.start_game_timer(time.time())
         self.state.process_pending_auto_expands()
         self.state.process_pending_auto_attacks()
@@ -310,16 +402,36 @@ class GameEngine:
 
             if self.state and player_id in self.state.eliminated_players:
                 raise GameValidationError("Player eliminated")
-            
+
+            if (
+                self.state
+                and self.state.hidden_start_active
+                and not self.state.hidden_start_revealed
+                and self.state.phase == "picking"
+            ):
+                side = self.state.hidden_start_sides.get(player_id)
+                boundary = self.state.hidden_start_boundary
+                if side and boundary is not None:
+                    tolerance = 1e-6
+                    if side == "left" and node.x > boundary + tolerance:
+                        raise GameValidationError("Selection outside assigned zone")
+                    if side == "right" and node.x < boundary - tolerance:
+                        raise GameValidationError("Selection outside assigned zone")
+
             # Check if this is for picking a starting node (node is unowned and player hasn't picked yet)
             if node.owner is None and not self.state.players_who_picked.get(player_id):
                 # This is a starting node pick - give gold reward for capturing unowned node
                 reward = get_neutral_capture_reward(self.state.mode)
                 self.state.neutral_capture_reward = reward
+                if self.state.hidden_start_active and not self.state.hidden_start_revealed:
+                    self.state.hidden_start_original_sizes[node_id] = node.juice
                 self.state.player_gold[player_id] = self.state.player_gold.get(player_id, 0.0) + reward
+                node.juice = STARTING_NODE_JUICE
                 node.owner = player_id
                 self.state.players_who_picked[player_id] = True
-                
+                if self.state.hidden_start_active:
+                    self.state.hidden_start_picks[player_id] = node_id
+
                 # Check for auto-expand if enabled
                 if self.state.player_auto_expand.get(player_id, False):
                     self.state._auto_expand_from_node(node_id, player_id)
@@ -737,6 +849,103 @@ class GameEngine:
         for edge in self.state.edges.values():
             self._apply_edge_warp_geometry(edge)
 
+    def _resolve_sharp_angles(self, new_edge: Edge) -> List[Dict[str, float]]:
+        if not self.state:
+            return []
+
+        min_angle_deg = max(0.0, float(MIN_PIPE_JOIN_ANGLE_DEGREES))
+        if min_angle_deg <= 0.0:
+            return []
+
+        min_angle_rad = math.radians(min_angle_deg)
+        epsilon = 1e-6
+        adjusted: Dict[int, Tuple[float, float]] = {}
+
+        nodes = self.state.nodes
+        edges = self.state.edges
+
+        endpoint_pairs = [
+            (new_edge.source_node_id, new_edge.target_node_id),
+            (new_edge.target_node_id, new_edge.source_node_id),
+        ]
+
+        for shared_id, opposite_id in endpoint_pairs:
+            shared_node = nodes.get(shared_id)
+            opposite_node = nodes.get(opposite_id)
+            if not shared_node or not opposite_node:
+                continue
+
+            base_dx = opposite_node.x - shared_node.x
+            base_dy = opposite_node.y - shared_node.y
+            base_length = math.hypot(base_dx, base_dy)
+            if base_length <= epsilon:
+                continue
+
+            base_angle = math.atan2(base_dy, base_dx)
+
+            attached_ids = list(shared_node.attached_edge_ids)
+            for edge_id in attached_ids:
+                if edge_id == new_edge.id:
+                    continue
+                neighbor_edge = edges.get(edge_id)
+                if not neighbor_edge:
+                    continue
+
+                if neighbor_edge.source_node_id == shared_id:
+                    target_id = neighbor_edge.target_node_id
+                elif neighbor_edge.target_node_id == shared_id:
+                    target_id = neighbor_edge.source_node_id
+                else:
+                    continue
+
+                if target_id == opposite_id:
+                    continue
+
+                target_node = nodes.get(target_id)
+                if not target_node:
+                    continue
+
+                vec_dx = target_node.x - shared_node.x
+                vec_dy = target_node.y - shared_node.y
+                vec_length = math.hypot(vec_dx, vec_dy)
+                if vec_length <= epsilon:
+                    continue
+
+                dot = base_dx * vec_dx + base_dy * vec_dy
+                denom = base_length * vec_length
+                if denom <= epsilon:
+                    continue
+                cos_angle = max(-1.0, min(1.0, dot / denom))
+                angle = math.acos(cos_angle)
+                if angle >= min_angle_rad:
+                    continue
+
+                cross = base_dx * vec_dy - base_dy * vec_dx
+                if abs(cross) <= epsilon:
+                    direction = 1.0
+                else:
+                    direction = 1.0 if cross > 0 else -1.0
+
+                desired_offset = direction * min_angle_rad
+                new_angle = base_angle + desired_offset
+                new_x = shared_node.x + vec_length * math.cos(new_angle)
+                new_y = shared_node.y + vec_length * math.sin(new_angle)
+
+                target_node.x = new_x
+                target_node.y = new_y
+                adjusted[target_id] = (new_x, new_y)
+                self.state.record_node_movement(target_id, new_x, new_y)
+
+                for attached_id in target_node.attached_edge_ids:
+                    attached_edge = edges.get(attached_id)
+                    if attached_edge:
+                        self._apply_edge_warp_geometry(attached_edge)
+
+        return [
+            {"nodeId": node_id, "x": coords[0], "y": coords[1]}
+            for node_id, coords in adjusted.items()
+        ]
+
     def calculate_bridge_cost(
         self,
         from_node: Node,
@@ -774,10 +983,10 @@ class GameEngine:
         client_reported_cost: float,
         warp_info: Optional[Dict[str, Any]] = None,
         pipe_type: str = "normal",
-    ) -> Tuple[bool, Optional[Edge], float, Optional[str], List[int]]:
+    ) -> Tuple[bool, Optional[Edge], float, Optional[str], List[int], List[Dict[str, float]]]:
         """
         Handle building a bridge between two nodes.
-        Returns: (success, new_edge, actual_cost, error_message, removed_edges)
+        Returns: (success, new_edge, actual_cost, error_message, removed_edges, node_movements)
         """
         try:
             self.validate_game_active()
@@ -820,6 +1029,7 @@ class GameEngine:
             total_world_distance = 0.0
             removed_edges: List[int] = []
             delayed_cross_removals: List[Tuple[int, float]] = []
+            node_movements: List[Dict[str, float]] = []
 
             if warp_info:
                 warp_axis, candidate_segments, total_world_distance = self._parse_client_warp_info(
@@ -1015,10 +1225,13 @@ class GameEngine:
                 setattr(new_edge, 'post_build_turn_on', True)
                 setattr(new_edge, 'post_build_turn_on_owner', player_id)
 
-            return True, new_edge, actual_cost, None, removed_edges
+            if self.state:
+                node_movements = self._resolve_sharp_angles(new_edge)
+
+            return True, new_edge, actual_cost, None, removed_edges, node_movements
             
         except GameValidationError as e:
-            return False, None, 0.0, str(e), []
+            return False, None, 0.0, str(e), [], []
     
     def handle_quit_game(self, token: str) -> Optional[int]:
         """
