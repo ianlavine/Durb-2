@@ -80,6 +80,9 @@ class GraphState:
         # Replay helpers
         self.tick_count: int = 0
         self.pending_edge_removals: List[Dict[str, Any]] = []
+
+        # Geometry updates queued for the next tick payload
+        self.pending_node_movements: Dict[int, Dict[str, float]] = {}
         
 
     def add_player(self, player: Player) -> None:
@@ -287,6 +290,21 @@ class GraphState:
 
         return removed_ids
 
+    def record_node_movement(self, node_id: int, x: float, y: float) -> None:
+        """Queue a node position update for inclusion in the next tick."""
+        self.pending_node_movements[int(node_id)] = {
+            "nodeId": int(node_id),
+            "x": float(x),
+            "y": float(y),
+        }
+
+    def pop_pending_node_movements(self) -> List[Dict[str, float]]:
+        if not self.pending_node_movements:
+            return []
+        movements = list(self.pending_node_movements.values())
+        self.pending_node_movements = {}
+        return movements
+
     def to_init_message(self, screen: Dict[str, int], tick_interval: float, current_time: float = 0.0) -> Dict:
         node_max = getattr(self, "node_max_juice", get_node_max_juice(self.mode))
         nodes_arr = [
@@ -420,6 +438,7 @@ class GraphState:
         
         removed_edge_events = [dict(event) for event in self.pending_edge_removals]
         self.pending_edge_removals = []
+        node_movements = self.pop_pending_node_movements()
 
         message = {
             "type": "tick",
@@ -440,6 +459,12 @@ class GraphState:
             "mode": self.mode,
             "modeSettings": dict(self.mode_settings or {}),
         }
+
+        if node_movements:
+            message["nodeMovements"] = [
+                [movement["nodeId"], round(movement["x"], 3), round(movement["y"], 3)]
+                for movement in node_movements
+            ]
 
         if removed_edge_events:
             message["removedEdges"] = [event.get("edgeId") for event in removed_edge_events]

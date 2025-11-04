@@ -3444,7 +3444,38 @@ function clearBridgeSelection() {
     // Don't show menu immediately - wait for user to click Quit button
   }
 
+  function applyNodeMovements(movements) {
+    if (!Array.isArray(movements) || movements.length === 0) return;
+    movements.forEach((entry) => {
+      let nodeId;
+      let x;
+      let y;
+      if (Array.isArray(entry)) {
+        [nodeId, x, y] = entry;
+      } else if (entry && typeof entry === 'object') {
+        nodeId = entry.nodeId ?? entry.id ?? entry[0];
+        x = entry.x;
+        y = entry.y;
+      } else {
+        return;
+      }
+
+      const id = Number(nodeId);
+      if (!Number.isFinite(id)) return;
+      const node = nodes.get(id);
+      if (!node) return;
+
+      const nx = Number(x);
+      const ny = Number(y);
+      if (!Number.isFinite(nx) || !Number.isFinite(ny)) return;
+
+      node.x = nx;
+      node.y = ny;
+    });
+  }
+
   function handleTick(msg) {
+    applyNodeMovements(msg.nodeMovements);
     const removalEvents = Array.isArray(msg.removedEdgeEvents) ? msg.removedEdgeEvents : null;
     if (Array.isArray(msg.removedEdges) && msg.removedEdges.length > 0) {
       removeEdges(msg.removedEdges);
@@ -3636,6 +3667,7 @@ function clearBridgeSelection() {
 
   function handleNewEdge(msg) {
     // Add new edge to the frontend map
+    applyNodeMovements(msg.nodeMovements);
     if (Array.isArray(msg.removedEdges) && msg.removedEdges.length > 0) {
       removeEdges(msg.removedEdges);
     }

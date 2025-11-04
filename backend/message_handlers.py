@@ -528,7 +528,7 @@ class MessageRouter:
             return
 
         engine = game_info["engine"]
-        success, new_edge, actual_cost, error_msg, removed_edges = engine.handle_build_bridge(
+        success, new_edge, actual_cost, error_msg, removed_edges, node_movements = engine.handle_build_bridge(
             token,
             int(from_node_id),
             int(to_node_id),
@@ -536,6 +536,25 @@ class MessageRouter:
             warp_info=warp_info,
             pipe_type=pipe_type if isinstance(pipe_type, str) else "normal",
         )
+
+        movement_payloads: List[Dict[str, float]] = []
+        movement_arrays: List[List[float]] = []
+
+        if node_movements:
+            for movement in node_movements:
+                if not isinstance(movement, dict):
+                    continue
+                node_id = movement.get("nodeId")
+                x = movement.get("x")
+                y = movement.get("y")
+                try:
+                    node_int = int(node_id)
+                    x_val = round(float(x), 3)
+                    y_val = round(float(y), 3)
+                except (TypeError, ValueError):
+                    continue
+                movement_payloads.append({"nodeId": node_int, "x": x_val, "y": y_val})
+                movement_arrays.append([node_int, x_val, y_val])
 
         if not success:
             await self._send_safe(
@@ -570,6 +589,8 @@ class MessageRouter:
                     "pipeType": getattr(new_edge, "pipe_type", "normal"),
                 },
             }
+            if movement_arrays:
+                edge_update_message["nodeMovements"] = movement_arrays
             if removed_edges:
                 edge_update_message["removedEdges"] = removed_edges
             
@@ -598,6 +619,8 @@ class MessageRouter:
                 for sx, sy, ex, ey in (new_edge.warp_segments or [])
             ]
             event_payload["pipeType"] = getattr(new_edge, "pipe_type", "normal")
+            if movement_payloads:
+                event_payload["nodeMovements"] = movement_payloads
         if removed_edges:
             event_payload["removedEdges"] = removed_edges
         self._record_game_event(game_info, token, "buildBridge", event_payload)
@@ -1090,7 +1113,7 @@ class MessageRouter:
             warp_info = msg.get("warpInfo")
             pipe_type = msg.get("pipeType")
             if from_node_id is not None and to_node_id is not None:
-                success, new_edge, actual_cost, error_msg, removed_edges = bot_game_engine.handle_build_bridge(
+                success, new_edge, actual_cost, error_msg, removed_edges, node_movements = bot_game_engine.handle_build_bridge(
                     token,
                     int(from_node_id),
                     int(to_node_id),
@@ -1104,6 +1127,21 @@ class MessageRouter:
                         json.dumps({"type": "bridgeError", "message": error_msg or "Failed to build bridge"}),
                     )
                 elif new_edge:
+                    movement_arrays: List[List[float]] = []
+                    if node_movements:
+                        for movement in node_movements:
+                            if not isinstance(movement, dict):
+                                continue
+                            node_id = movement.get("nodeId")
+                            x = movement.get("x")
+                            y = movement.get("y")
+                            try:
+                                node_int = int(node_id)
+                                x_val = round(float(x), 3)
+                                y_val = round(float(y), 3)
+                            except (TypeError, ValueError):
+                                continue
+                            movement_arrays.append([node_int, x_val, y_val])
                     warp_payload = {
                         "axis": new_edge.warp_axis,
                         "segments": [[sx, sy, ex, ey] for sx, sy, ex, ey in (new_edge.warp_segments or [])],
@@ -1127,6 +1165,8 @@ class MessageRouter:
                     }
                     if removed_edges:
                         message["removedEdges"] = removed_edges
+                    if movement_arrays:
+                        message["nodeMovements"] = movement_arrays
                     await self._send_safe(websocket, json.dumps(message))
 
         elif msg_type == "redirectEnergy":

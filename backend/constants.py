@@ -88,6 +88,10 @@ BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE: float = 0.6
 WARP_MARGIN_RATIO_X: float = 0.06
 WARP_MARGIN_RATIO_Y: float = 0.10
 
+# Geometry tuning
+# Minimum separation angle (in degrees) between bridges meeting at a node before we auto-relax them
+MIN_PIPE_JOIN_ANGLE_DEGREES: float = 22.5
+
 
 def normalize_game_mode(value: str) -> str:
     """Return a supported game mode, treating legacy names as aliases."""
