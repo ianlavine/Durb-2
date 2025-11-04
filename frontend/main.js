@@ -22,6 +22,7 @@
   };
 
   const SHOW_PLAY_AREA_BORDER = false; // toggle to render the play-area outline
+  const ENABLE_REPLAY_UPLOAD = false; // gate replay upload UI while retaining implementation
 
   const game = new Phaser.Game(config);
 
@@ -188,7 +189,6 @@
   let selectedSettings = { ...DEFAULT_MODE_SETTINGS };
   let modeOptionsButton = null;
   let modeOptionsPanel = null;
-  let modeSummaryEl = null;
   let modeOptionButtons = [];
   let modePanelOpen = false;
   let bridgeCostSlider = null;
@@ -245,19 +245,6 @@
     const startModeLabel = (settings.gameStart === 'hidden-split') ? 'Hidden' : 'Open';
     const costLabel = coerceBridgeCost(settings.bridgeCost).toFixed(1);
     return `${screenLabel} · ${brassLabel} · ${startLabel} · ${startModeLabel} · ${costLabel}`;
-  }
-
-  function updateModeSummaryDisplay(settings = selectedSettings) {
-    if (!modeSummaryEl) return;
-    if (modePanelOpen) {
-      modeSummaryEl.textContent = formatModeSettingsSummary(settings);
-      modeSummaryEl.style.display = 'block';
-      modeSummaryEl.setAttribute('aria-hidden', 'false');
-    } else {
-      modeSummaryEl.textContent = '';
-      modeSummaryEl.style.display = 'none';
-      modeSummaryEl.setAttribute('aria-hidden', 'true');
-    }
   }
 
   function updateModeOptionButtonStates() {
@@ -351,7 +338,6 @@
 
     selectedSettings = next;
     selectedMode = deriveModeFromSettings(selectedSettings);
-    updateModeSummaryDisplay(selectedSettings);
     updateModeOptionButtonStates();
     syncBridgeCostSlider();
     updatePlayBotAvailability(true);
@@ -672,7 +658,7 @@
     }
   }
 
-    function ensureReplayElements() {
+  function ensureReplayElements() {
     if (!replayWatchBtnEl) replayWatchBtnEl = document.getElementById('replayWatchBtn');
     if (!replayFileLabelEl) replayFileLabelEl = document.getElementById('replayFileLabel');
     if (!replayFileInputEl) replayFileInputEl = document.getElementById('replayFileInput');
@@ -680,6 +666,10 @@
     if (!replayBodyEl) replayBodyEl = document.getElementById('replayBody');
     if (!replayHeaderEl) replayHeaderEl = document.getElementById('replayHeader');
     if (!replayToggleIconEl) replayToggleIconEl = document.getElementById('replayToggleIcon');
+    if (replayPanelEl) {
+      replayPanelEl.style.display = ENABLE_REPLAY_UPLOAD ? 'flex' : 'none';
+    }
+    if (!ENABLE_REPLAY_UPLOAD) return;
     if (replayHeaderEl && !replayHeaderEl.dataset.toggleBound) {
       replayHeaderEl.addEventListener('click', () => toggleReplayPanel());
       replayHeaderEl.dataset.toggleBound = 'true';
@@ -690,6 +680,10 @@
 
 
   function setReplayControlsDisabled(disabled) {
+    if (!ENABLE_REPLAY_UPLOAD) {
+      updateReplayRestartButtonState();
+      return;
+    }
     ensureReplayElements();
     const disable = !!disabled;
     if (replayFileInputEl) {
@@ -710,6 +704,7 @@
   function clearReplaySelection() {
     ensureReplayElements();
     pendingReplayPayload = null;
+    if (!ENABLE_REPLAY_UPLOAD) return;
     toggleReplayPanel(false);
     if (replayFileInputEl) replayFileInputEl.value = '';
     if (replayFileLabelEl) replayFileLabelEl.textContent = 'Choose replay file…';
@@ -717,6 +712,7 @@
   }
 
   function toggleReplayPanel(forceExpand) {
+    if (!ENABLE_REPLAY_UPLOAD) return;
     ensureReplayElements();
     if (!replayBodyEl || !replayToggleIconEl) return;
     const expand = forceExpand !== undefined ? forceExpand : (replayBodyEl.style.display !== 'flex');
@@ -885,6 +881,7 @@
   }
 
   async function handleReplayFileSelect(event) {
+    if (!ENABLE_REPLAY_UPLOAD) return;
     ensureReplayElements();
     toggleReplayPanel(true);
     if (isReplayActive()) {
@@ -916,6 +913,7 @@
   }
 
   function startReplayFromSelection() {
+    if (!ENABLE_REPLAY_UPLOAD) return;
     ensureReplayElements();
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       return;
@@ -2189,7 +2187,6 @@ function clearBridgeSelection() {
     }
     modeOptionsButton = document.getElementById('modeOptionsButton');
     modeOptionsPanel = document.getElementById('modeOptionsPanel');
-    modeSummaryEl = document.getElementById('modeSummary');
     modeOptionButtons = Array.from(document.querySelectorAll('.mode-option-button'));
     bridgeCostSlider = document.getElementById('bridgeCostSlider');
     bridgeCostValueLabel = document.getElementById('bridgeCostValue');
@@ -2227,7 +2224,6 @@ function clearBridgeSelection() {
       modeOptionsPanel.setAttribute('aria-hidden', 'true');
       if (modeOptionsButton) modeOptionsButton.setAttribute('aria-expanded', 'false');
       modePanelOpen = false;
-      updateModeSummaryDisplay(selectedSettings);
     };
 
     const openModePanel = () => {
@@ -2236,7 +2232,6 @@ function clearBridgeSelection() {
       modeOptionsPanel.setAttribute('aria-hidden', 'false');
       if (modeOptionsButton) modeOptionsButton.setAttribute('aria-expanded', 'true');
       modePanelOpen = true;
-      updateModeSummaryDisplay(selectedSettings);
     };
 
     if (modeOptionsButton && modeOptionsPanel) {
@@ -2324,15 +2319,17 @@ function clearBridgeSelection() {
     }
 
     ensureReplayElements();
-    if (replayFileInputEl) {
-      replayFileInputEl.addEventListener('change', handleReplayFileSelect);
-    }
-    if (replayWatchBtnEl) {
-      replayWatchBtnEl.addEventListener('click', startReplayFromSelection);
-    }
-    if (replayHeaderEl && !replayHeaderEl.dataset.toggleBound) {
-      replayHeaderEl.addEventListener('click', () => toggleReplayPanel());
-      replayHeaderEl.dataset.toggleBound = 'true';
+    if (ENABLE_REPLAY_UPLOAD) {
+      if (replayFileInputEl && !replayFileInputEl.dataset.boundChange) {
+        replayFileInputEl.addEventListener('change', handleReplayFileSelect);
+        replayFileInputEl.dataset.boundChange = 'true';
+      }
+      if (replayWatchBtnEl && !replayWatchBtnEl.dataset.boundClick) {
+        replayWatchBtnEl.addEventListener('click', startReplayFromSelection);
+        replayWatchBtnEl.dataset.boundClick = 'true';
+      }
+    } else if (replayPanelEl) {
+      replayPanelEl.style.display = 'none';
     }
     ensureReplaySpeedElements();
     replaySpeedValue = 1;
