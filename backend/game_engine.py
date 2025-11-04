@@ -10,6 +10,7 @@ from .constants import (
     BRIDGE_COST_PER_UNIT_DISTANCE,
     BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE,
     DEFAULT_GAME_MODE,
+    STARTING_NODE_JUICE,
     WARP_MARGIN_RATIO_X,
     WARP_MARGIN_RATIO_Y,
     get_bridge_cost_per_unit,
@@ -317,6 +318,7 @@ class GameEngine:
                 reward = get_neutral_capture_reward(self.state.mode)
                 self.state.neutral_capture_reward = reward
                 self.state.player_gold[player_id] = self.state.player_gold.get(player_id, 0.0) + reward
+                node.juice = STARTING_NODE_JUICE
                 node.owner = player_id
                 self.state.players_who_picked[player_id] = True
                 
