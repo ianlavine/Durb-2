@@ -528,6 +528,15 @@
         white-space: nowrap;
       }
 
+      .mode-option-button.disabled,
+      .mode-option-button:disabled {
+        cursor: not-allowed;
+        opacity: 0.4;
+        border-color: #555;
+        color: #888;
+        transform: none;
+      }
+
       .player-count-option.active,
       .mode-option-button.active {
         border-color: #ffff00;
@@ -536,7 +545,7 @@
       }
 
       .player-count-option:hover,
-      .mode-option-button:hover,
+      .mode-option-button:not(.disabled):not(:disabled):hover,
       .mode-options-toggle:hover {
         border-color: #aaaaaa;
       }
@@ -752,6 +761,13 @@
                 <div class="mode-option-buttons">
                   <button class="mode-option-button active" data-setting="brassStart" data-value="owned">Owned</button>
                   <button class="mode-option-button" data-setting="brassStart" data-value="anywhere">Anywhere</button>
+                </div>
+              </div>
+              <div class="mode-option-group" data-setting-group="gameStart">
+                <span class="selector-label">Game Start</span>
+                <div class="mode-option-buttons">
+                  <button class="mode-option-button active" data-setting="gameStart" data-value="open">Open</button>
+                  <button class="mode-option-button" data-setting="gameStart" data-value="hidden-split">Hidden Split</button>
                 </div>
               </div>
               <div class="mode-option-group bridge-cost-group" data-setting-group="bridgeCost">

@@ -1,3 +1,4 @@
+import copy
 import json
 import time
 import uuid
@@ -191,6 +192,7 @@ class MessageRouter:
             "brass": "cross",
             "brassStart": "owned",
             "bridgeCost": 1.0,
+            "gameStart": "open",
         }
         if not isinstance(payload, dict):
             return settings
@@ -206,6 +208,10 @@ class MessageRouter:
         brass_start_option = str(payload.get("brassStart", settings["brassStart"])).strip().lower()
         if brass_start_option in {"owned", "anywhere"}:
             settings["brassStart"] = "anywhere" if brass_start_option == "anywhere" else "owned"
+
+        game_start_option = str(payload.get("gameStart", settings["gameStart"])).strip().lower()
+        if game_start_option in {"open", "hidden", "hidden-split", "hidden_split", "hidden split"}:
+            settings["gameStart"] = "hidden-split" if game_start_option.startswith("hidden") else "open"
 
         bridge_cost_value = payload.get("bridgeCost", settings["bridgeCost"])
         if isinstance(bridge_cost_value, str):
@@ -265,6 +271,14 @@ class MessageRouter:
 
         actual_mode = self._derive_mode_from_settings(resolved_host_settings, sanitized_mode)
         resolved_host_settings["derivedMode"] = actual_mode
+
+        game_start_option = str(resolved_host_settings.get("gameStart", "open")).strip().lower()
+        if player_count != 2:
+            resolved_host_settings["gameStart"] = "open"
+        elif game_start_option.startswith("hidden"):
+            resolved_host_settings["gameStart"] = "hidden-split"
+        else:
+            resolved_host_settings["gameStart"] = "open"
 
         player_slots: List[Dict[str, Any]] = []
         auto_expand_state: Dict[str, bool] = {}
@@ -971,6 +985,8 @@ class MessageRouter:
         mode_settings = self._sanitize_mode_settings(msg.get("settings"))
         mode = self._derive_mode_from_settings(mode_settings, raw_mode)
         mode_settings["derivedMode"] = mode
+        if mode_settings.get("gameStart") == "hidden-split":
+            mode_settings["gameStart"] = "open"
 
         success, error_msg = bot_game_manager.start_bot_game(
             token,
@@ -1001,6 +1017,8 @@ class MessageRouter:
             message["type"] = "init"
             message["myPlayerId"] = 1
             message["token"] = token
+            player_id = bot_game_engine.token_to_player_id.get(token)
+            message = bot_game_engine.state.build_player_view(message, player_id)
             await self._send_safe(websocket, json.dumps(message))
 
         if bot_game_manager.bot_player:
@@ -1239,6 +1257,8 @@ class MessageRouter:
                 message["type"] = "init"
                 message["myPlayerId"] = 1
                 message["token"] = token
+                player_id = bot_game_engine.token_to_player_id.get(token)
+                message = bot_game_engine.state.build_player_view(message, player_id)
                 await self._send_safe(websocket, json.dumps(message))
 
     # ------------------------------------------------------------------
@@ -1282,9 +1302,22 @@ class MessageRouter:
         if player_id is not None:
             message["myPlayerId"] = player_id
         message["token"] = token
+        if engine.state:
+            message = engine.state.build_player_view(message, player_id)
         await self._send_safe(websocket, json.dumps(message))
 
     async def _broadcast_to_game(self, game_info: Dict[str, Any], message: Dict[str, Any]) -> None:
+        engine: Optional[GameEngine] = game_info.get("engine")
+        state = engine.state if engine else None
+        if state and state.hidden_start_active:
+            for token, websocket in list(game_info.get("clients", {}).items()):
+                if not websocket:
+                    continue
+                player_id = engine.token_to_player_id.get(token) if engine else None
+                per_player_message = state.build_player_view(copy.deepcopy(message), player_id)
+                await self._send_safe(websocket, json.dumps(per_player_message))
+            return
+
         payload = json.dumps(message)
         for token, websocket in list(game_info.get("clients", {}).items()):
             if not websocket:

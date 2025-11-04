@@ -156,6 +156,19 @@ class Bot1(BotTemplate):
             if node.owner is not None:
                 continue  # Skip owned nodes
 
+            if (
+                self.game_engine.state.hidden_start_active
+                and not self.game_engine.state.hidden_start_revealed
+            ):
+                side = self.game_engine.state.hidden_start_sides.get(self.player_id)
+                boundary = self.game_engine.state.hidden_start_boundary
+                if side and boundary is not None:
+                    tolerance = 1e-6
+                    if side == "left" and node.x > boundary + tolerance:
+                        continue
+                    if side == "right" and node.x < boundary - tolerance:
+                        continue
+
             # Count how many unowned nodes can be reached without flipping edges
             expansion_count = self._count_expandable_nodes(node_id)
 

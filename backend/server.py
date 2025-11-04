@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import os
 import time
@@ -208,18 +209,20 @@ class WebSocketServer:
                 bot_game_engine = bot_game_manager.get_game_engine()
                 await bot_game_manager.make_bot_move()
 
-                # If the manager recorded a last_client_event, broadcast it now
-                if bot_game_manager.last_client_event:
-                    payload = json.dumps(bot_game_manager.last_client_event)
-                    await self._broadcast_to_specific(list(self.server_context.get("bot_game_clients", {}).values()), payload)
-                    # Clear after broadcasting to avoid repeats
-                    bot_game_manager.last_client_event = None
-
                 winner_id = bot_game_engine.simulate_tick(TICK_INTERVAL_SECONDS)
 
                 bot_clients = list(self.server_context.get("bot_game_clients", {}).values())
 
                 state = bot_game_engine.state
+                if state and bot_game_manager.last_client_event:
+                    base_event = bot_game_manager.last_client_event
+                    for token, websocket in list(self.server_context.get("bot_game_clients", {}).items()):
+                        if not websocket:
+                            continue
+                        player_id = bot_game_engine.token_to_player_id.get(token)
+                        per_player_event = state.build_player_view(copy.deepcopy(base_event), player_id)
+                        await self._broadcast_to_specific([websocket], json.dumps(per_player_event))
+                    bot_game_manager.last_client_event = None
                 if state and hasattr(state, "pending_node_captures") and state.pending_node_captures:
                     for capture_data in state.pending_node_captures:
                         # Send node capture notification only to the player who captured it
@@ -262,8 +265,13 @@ class WebSocketServer:
                     state.pending_overflow_payouts = []
 
                 if state:
-                    tick_payload = json.dumps(state.to_tick_message(now))
-                    await self._broadcast_to_specific(bot_clients, tick_payload)
+                    base_tick_msg = state.to_tick_message(now)
+                    for token, websocket in list(self.server_context.get("bot_game_clients", {}).items()):
+                        if not websocket:
+                            continue
+                        player_id = bot_game_engine.token_to_player_id.get(token)
+                        per_player_msg = state.build_player_view(copy.deepcopy(base_tick_msg), player_id)
+                        await self._broadcast_to_specific([websocket], json.dumps(per_player_msg))
 
                 if winner_id is not None:
                     victory_payload = json.dumps({"type": "gameOver", "winnerId": winner_id})

@@ -32,6 +32,7 @@
   let tickIntervalSec = 0.2; // provided by backend init; used to show per-second edge flow
   let settingsOpen = false; // persisted visibility of settings/toggles panel
 
+  let graphicsStartZones;
   let graphicsEdges;
   let graphicsNodes;
   let statusText;
@@ -47,6 +48,11 @@
   let myPlayerId = null;
   let phase = 'picking';
   let myPicked = false;
+  let hiddenStartActive = false;
+  let hiddenStartRevealed = false;
+  let hiddenStartSide = null;
+  let hiddenStartBoundary = null;
+  let hiddenStartBounds = null;
   let goldValue = 0; // no limit
   let nodeMaxJuice = 50;
   let hoveredNodeId = null;
@@ -173,6 +179,7 @@
     brass: 'cross',
     brassStart: 'owned',
     bridgeCost: 1.0,
+    gameStart: 'open',
   };
 
   let selectedPlayerCount = 2;
@@ -235,8 +242,9 @@
     const screenLabel = (settings.screen === 'warp') ? 'Warp' : 'Flat';
     const brassLabel = (settings.brass === 'right-click') ? 'Right-Click' : 'Cross';
     const startLabel = (settings.brassStart === 'anywhere') ? 'Anywhere' : 'Owned';
+    const startModeLabel = (settings.gameStart === 'hidden-split') ? 'Hidden' : 'Open';
     const costLabel = coerceBridgeCost(settings.bridgeCost).toFixed(1);
-    return `${screenLabel} · ${brassLabel} · ${startLabel} · ${costLabel}`;
+    return `${screenLabel} · ${brassLabel} · ${startLabel} · ${startModeLabel} · ${costLabel}`;
   }
 
   function updateModeSummaryDisplay(settings = selectedSettings) {
@@ -258,6 +266,8 @@
     const currentBrass = (selectedSettings.brass || 'cross').toLowerCase();
     const currentStart = (selectedSettings.brassStart || 'owned').toLowerCase();
     const currentCost = Number(coerceBridgeCost(selectedSettings.bridgeCost));
+    const currentGameStart = (selectedSettings.gameStart || 'open').toLowerCase();
+    const hiddenAllowed = isHiddenStartAllowed();
     modeOptionButtons.forEach((btn) => {
       const setting = btn?.dataset?.setting;
       const value = btn?.dataset?.value;
@@ -265,6 +275,8 @@
         btn.classList.remove('active');
         return;
       }
+      btn.disabled = false;
+      btn.classList.remove('disabled');
       let isActive = false;
       if (setting === 'screen') {
         isActive = value.toLowerCase() === currentScreen;
@@ -276,11 +288,35 @@
         const normalized = value.toLowerCase();
         const target = currentStart === 'anywhere' ? 'anywhere' : 'owned';
         isActive = normalized === target;
+      } else if (setting === 'gameStart') {
+        const normalized = value.toLowerCase();
+        const target = normalized.startsWith('hidden') ? 'hidden-split' : 'open';
+        const current = currentGameStart.startsWith('hidden') ? 'hidden-split' : 'open';
+        const shouldDisable = target === 'hidden-split' && !hiddenAllowed;
+        if (shouldDisable) {
+          btn.disabled = true;
+          btn.classList.add('disabled');
+          isActive = false;
+        } else {
+          isActive = target === current;
+        }
       } else if (setting === 'bridgeCost') {
         isActive = Number(value) === currentCost;
       }
       btn.classList.toggle('active', isActive);
     });
+  }
+
+  function isHiddenStartAllowed() {
+    return selectedPlayerCount === 2;
+  }
+
+  function enforceGameStartAvailability() {
+    if (!isHiddenStartAllowed() && selectedSettings.gameStart === 'hidden-split') {
+      applySelectedSettings({ gameStart: 'open' });
+    } else {
+      updateModeOptionButtonStates();
+    }
   }
 
   function applySelectedSettings(overrides = {}) {
@@ -297,10 +333,20 @@
       const start = typeof overrides.brassStart === 'string' ? overrides.brassStart.toLowerCase() : '';
       next.brassStart = start === 'anywhere' ? 'anywhere' : 'owned';
     }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'gameStart')) {
+      const startMode = typeof overrides.gameStart === 'string' ? overrides.gameStart.toLowerCase() : '';
+      next.gameStart = startMode.startsWith('hidden') ? 'hidden-split' : 'open';
+    } else {
+      next.gameStart = (next.gameStart === 'hidden-split') ? 'hidden-split' : 'open';
+    }
     if (Object.prototype.hasOwnProperty.call(overrides, 'bridgeCost')) {
       next.bridgeCost = coerceBridgeCost(overrides.bridgeCost);
     } else {
       next.bridgeCost = coerceBridgeCost(next.bridgeCost);
+    }
+
+    if (next.gameStart === 'hidden-split' && !isHiddenStartAllowed()) {
+      next.gameStart = 'open';
     }
 
     selectedSettings = next;
@@ -317,6 +363,7 @@
       brass: selectedSettings.brass,
       brassStart: selectedSettings.brassStart,
       bridgeCost: Number(coerceBridgeCost(selectedSettings.bridgeCost).toFixed(1)),
+      gameStart: selectedSettings.gameStart,
       baseMode: selectedMode,
       derivedMode: selectedMode,
     };
@@ -328,6 +375,7 @@
     if (typeof payload.screen === 'string') overrides.screen = payload.screen;
     if (typeof payload.brass === 'string') overrides.brass = payload.brass;
     if (typeof payload.brassStart === 'string') overrides.brassStart = payload.brassStart;
+    if (typeof payload.gameStart === 'string') overrides.gameStart = payload.gameStart;
     if (Object.prototype.hasOwnProperty.call(payload, 'bridgeCost')) overrides.bridgeCost = payload.bridgeCost;
     applySelectedSettings(overrides);
   }
@@ -2074,6 +2122,8 @@ function clearBridgeSelection() {
 
   function create() {
     sceneRef = this;
+    graphicsStartZones = this.add.graphics();
+    if (graphicsStartZones) graphicsStartZones.setDepth(-1);
     graphicsEdges = this.add.graphics();
     graphicsNodes = this.add.graphics();
     statusText = this.add.text(10, 10, 'Connect to start a game', { font: '16px monospace', color: '#cccccc' });
@@ -2133,6 +2183,7 @@ function clearBridgeSelection() {
           btn.classList.add('active');
           const desired = parseInt(btn.getAttribute('data-count'), 10);
           selectedPlayerCount = Number.isFinite(desired) ? desired : 2;
+          enforceGameStartAvailability();
         });
       });
     }
@@ -2147,6 +2198,7 @@ function clearBridgeSelection() {
       modeOptionButtons.forEach((btn) => {
         btn.addEventListener('click', (event) => {
           event.stopPropagation();
+          if (btn.disabled) return;
           const setting = btn.getAttribute('data-setting');
           const value = btn.getAttribute('data-value');
           if (!setting || typeof value === 'undefined') return;
@@ -2248,6 +2300,9 @@ function clearBridgeSelection() {
         if (isReplayActive()) {
           setReplayStatus('Stop the current replay before starting a bot match.', 'warn');
           return;
+        }
+        if (selectedSettings.gameStart === 'hidden-split') {
+          applySelectedSettings({ gameStart: 'open' });
         }
         if (ws && ws.readyState === WebSocket.OPEN) {
           console.log(`Starting hard bot game with ${formatModeSettingsSummary()} options`);
@@ -3025,6 +3080,7 @@ function clearBridgeSelection() {
     updateQuitButtonLabel();
     currentTargetNodeId = null;
     currentTargetSetTime = null;
+    resetHiddenStartState();
 
     if (typeof msg.gameDuration === 'number' && Number.isFinite(msg.gameDuration) && msg.gameDuration > 0) {
       gameDuration = msg.gameDuration;
@@ -3032,6 +3088,7 @@ function clearBridgeSelection() {
     hideTimerDisplay();
 
     screen = msg.screen || null;
+    updateHiddenStartState(msg.hiddenStart);
     if (typeof msg.tickInterval === 'number' && Number.isFinite(msg.tickInterval) && msg.tickInterval > 0) {
       tickIntervalSec = msg.tickInterval;
     }
@@ -3584,6 +3641,7 @@ function clearBridgeSelection() {
 
   function handleTick(msg) {
     applyNodeMovements(msg.nodeMovements);
+    updateHiddenStartState(msg.hiddenStart);
     const removalEvents = Array.isArray(msg.removedEdgeEvents) ? msg.removedEdgeEvents : null;
     if (Array.isArray(msg.removedEdges) && msg.removedEdges.length > 0) {
       removeEdges(msg.removedEdges);
@@ -4510,6 +4568,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
   function redrawStatic() {
     // Draw edges first, then nodes
+    if (graphicsStartZones) graphicsStartZones.clear();
     graphicsEdges.clear();
     const menuVisible = !document.getElementById('menu')?.classList.contains('hidden');
     if (menuVisible) {
@@ -4534,10 +4593,11 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
     // Show UI bars when game is active
     if (topUiBar) topUiBar.style.display = 'block';
-    if (bottomUiBar) bottomUiBar.style.display = 'block';
+      if (bottomUiBar) bottomUiBar.style.display = 'block';
     
     // Draw border box around play area (warp border handles inner toggle)
     drawPlayAreaBorder();
+    drawHiddenStartOverlay();
     const overflowMode = ['overflow', 'nuke', 'cross', 'brass-old', 'go', 'warp', 'i-warp', 'flat', 'i-flat'].includes(normalizeMode(gameMode));
     
     // Show gold display when graph is being drawn and we have nodes/game data
@@ -4687,7 +4747,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
       }
 
       // Hover effect: player's color border when eligible for starting node pick
-      if (hoveredNodeId === id && !myPicked && (n.owner == null)) {
+      if (hoveredNodeId === id && !myPicked && (n.owner == null) && isNodeWithinStartZone(n)) {
         const myColor = ownerToColor(myPlayerId);
         graphicsNodes.lineStyle(3, myColor, 1);
         graphicsNodes.strokeCircle(nx, ny, r + 3);
@@ -4969,6 +5029,116 @@ function fallbackRemoveEdgesForNode(nodeId) {
       warpBoundsWorld = null;
       warpBoundsScreen = null;
     }
+  }
+
+  function drawHiddenStartOverlay() {
+    if (!graphicsStartZones) return;
+    if (!hiddenStartActive || hiddenStartRevealed || phase !== 'picking') return;
+    if (!view) return;
+
+    const bounds = hiddenStartBounds || {};
+    const fallbackMinX = Number.isFinite(screen?.minX) ? screen.minX : 0;
+    const fallbackWidth = Number.isFinite(screen?.width) ? screen.width : 100;
+    const fallbackMinY = Number.isFinite(screen?.minY) ? screen.minY : 0;
+    const fallbackHeight = Number.isFinite(screen?.height) ? screen.height : 100;
+
+    const boardMinX = Number.isFinite(bounds.minX) ? bounds.minX : fallbackMinX;
+    const boardMaxX = Number.isFinite(bounds.maxX) ? bounds.maxX : fallbackMinX + fallbackWidth;
+
+    const splitWorldX = Number.isFinite(hiddenStartBoundary)
+      ? hiddenStartBoundary
+      : (boardMinX + boardMaxX) / 2;
+    const clampedSplitWorld = Math.min(Math.max(splitWorldX, boardMinX), boardMaxX);
+    const [splitScreenX] = worldToScreen(clampedSplitWorld, fallbackMinY);
+
+    const canvasWidth = game.scale.gameSize.width;
+    const canvasHeight = game.scale.gameSize.height;
+
+    const topBarEl = document.getElementById('topUiBar');
+    const bottomBarEl = document.getElementById('bottomUiBar');
+    const topOffset = Math.max(0, topBarEl?.offsetHeight ?? 0);
+    const bottomOffset = Math.max(0, bottomBarEl?.offsetHeight ?? 0);
+
+    let leftEdge;
+    let rightEdge;
+    if (hiddenStartSide === 'left') {
+      leftEdge = 0;
+      rightEdge = Math.min(canvasWidth, Math.max(0, splitScreenX));
+    } else if (hiddenStartSide === 'right') {
+      leftEdge = Math.max(0, Math.min(canvasWidth, splitScreenX));
+      rightEdge = canvasWidth;
+    } else {
+      return;
+    }
+
+    const topEdge = topOffset;
+    const bottomEdge = canvasHeight - bottomOffset;
+
+    if (rightEdge <= leftEdge || bottomEdge <= topEdge) return;
+
+    const rectX = Math.floor(leftEdge);
+    const rectY = Math.floor(topEdge);
+    const width = Math.ceil(rightEdge - leftEdge);
+    const height = Math.ceil(bottomEdge - topEdge);
+
+    const colorEntry = players.get(myPlayerId);
+    const baseColor = colorEntry?.color || '#ffffff';
+    const fillColor = hexToInt(lightenColor(baseColor, 0.2));
+    const outlineColor = hexToInt(baseColor);
+
+    if (!myPicked) {
+      graphicsStartZones.fillStyle(fillColor, 0.26);
+      graphicsStartZones.fillRect(rectX, rectY, width, height);
+    }
+    graphicsStartZones.lineStyle(7, outlineColor, 0.95);
+    graphicsStartZones.strokeRect(rectX, rectY, width, height);
+  }
+
+  function resetHiddenStartState() {
+    hiddenStartActive = false;
+    hiddenStartRevealed = false;
+    hiddenStartSide = null;
+    hiddenStartBoundary = null;
+    hiddenStartBounds = null;
+  }
+
+  function updateHiddenStartState(payload) {
+    if (!payload || !payload.active) {
+      resetHiddenStartState();
+      return;
+    }
+
+    hiddenStartActive = true;
+    hiddenStartRevealed = !!payload.revealed;
+    hiddenStartSide = typeof payload.side === 'string' ? payload.side : null;
+    hiddenStartBoundary = Number.isFinite(payload.boundary) ? Number(payload.boundary) : null;
+
+    hiddenStartBounds = null;
+    const bounds = payload.bounds;
+    if (bounds && Number.isFinite(bounds.minX) && Number.isFinite(bounds.maxX)) {
+      hiddenStartBounds = {
+        minX: Number(bounds.minX),
+        maxX: Number(bounds.maxX),
+        minY: Number.isFinite(bounds.minY) ? Number(bounds.minY) : (Number.isFinite(screen?.minY) ? screen.minY : 0),
+        maxY: Number.isFinite(bounds.maxY)
+          ? Number(bounds.maxY)
+          : (Number.isFinite(screen?.minY) ? screen.minY : 0) + (Number.isFinite(screen?.height) ? screen.height : 100),
+      };
+    }
+  }
+
+  function isNodeWithinStartZone(node) {
+    if (!hiddenStartActive || hiddenStartRevealed || phase !== 'picking') return true;
+    if (!node || !Number.isFinite(node.x)) return true;
+    if (!hiddenStartSide || !Number.isFinite(hiddenStartBoundary)) return true;
+    const tolerance = 1e-4;
+    if (hiddenStartSide === 'left') {
+      return node.x <= hiddenStartBoundary + tolerance;
+    }
+    if (hiddenStartSide === 'right') {
+      return node.x >= hiddenStartBoundary - tolerance;
+    }
+    return true;
   }
 
   function hexToInt(color) {
@@ -5753,6 +5923,13 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
     // Handle clicks - check for starting node pick first
     if (!myPicked && nodeId != null && ws && ws.readyState === WebSocket.OPEN) {
+      if (hiddenStartActive && !hiddenStartRevealed && phase === 'picking') {
+        const candidateNode = nodes.get(nodeId);
+        if (candidateNode && !isNodeWithinStartZone(candidateNode)) {
+          showErrorMessage('Pick a node in your start zone');
+          return;
+        }
+      }
       const token = localStorage.getItem('token');
       ws.send(JSON.stringify({ type: 'clickNode', nodeId: nodeId, token }));
       return; // Return after handling starting node pick
@@ -6194,6 +6371,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     // Clear targeting indicator
     currentTargetNodeId = null;
     currentTargetSetTime = null;
+    resetHiddenStartState();
     
     nodes.clear();
     edges.clear();
