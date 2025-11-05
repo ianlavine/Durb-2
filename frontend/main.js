@@ -161,7 +161,7 @@
   
   // Edge Flow toggle system
   let edgeFlowToggle = null;
-  let persistentEdgeFlow = false; // persistent setting stored in localStorage (default to false)
+  let persistentEdgeFlow = true; // persistent setting stored in localStorage (default to true)
   let edgeFlowTexts = new Map(); // edgeId -> text object
   const edgeRemovalAnimations = new Map(); // edgeId -> removal animation state
   
@@ -178,9 +178,9 @@
   const DEFAULT_MODE_SETTINGS = {
     screen: 'flat',
     brass: 'cross',
-    brassStart: 'owned',
-    bridgeCost: 1.0,
-    gameStart: 'open',
+    brassStart: 'anywhere',
+    bridgeCost: 0.9,
+    gameStart: 'hidden-split',
   };
 
   let selectedPlayerCount = 2;
@@ -289,9 +289,9 @@
     if (!Array.isArray(modeOptionButtons)) return;
     const currentScreen = (selectedSettings.screen || 'flat').toLowerCase();
     const currentBrass = (selectedSettings.brass || 'cross').toLowerCase();
-    const currentStart = (selectedSettings.brassStart || 'owned').toLowerCase();
+    const currentStart = (selectedSettings.brassStart || DEFAULT_MODE_SETTINGS.brassStart).toLowerCase();
     const currentCost = Number(coerceBridgeCost(selectedSettings.bridgeCost));
-    const currentGameStart = (selectedSettings.gameStart || 'open').toLowerCase();
+    const currentGameStart = (selectedSettings.gameStart || DEFAULT_MODE_SETTINGS.gameStart).toLowerCase();
     const hiddenAllowed = isHiddenStartAllowed();
     modeOptionButtons.forEach((btn) => {
       const setting = btn?.dataset?.setting;
@@ -416,7 +416,7 @@
 
   function brassRequiresOwnedStart() {
     if (!isCrossLikeModeActive() && !isIntentionalBrassModeActive()) return true;
-    return (selectedSettings.brassStart || 'owned') !== 'anywhere';
+    return (selectedSettings.brassStart || DEFAULT_MODE_SETTINGS.brassStart) !== 'anywhere';
   }
 
   function isWarpLike(mode) {
@@ -1251,7 +1251,7 @@
   // Edge flow persistence functions
   function loadPersistentEdgeFlow() {
     const saved = localStorage.getItem('edgeFlow');
-    persistentEdgeFlow = saved === 'true';
+    persistentEdgeFlow = saved !== 'false'; // Default to true if not set
     return persistentEdgeFlow;
   }
 

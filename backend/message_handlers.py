@@ -190,9 +190,9 @@ class MessageRouter:
         settings: Dict[str, Any] = {
             "screen": "flat",
             "brass": "cross",
-            "brassStart": "owned",
-            "bridgeCost": 1.0,
-            "gameStart": "open",
+            "brassStart": "anywhere",
+            "bridgeCost": 0.9,
+            "gameStart": "hidden-split",
         }
         if not isinstance(payload, dict):
             return settings
