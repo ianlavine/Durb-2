@@ -985,8 +985,6 @@ class MessageRouter:
         mode_settings = self._sanitize_mode_settings(msg.get("settings"))
         mode = self._derive_mode_from_settings(mode_settings, raw_mode)
         mode_settings["derivedMode"] = mode
-        if mode_settings.get("gameStart") == "hidden-split":
-            mode_settings["gameStart"] = "open"
 
         success, error_msg = bot_game_manager.start_bot_game(
             token,

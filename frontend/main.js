@@ -23,6 +23,7 @@
 
   const SHOW_PLAY_AREA_BORDER = false; // toggle to render the play-area outline
   const ENABLE_REPLAY_UPLOAD = false; // gate replay upload UI while retaining implementation
+  const ENABLE_IDLE_EDGE_ANIMATION = false; // animate pipes that are on but not flowing
 
   const game = new Phaser.Game(config);
 
@@ -2335,9 +2336,6 @@ function clearBridgeSelection() {
         if (isReplayActive()) {
           setReplayStatus('Stop the current replay before starting a bot match.', 'warn');
           return;
-        }
-        if (selectedSettings.gameStart === 'hidden-split') {
-          applySelectedSettings({ gameStart: 'open' });
         }
         if (ws && ws.readyState === WebSocket.OPEN) {
           console.log(`Starting hard bot game with ${formatModeSettingsSummary()} options`);
@@ -7096,7 +7094,7 @@ function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, 
         graphicsEdges.fillStyle(animatedColor.color, animatedColor.alpha);
         graphicsEdges.fillTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
       }
-    } else if (e.on) {
+    } else if (e.on && ENABLE_IDLE_EDGE_ANIMATION) {
       // Edge is on but not flowing - show hollow triangles with same animation pattern
       const animatedColor = getAnimatedJuiceColor(color, triangleIndex || 0, totalTriangles || 1, e.flowStartTime);
       
