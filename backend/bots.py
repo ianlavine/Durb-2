@@ -5,7 +5,7 @@ Bot implementations: contains `BotPlayer` which encapsulates AI logic/strategies
 import math
 import time
 from collections import deque
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .game_engine import GameEngine
 from .constants import BRIDGE_COST_PER_UNIT_DISTANCE
@@ -118,6 +118,28 @@ class BotTemplate:
             return 0
         return self.game_engine.calculate_bridge_cost(from_node, to_node)
 
+    def _node_allowed_in_hidden_start(self, node: Any) -> bool:
+        """Return True when a node is selectable for this player during hidden-start."""
+        if not self.game_engine or not self.game_engine.state or node is None:
+            return True
+
+        state = self.game_engine.state
+        if not (state.hidden_start_active and not state.hidden_start_revealed):
+            return True
+
+        boundary = state.hidden_start_boundary
+        side = state.hidden_start_sides.get(self.player_id)
+        if boundary is None or not side:
+            return True
+
+        tolerance = 1e-6
+        x_pos = float(getattr(node, "x", 0.0))
+        if side == "left":
+            return x_pos <= boundary + tolerance
+        if side == "right":
+            return x_pos >= boundary - tolerance
+        return True
+
 
 class Bot1(BotTemplate):
 
@@ -156,18 +178,8 @@ class Bot1(BotTemplate):
             if node.owner is not None:
                 continue  # Skip owned nodes
 
-            if (
-                self.game_engine.state.hidden_start_active
-                and not self.game_engine.state.hidden_start_revealed
-            ):
-                side = self.game_engine.state.hidden_start_sides.get(self.player_id)
-                boundary = self.game_engine.state.hidden_start_boundary
-                if side and boundary is not None:
-                    tolerance = 1e-6
-                    if side == "left" and node.x > boundary + tolerance:
-                        continue
-                    if side == "right" and node.x < boundary - tolerance:
-                        continue
+            if not self._node_allowed_in_hidden_start(node):
+                continue
 
             # Count how many unowned nodes can be reached without flipping edges
             expansion_count = self._count_expandable_nodes(node_id)
@@ -724,6 +736,9 @@ class Bot2(Bot1):
             if node.owner is not None:
                 continue
 
+            if not self._node_allowed_in_hidden_start(node):
+                continue
+
             expansion = self._count_expandable_nodes(node_id)
             # Distance from center, normalized by half-diagonal
             dx = node.x - center_x
@@ -735,6 +750,9 @@ class Bot2(Bot1):
             if score > best_score:
                 best_score = score
                 best_node_id = node_id
+
+        if best_node_id is None:
+            return super()._find_optimal_starting_node()
 
         return best_node_id
 

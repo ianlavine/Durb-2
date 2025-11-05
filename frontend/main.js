@@ -23,6 +23,7 @@
 
   const SHOW_PLAY_AREA_BORDER = false; // toggle to render the play-area outline
   const ENABLE_REPLAY_UPLOAD = false; // gate replay upload UI while retaining implementation
+  const ENABLE_IDLE_EDGE_ANIMATION = false; // animate pipes that are on but not flowing
 
   const game = new Phaser.Game(config);
 
@@ -161,7 +162,7 @@
   
   // Edge Flow toggle system
   let edgeFlowToggle = null;
-  let persistentEdgeFlow = false; // persistent setting stored in localStorage (default to false)
+  let persistentEdgeFlow = true; // persistent setting stored in localStorage (default to true)
   let edgeFlowTexts = new Map(); // edgeId -> text object
   const edgeRemovalAnimations = new Map(); // edgeId -> removal animation state
   
@@ -178,9 +179,9 @@
   const DEFAULT_MODE_SETTINGS = {
     screen: 'flat',
     brass: 'cross',
-    brassStart: 'owned',
-    bridgeCost: 1.0,
-    gameStart: 'open',
+    brassStart: 'anywhere',
+    bridgeCost: 0.9,
+    gameStart: 'hidden-split',
   };
 
   let selectedPlayerCount = 2;
@@ -289,9 +290,9 @@
     if (!Array.isArray(modeOptionButtons)) return;
     const currentScreen = (selectedSettings.screen || 'flat').toLowerCase();
     const currentBrass = (selectedSettings.brass || 'cross').toLowerCase();
-    const currentStart = (selectedSettings.brassStart || 'owned').toLowerCase();
+    const currentStart = (selectedSettings.brassStart || DEFAULT_MODE_SETTINGS.brassStart).toLowerCase();
     const currentCost = Number(coerceBridgeCost(selectedSettings.bridgeCost));
-    const currentGameStart = (selectedSettings.gameStart || 'open').toLowerCase();
+    const currentGameStart = (selectedSettings.gameStart || DEFAULT_MODE_SETTINGS.gameStart).toLowerCase();
     const hiddenAllowed = isHiddenStartAllowed();
     modeOptionButtons.forEach((btn) => {
       const setting = btn?.dataset?.setting;
@@ -416,7 +417,7 @@
 
   function brassRequiresOwnedStart() {
     if (!isCrossLikeModeActive() && !isIntentionalBrassModeActive()) return true;
-    return (selectedSettings.brassStart || 'owned') !== 'anywhere';
+    return (selectedSettings.brassStart || DEFAULT_MODE_SETTINGS.brassStart) !== 'anywhere';
   }
 
   function isWarpLike(mode) {
@@ -1251,7 +1252,7 @@
   // Edge flow persistence functions
   function loadPersistentEdgeFlow() {
     const saved = localStorage.getItem('edgeFlow');
-    persistentEdgeFlow = saved === 'true';
+    persistentEdgeFlow = saved !== 'false'; // Default to true if not set
     return persistentEdgeFlow;
   }
 
@@ -2335,9 +2336,6 @@ function clearBridgeSelection() {
         if (isReplayActive()) {
           setReplayStatus('Stop the current replay before starting a bot match.', 'warn');
           return;
-        }
-        if (selectedSettings.gameStart === 'hidden-split') {
-          applySelectedSettings({ gameStart: 'open' });
         }
         if (ws && ws.readyState === WebSocket.OPEN) {
           console.log(`Starting hard bot game with ${formatModeSettingsSummary()} options`);
@@ -7096,7 +7094,7 @@ function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, 
         graphicsEdges.fillStyle(animatedColor.color, animatedColor.alpha);
         graphicsEdges.fillTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
       }
-    } else if (e.on) {
+    } else if (e.on && ENABLE_IDLE_EDGE_ANIMATION) {
       // Edge is on but not flowing - show hollow triangles with same animation pattern
       const animatedColor = getAnimatedJuiceColor(color, triangleIndex || 0, totalTriangles || 1, e.flowStartTime);
       
