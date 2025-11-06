@@ -18,6 +18,12 @@
   RUBY_VERSION = ""
   GO_VERSION = ""
 
+# Serve classic build directly when requesting /old
+[[redirects]]
+  from = "/old"
+  to = "/old.html"
+  status = 200
+
 # Redirect all routes to index.html for SPA behavior (if needed)
 [[redirects]]
   from = "/*"

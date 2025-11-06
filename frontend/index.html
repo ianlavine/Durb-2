@@ -33,6 +33,8 @@
       }
       #playBtn, #playBotBtn { font-size: 64px; padding: 24px 64px; border-radius: 12px; border: none; background: #00cc66; color: #111; cursor: pointer; box-shadow: 0 8px 24px rgba(0,0,0,0.4); margin: 4px 0; }
       #playBotBtn { background: #ff6600; }
+      .classic-link { font-size: 20px; color: #9ad3ff; text-decoration: none; font-family: monospace; margin-top: 32px; display: inline-block; opacity: 0.9; }
+      .classic-link:hover { text-decoration: underline; }
       #playBtn:disabled, #playBotBtn:disabled {
         cursor: not-allowed;
         filter: grayscale(0.8) brightness(0.7);
@@ -732,6 +734,7 @@
         </div>
         <button id="playBtn">PLAY FRIENDS</button>
         <button id="playBotBtn">PLAY BOT</button>
+        <a class="classic-link" href="/old" target="_blank" rel="noopener">Play OG Durb</a>
         <div class="replay-uploader" id="replayPanel">
           <div class="replay-header" id="replayHeader">
             <span>Replay Upload</span>

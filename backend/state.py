@@ -18,6 +18,7 @@ from .constants import (
     PRODUCTION_RATE_PER_NODE,
     RESERVE_TRANSFER_RATIO,
     STARTING_GOLD,
+    STARTING_NODE_JUICE,
     UNOWNED_NODE_BASE_JUICE,
     get_neutral_capture_reward,
     get_node_max_juice,
@@ -84,6 +85,11 @@ class GraphState:
         self.passive_income_per_second: float = 0.0
         self.overflow_pending_gold_payout: float = OVERFLOW_PENDING_GOLD_PAYOUT
         self.overflow_juice_to_gold_ratio: float = get_overflow_juice_to_gold_ratio(self.mode)
+        self.production_rate_per_node: float = PRODUCTION_RATE_PER_NODE
+        self.max_transfer_ratio: float = MAX_TRANSFER_RATIO
+        self.intake_transfer_ratio: float = INTAKE_TRANSFER_RATIO
+        self.reserve_transfer_ratio: float = RESERVE_TRANSFER_RATIO
+        self.starting_node_juice: float = STARTING_NODE_JUICE
 
         # Geometry updates queued for the next tick payload
         self.pending_node_movements: Dict[int, Dict[str, float]] = {}
@@ -637,7 +643,7 @@ class GraphState:
             if node.owner is not None:
                 if is_overflow_mode and node.juice >= node_max - 1e-6:
                     continue
-                size_delta[node.id] += PRODUCTION_RATE_PER_NODE
+                size_delta[node.id] += self.production_rate_per_node
 
         # Reset last_transfer for all edges at the start of the tick
         for e in self.edges.values():
@@ -663,11 +669,11 @@ class GraphState:
             prev_intake = max(0.0, src_node.cur_intake)
             reserves = max(0.0, src_node.juice - prev_intake)
 
-            transfer_from_intake = prev_intake * INTAKE_TRANSFER_RATIO
-            transfer_from_reserve = reserves * RESERVE_TRANSFER_RATIO
+            transfer_from_intake = prev_intake * self.intake_transfer_ratio
+            transfer_from_reserve = reserves * self.reserve_transfer_ratio
 
             total_transfer = transfer_from_intake + transfer_from_reserve
-            max_transfer_allowed = max(0.0, src_node.juice * MAX_TRANSFER_RATIO)
+            max_transfer_allowed = max(0.0, src_node.juice * self.max_transfer_ratio)
             total_transfer = min(total_transfer, max_transfer_allowed)
             total_transfer = min(total_transfer, src_node.juice)
 

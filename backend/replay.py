@@ -8,6 +8,9 @@ from .constants import (
     NODE_MIN_JUICE,
     OVERFLOW_PENDING_GOLD_PAYOUT,
     PRODUCTION_RATE_PER_NODE,
+    MAX_TRANSFER_RATIO,
+    INTAKE_TRANSFER_RATIO,
+    RESERVE_TRANSFER_RATIO,
     STARTING_NODE_JUICE,
     STARTING_GOLD,
     get_neutral_capture_reward,
@@ -171,16 +174,31 @@ class GameReplayRecorder:
 
         passive_per_tick = passive_per_second * max(0.0, self.tick_interval)
 
+        production_rate = PRODUCTION_RATE_PER_NODE
+        starting_node_juice = STARTING_NODE_JUICE
+        max_transfer_ratio = MAX_TRANSFER_RATIO
+        intake_transfer_ratio = INTAKE_TRANSFER_RATIO
+        reserve_transfer_ratio = RESERVE_TRANSFER_RATIO
+        if state is not None:
+            production_rate = getattr(state, "production_rate_per_node", production_rate)
+            starting_node_juice = getattr(state, "starting_node_juice", starting_node_juice)
+            max_transfer_ratio = getattr(state, "max_transfer_ratio", max_transfer_ratio)
+            intake_transfer_ratio = getattr(state, "intake_transfer_ratio", intake_transfer_ratio)
+            reserve_transfer_ratio = getattr(state, "reserve_transfer_ratio", reserve_transfer_ratio)
+
         constants_payload = {
             "NODE_MAX_JUICE": get_node_max_juice(current_mode),
             "NODE_MIN_JUICE": NODE_MIN_JUICE,
             "PASSIVE_GOLD_PER_SECOND": passive_per_second,
             "PASSIVE_GOLD_PER_TICK": passive_per_tick,
             "PASSIVE_INCOME_ENABLED": passive_per_second > 0,
-            "PRODUCTION_RATE_PER_NODE": PRODUCTION_RATE_PER_NODE,
+            "PRODUCTION_RATE_PER_NODE": production_rate,
+            "MAX_TRANSFER_RATIO": max_transfer_ratio,
+            "INTAKE_TRANSFER_RATIO": intake_transfer_ratio,
+            "RESERVE_TRANSFER_RATIO": reserve_transfer_ratio,
             "STARTING_GOLD": STARTING_GOLD,
             "GOLD_REWARD_FOR_NEUTRAL_CAPTURE": current_reward,
-            "STARTING_NODE_JUICE": STARTING_NODE_JUICE,
+            "STARTING_NODE_JUICE": starting_node_juice,
             "GOLD_REWARD_FOR_ENEMY_CAPTURE": GOLD_REWARD_FOR_ENEMY_CAPTURE,
             "OVERFLOW_PENDING_GOLD_PAYOUT": overflow_payout,
             "OVERFLOW_JUICE_TO_GOLD_RATIO": overflow_ratio,
