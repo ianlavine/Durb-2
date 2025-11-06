@@ -591,19 +591,19 @@
         width: 100%;
       }
 
-      .bridge-cost-slider {
+      .mode-slider {
         display: flex;
         align-items: center;
         gap: 12px;
         width: 100%;
       }
 
-      .bridge-cost-slider input[type="range"] {
+      .mode-slider input[type="range"] {
         flex: 1;
         accent-color: #ffff00;
       }
 
-      .bridge-cost-slider span {
+      .mode-slider span {
         font-family: monospace;
         min-width: 48px;
         text-align: right;
@@ -765,7 +765,7 @@
             </div>
           </div>
           <div class="mode-option-group" data-setting-group="brassStart">
-            <span class="selector-label">Brass Start</span>
+            <span class="selector-label">Pipe Start</span>
             <div class="mode-option-buttons">
               <button class="mode-option-button" data-setting="brassStart" data-value="owned">Owned</button>
               <button class="mode-option-button active" data-setting="brassStart" data-value="anywhere">Anywhere</button>
@@ -780,9 +780,37 @@
           </div>
           <div class="mode-option-group bridge-cost-group" data-setting-group="bridgeCost">
             <span class="selector-label">Bridge Cost</span>
-            <div class="bridge-cost-slider">
+            <div class="mode-slider">
               <input type="range" id="bridgeCostSlider" min="0.5" max="1" step="0.1" value="0.9" aria-label="Bridge cost multiplier" />
               <span id="bridgeCostValue">0.9</span>
+            </div>
+          </div>
+          <div class="mode-option-group" data-setting-group="passiveIncome">
+            <span class="selector-label">Passive Income</span>
+            <div class="mode-slider">
+              <input type="range" id="passiveIncomeSlider" min="0" max="1" step="0.05" value="0" aria-label="Passive income per second" />
+              <span id="passiveIncomeValue">0.00/s</span>
+            </div>
+          </div>
+          <div class="mode-option-group" data-setting-group="neutralReward">
+            <span class="selector-label">Neutral Capture</span>
+            <div class="mode-slider">
+              <input type="range" id="neutralCaptureSlider" min="0" max="10" step="1" value="10" aria-label="Neutral capture gold" />
+              <span id="neutralCaptureValue">10</span>
+            </div>
+          </div>
+          <div class="mode-option-group" data-setting-group="ringJuiceRatio">
+            <span class="selector-label">Ring Ratio</span>
+            <div class="mode-slider">
+              <input type="range" id="ringRatioSlider" min="5" max="30" step="1" value="30" aria-label="Juice to gold ratio" />
+              <span id="ringRatioValue">30</span>
+            </div>
+          </div>
+          <div class="mode-option-group" data-setting-group="ringPayout">
+            <span class="selector-label">Ring Payout</span>
+            <div class="mode-slider">
+              <input type="range" id="ringPayoutSlider" min="1" max="20" step="1" value="10" aria-label="Gold needed to pop ring" />
+              <span id="ringPayoutValue">10</span>
             </div>
           </div>
         </div>

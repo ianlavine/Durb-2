@@ -182,6 +182,10 @@
     brassStart: 'anywhere',
     bridgeCost: 0.9,
     gameStart: 'hidden-split',
+    passiveIncome: 0,
+    neutralCaptureGold: 10,
+    ringJuiceToGoldRatio: 30,
+    ringPayoutGold: 10,
   };
 
   let selectedPlayerCount = 2;
@@ -195,9 +199,29 @@
   let modePanelOpen = false;
   let bridgeCostSlider = null;
   let bridgeCostValueLabel = null;
+  let passiveIncomeSlider = null;
+  let passiveIncomeValueLabel = null;
+  let neutralCaptureSlider = null;
+  let neutralCaptureValueLabel = null;
+  let ringRatioSlider = null;
+  let ringRatioValueLabel = null;
+  let ringPayoutSlider = null;
+  let ringPayoutValueLabel = null;
   const BRIDGE_COST_MIN = 0.5;
   const BRIDGE_COST_MAX = 1.0;
   const BRIDGE_COST_STEP = 0.1;
+  const PASSIVE_INCOME_MIN = 0;
+  const PASSIVE_INCOME_MAX = 1;
+  const PASSIVE_INCOME_STEP = 0.05;
+  const NEUTRAL_CAPTURE_MIN = 0;
+  const NEUTRAL_CAPTURE_MAX = 10;
+  const NEUTRAL_CAPTURE_STEP = 1;
+  const RING_RATIO_MIN = 5;
+  const RING_RATIO_MAX = 30;
+  const RING_RATIO_STEP = 1;
+  const RING_PAYOUT_MIN = 1;
+  const RING_PAYOUT_MAX = 20;
+  const RING_PAYOUT_STEP = 1;
   const MODE_LABELS = {
     sparse: 'Sparse',
     brass: 'Brass',
@@ -212,7 +236,7 @@
     'brass-old': 'Brass-Old',
     flat: 'Flat',
   };
-  const DEFAULT_OVERFLOW_PENDING_GOLD_THRESHOLD = 10;
+  const DEFAULT_OVERFLOW_PENDING_GOLD_THRESHOLD = DEFAULT_MODE_SETTINGS.ringPayoutGold;
   let OVERFLOW_PENDING_GOLD_THRESHOLD = DEFAULT_OVERFLOW_PENDING_GOLD_THRESHOLD;
   const BRASS_PIPE_COLOR = 0x8b6f14;
   const BRASS_PIPE_DIM_COLOR = 0x46320a;
@@ -267,6 +291,35 @@
     return DEFAULT_MODE_SETTINGS.bridgeCost;
   }
 
+  function coercePassiveIncome(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return DEFAULT_MODE_SETTINGS.passiveIncome;
+    const clamped = Math.min(PASSIVE_INCOME_MAX, Math.max(PASSIVE_INCOME_MIN, numeric));
+    const stepped = Math.round(clamped / PASSIVE_INCOME_STEP) * PASSIVE_INCOME_STEP;
+    return Number(stepped.toFixed(2));
+  }
+
+  function coerceNeutralCaptureReward(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return DEFAULT_MODE_SETTINGS.neutralCaptureGold;
+    const clamped = Math.min(NEUTRAL_CAPTURE_MAX, Math.max(NEUTRAL_CAPTURE_MIN, numeric));
+    return Math.round(clamped);
+  }
+
+  function coerceRingRatio(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return DEFAULT_MODE_SETTINGS.ringJuiceToGoldRatio;
+    const clamped = Math.min(RING_RATIO_MAX, Math.max(RING_RATIO_MIN, numeric));
+    return Math.round(clamped);
+  }
+
+  function coerceRingPayout(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return DEFAULT_MODE_SETTINGS.ringPayoutGold;
+    const clamped = Math.min(RING_PAYOUT_MAX, Math.max(RING_PAYOUT_MIN, numeric));
+    return Math.round(clamped);
+  }
+
   function deriveModeFromSettings(settings = selectedSettings) {
     if (!settings || typeof settings !== 'object') return 'flat';
     const screen = typeof settings.screen === 'string' ? settings.screen.toLowerCase() : 'flat';
@@ -283,7 +336,11 @@
     const startLabel = (settings.brassStart === 'anywhere') ? 'Anywhere' : 'Owned';
     const startModeLabel = (settings.gameStart === 'hidden-split') ? 'Hidden' : 'Open';
     const costLabel = coerceBridgeCost(settings.bridgeCost).toFixed(1);
-    return `${screenLabel} · ${brassLabel} · ${startLabel} · ${startModeLabel} · ${costLabel}`;
+    const passiveLabel = `${coercePassiveIncome(settings.passiveIncome).toFixed(2)}/s`;
+    const neutralLabel = coerceNeutralCaptureReward(settings.neutralCaptureGold);
+    const ringRatioLabel = coerceRingRatio(settings.ringJuiceToGoldRatio);
+    const ringPayoutLabel = coerceRingPayout(settings.ringPayoutGold);
+    return `${screenLabel} · ${brassLabel} · ${startLabel} · ${startModeLabel} · ${costLabel} · Passive ${passiveLabel} · Neutral ${neutralLabel} · Ring ${ringRatioLabel}:${ringPayoutLabel}`;
   }
 
   function updateModeOptionButtonStates() {
@@ -370,6 +427,26 @@
     } else {
       next.bridgeCost = coerceBridgeCost(next.bridgeCost);
     }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'passiveIncome')) {
+      next.passiveIncome = coercePassiveIncome(overrides.passiveIncome);
+    } else {
+      next.passiveIncome = coercePassiveIncome(next.passiveIncome);
+    }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'neutralCaptureGold')) {
+      next.neutralCaptureGold = coerceNeutralCaptureReward(overrides.neutralCaptureGold);
+    } else {
+      next.neutralCaptureGold = coerceNeutralCaptureReward(next.neutralCaptureGold);
+    }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'ringJuiceToGoldRatio')) {
+      next.ringJuiceToGoldRatio = coerceRingRatio(overrides.ringJuiceToGoldRatio);
+    } else {
+      next.ringJuiceToGoldRatio = coerceRingRatio(next.ringJuiceToGoldRatio);
+    }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'ringPayoutGold')) {
+      next.ringPayoutGold = coerceRingPayout(overrides.ringPayoutGold);
+    } else {
+      next.ringPayoutGold = coerceRingPayout(next.ringPayoutGold);
+    }
 
     if (next.gameStart === 'hidden-split' && !isHiddenStartAllowed()) {
       next.gameStart = 'open';
@@ -379,6 +456,10 @@
     selectedMode = deriveModeFromSettings(selectedSettings);
     updateModeOptionButtonStates();
     syncBridgeCostSlider();
+    syncPassiveIncomeSlider();
+    syncNeutralCaptureSlider();
+    syncRingRatioSlider();
+    syncRingPayoutSlider();
     updatePlayBotAvailability(true);
   }
 
@@ -389,6 +470,10 @@
       brassStart: selectedSettings.brassStart,
       bridgeCost: Number(coerceBridgeCost(selectedSettings.bridgeCost).toFixed(1)),
       gameStart: selectedSettings.gameStart,
+      passiveIncome: coercePassiveIncome(selectedSettings.passiveIncome),
+      neutralCaptureGold: coerceNeutralCaptureReward(selectedSettings.neutralCaptureGold),
+      ringJuiceToGoldRatio: coerceRingRatio(selectedSettings.ringJuiceToGoldRatio),
+      ringPayoutGold: coerceRingPayout(selectedSettings.ringPayoutGold),
       baseMode: selectedMode,
       derivedMode: selectedMode,
     };
@@ -399,9 +484,14 @@
     const overrides = {};
     if (typeof payload.screen === 'string') overrides.screen = payload.screen;
     if (typeof payload.brass === 'string') overrides.brass = payload.brass;
-    if (typeof payload.brassStart === 'string') overrides.brassStart = payload.brassStart;
+    if (typeof payload.pipeStart === 'string') overrides.brassStart = payload.pipeStart;
+    else if (typeof payload.brassStart === 'string') overrides.brassStart = payload.brassStart;
     if (typeof payload.gameStart === 'string') overrides.gameStart = payload.gameStart;
     if (Object.prototype.hasOwnProperty.call(payload, 'bridgeCost')) overrides.bridgeCost = payload.bridgeCost;
+    if (Object.prototype.hasOwnProperty.call(payload, 'passiveIncome')) overrides.passiveIncome = payload.passiveIncome;
+    if (Object.prototype.hasOwnProperty.call(payload, 'neutralCaptureGold')) overrides.neutralCaptureGold = payload.neutralCaptureGold;
+    if (Object.prototype.hasOwnProperty.call(payload, 'ringJuiceToGoldRatio')) overrides.ringJuiceToGoldRatio = payload.ringJuiceToGoldRatio;
+    if (Object.prototype.hasOwnProperty.call(payload, 'ringPayoutGold')) overrides.ringPayoutGold = payload.ringPayoutGold;
     applySelectedSettings(overrides);
   }
 
@@ -415,8 +505,35 @@
     bridgeCostValueLabel.textContent = value.toFixed(1);
   }
 
-  function brassRequiresOwnedStart() {
-    if (!isCrossLikeModeActive() && !isIntentionalBrassModeActive()) return true;
+  function syncPassiveIncomeSlider() {
+    if (!passiveIncomeSlider || !passiveIncomeValueLabel) return;
+    const value = coercePassiveIncome(selectedSettings.passiveIncome);
+    passiveIncomeSlider.value = value.toFixed(2);
+    passiveIncomeValueLabel.textContent = `${value.toFixed(2)}/s`;
+  }
+
+  function syncNeutralCaptureSlider() {
+    if (!neutralCaptureSlider || !neutralCaptureValueLabel) return;
+    const value = coerceNeutralCaptureReward(selectedSettings.neutralCaptureGold);
+    neutralCaptureSlider.value = String(value);
+    neutralCaptureValueLabel.textContent = String(value);
+  }
+
+  function syncRingRatioSlider() {
+    if (!ringRatioSlider || !ringRatioValueLabel) return;
+    const value = coerceRingRatio(selectedSettings.ringJuiceToGoldRatio);
+    ringRatioSlider.value = String(value);
+    ringRatioValueLabel.textContent = String(value);
+  }
+
+  function syncRingPayoutSlider() {
+    if (!ringPayoutSlider || !ringPayoutValueLabel) return;
+    const value = coerceRingPayout(selectedSettings.ringPayoutGold);
+    ringPayoutSlider.value = String(value);
+    ringPayoutValueLabel.textContent = String(value);
+  }
+
+  function pipeStartRequiresOwnership() {
     return (selectedSettings.brassStart || DEFAULT_MODE_SETTINGS.brassStart) !== 'anywhere';
   }
 
@@ -2230,6 +2347,14 @@ function clearBridgeSelection() {
     modeOptionButtons = Array.from(document.querySelectorAll('.mode-option-button'));
     bridgeCostSlider = document.getElementById('bridgeCostSlider');
     bridgeCostValueLabel = document.getElementById('bridgeCostValue');
+    passiveIncomeSlider = document.getElementById('passiveIncomeSlider');
+    passiveIncomeValueLabel = document.getElementById('passiveIncomeValue');
+    neutralCaptureSlider = document.getElementById('neutralCaptureSlider');
+    neutralCaptureValueLabel = document.getElementById('neutralCaptureValue');
+    ringRatioSlider = document.getElementById('ringRatioSlider');
+    ringRatioValueLabel = document.getElementById('ringRatioValue');
+    ringPayoutSlider = document.getElementById('ringPayoutSlider');
+    ringPayoutValueLabel = document.getElementById('ringPayoutValue');
 
     if (modeOptionButtons.length) {
       modeOptionButtons.forEach((btn) => {
@@ -2256,6 +2381,54 @@ function clearBridgeSelection() {
         const sliderValue = Number(event.target.value);
         applySelectedSettings({ bridgeCost: sliderValue });
       });
+    }
+
+    if (passiveIncomeSlider) {
+      passiveIncomeSlider.min = String(PASSIVE_INCOME_MIN);
+      passiveIncomeSlider.max = String(PASSIVE_INCOME_MAX);
+      passiveIncomeSlider.step = String(PASSIVE_INCOME_STEP);
+      const handler = (event) => {
+        const sliderValue = Number(event.target.value);
+        applySelectedSettings({ passiveIncome: sliderValue });
+      };
+      passiveIncomeSlider.addEventListener('input', handler);
+      passiveIncomeSlider.addEventListener('change', handler);
+    }
+
+    if (neutralCaptureSlider) {
+      neutralCaptureSlider.min = String(NEUTRAL_CAPTURE_MIN);
+      neutralCaptureSlider.max = String(NEUTRAL_CAPTURE_MAX);
+      neutralCaptureSlider.step = String(NEUTRAL_CAPTURE_STEP);
+      const handler = (event) => {
+        const sliderValue = Number(event.target.value);
+        applySelectedSettings({ neutralCaptureGold: sliderValue });
+      };
+      neutralCaptureSlider.addEventListener('input', handler);
+      neutralCaptureSlider.addEventListener('change', handler);
+    }
+
+    if (ringRatioSlider) {
+      ringRatioSlider.min = String(RING_RATIO_MIN);
+      ringRatioSlider.max = String(RING_RATIO_MAX);
+      ringRatioSlider.step = String(RING_RATIO_STEP);
+      const handler = (event) => {
+        const sliderValue = Number(event.target.value);
+        applySelectedSettings({ ringJuiceToGoldRatio: sliderValue });
+      };
+      ringRatioSlider.addEventListener('input', handler);
+      ringRatioSlider.addEventListener('change', handler);
+    }
+
+    if (ringPayoutSlider) {
+      ringPayoutSlider.min = String(RING_PAYOUT_MIN);
+      ringPayoutSlider.max = String(RING_PAYOUT_MAX);
+      ringPayoutSlider.step = String(RING_PAYOUT_STEP);
+      const handler = (event) => {
+        const sliderValue = Number(event.target.value);
+        applySelectedSettings({ ringPayoutGold: sliderValue });
+      };
+      ringPayoutSlider.addEventListener('input', handler);
+      ringPayoutSlider.addEventListener('change', handler);
     }
 
     const closeModePanel = () => {
@@ -4595,7 +4768,13 @@ function fallbackRemoveEdgesForNode(nodeId) {
     if (lower.includes('intersect')) return 'No overlapping pipes';
     if (lower.includes('only golden pipes can cross')) return 'Only brass pipes can cross';
     if (lower.includes('cannot cross golden pipe')) return 'Brass pipes cannot be crossed';
-    if (lower.includes('must control brass pipes')) return 'Must control Brass Pipes';
+    if (
+      lower.includes('must control brass pipes') ||
+      lower.includes('must control pipe start') ||
+      lower.includes('pipes must start')
+    ) {
+      return 'Pipes must start from your nodes';
+    }
     if (lower.includes('pipe controlled')) return 'Pipe controlled by Opponent';
     // Fallbacks per context
     if (context === 'bridge') return original || 'Invalid Pipe!';
@@ -5730,8 +5909,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
       wantBrass = !!useBrass;
     }
 
-    if (wantBrass && brassRequiresOwnedStart() && node.owner !== myPlayerId) {
-      showErrorMessage('Must control Brass Pipes', 'money');
+    if (pipeStartRequiresOwnership() && node.owner !== myPlayerId) {
+      showErrorMessage('Pipes must start from your nodes', 'money');
       brassActivationDenied = true;
       return false;
     }
@@ -5763,9 +5942,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
       if (node) {
         if (bridgeFirstNode === null) {
           // Start bridge building from any node
-          const useBrassFirst = bridgeIsBrass && isIntentionalBrassModeActive();
-          if (useBrassFirst && brassRequiresOwnedStart() && node.owner !== myPlayerId) {
-            showErrorMessage('Must control Brass Pipes', 'money');
+          if (pipeStartRequiresOwnership() && node.owner !== myPlayerId) {
+            showErrorMessage('Pipes must start from your nodes', 'money');
             return true;
           }
           bridgeFirstNode = nodeId;
@@ -5788,10 +5966,10 @@ function fallbackRemoveEdgesForNode(nodeId) {
             showErrorMessage('Cannot cross brass pipe');
             return true;
           }
-          if (modeIsXb && bridgePreviewWillBeBrass && brassRequiresOwnedStart()) {
+          if (pipeStartRequiresOwnership()) {
             const firstOwner = firstNode.owner;
             if (firstOwner !== myPlayerId) {
-              showErrorMessage('Must control Brass Pipes', 'money');
+              showErrorMessage('Pipes must start from your nodes', 'money');
               return true;
             }
           }

@@ -11,12 +11,15 @@ from .constants import (
     BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE,
     DEFAULT_GAME_MODE,
     MIN_PIPE_JOIN_ANGLE_DEGREES,
+    OVERFLOW_PENDING_GOLD_PAYOUT,
+    TICK_INTERVAL_SECONDS,
     STARTING_NODE_JUICE,
     WARP_MARGIN_RATIO_X,
     WARP_MARGIN_RATIO_Y,
     get_bridge_cost_per_unit,
     get_neutral_capture_reward,
     get_node_max_juice,
+    get_overflow_juice_to_gold_ratio,
     normalize_game_mode,
 )
 from .graph_generator import graph_generator
@@ -117,9 +120,13 @@ class GameEngine:
         auto_brass_on_cross = normalized_mode in {"warp", "flat"}
         manual_brass_selection = normalized_mode in {"i-warp", "i-flat", "cross"}
         brass_double_cost = manual_brass_selection or normalized_mode == "cross"
-        allow_brass_start_anywhere = False
+        allow_pipe_start_anywhere = False
         bridge_cost_override: Optional[float] = None
         game_start_mode = "open"
+        passive_income_per_second = 0.0
+        neutral_capture_reward = get_neutral_capture_reward(normalized_mode)
+        overflow_ratio = get_overflow_juice_to_gold_ratio(normalized_mode)
+        overflow_payout = OVERFLOW_PENDING_GOLD_PAYOUT
 
         if isinstance(options, dict):
             screen_option = str(options.get("screen", "")).strip().lower()
@@ -131,9 +138,10 @@ class GameEngine:
                 manual_brass_selection = brass_option in {"right-click", "rightclick", "right_click"}
                 auto_brass_on_cross = brass_option == "cross"
 
-            brass_start_option = str(options.get("brassStart", "")).strip().lower()
-            if brass_start_option in {"owned", "anywhere"}:
-                allow_brass_start_anywhere = brass_start_option == "anywhere"
+            pipe_start_raw = options.get("pipeStart", options.get("brassStart", ""))
+            pipe_start_option = str(pipe_start_raw).strip().lower()
+            if pipe_start_option in {"owned", "anywhere"}:
+                allow_pipe_start_anywhere = pipe_start_option == "anywhere"
 
             game_start_option = str(options.get("gameStart", "")).strip().lower()
             if game_start_option in {"hidden", "hidden-split", "hidden_split", "hidden split"}:
@@ -149,6 +157,47 @@ class GameEngine:
             if parsed_cost is not None and parsed_cost > 0:
                 bridge_cost_override = parsed_cost
 
+            passive_value = options.get("passiveIncome")
+            if isinstance(passive_value, str):
+                passive_value = passive_value.strip()
+            try:
+                parsed_passive = float(passive_value)
+            except (TypeError, ValueError):
+                parsed_passive = None
+            if parsed_passive is not None and parsed_passive >= 0:
+                snapped = round(parsed_passive * 20.0) / 20.0
+                passive_income_per_second = round(max(0.0, min(1.0, snapped)), 2)
+
+            neutral_value = options.get("neutralCaptureGold")
+            if isinstance(neutral_value, str):
+                neutral_value = neutral_value.strip()
+            try:
+                parsed_neutral = float(neutral_value)
+            except (TypeError, ValueError):
+                parsed_neutral = None
+            if parsed_neutral is not None and parsed_neutral >= 0:
+                neutral_capture_reward = max(0.0, min(100.0, round(parsed_neutral, 3)))
+
+            ratio_value = options.get("ringJuiceToGoldRatio")
+            if isinstance(ratio_value, str):
+                ratio_value = ratio_value.strip()
+            try:
+                parsed_ratio = float(ratio_value)
+            except (TypeError, ValueError):
+                parsed_ratio = None
+            if parsed_ratio is not None and parsed_ratio > 0:
+                overflow_ratio = max(5.0, min(500.0, round(parsed_ratio, 4)))
+
+            payout_value = options.get("ringPayoutGold")
+            if isinstance(payout_value, str):
+                payout_value = payout_value.strip()
+            try:
+                parsed_payout = float(payout_value)
+            except (TypeError, ValueError):
+                parsed_payout = None
+            if parsed_payout is not None and parsed_payout > 0:
+                overflow_payout = max(1.0, min(500.0, round(parsed_payout, 4)))
+
         if bridge_cost_override is not None:
             clamped_cost = max(0.5, min(1.0, float(bridge_cost_override)))
             self.state.bridge_cost_per_unit = round(clamped_cost, 1)
@@ -158,11 +207,16 @@ class GameEngine:
         sanitized_options: Dict[str, Any] = {
             "screen": screen_variant,
             "brass": "right-click" if manual_brass_selection else "cross",
-            "brassStart": "anywhere" if allow_brass_start_anywhere else "owned",
+            "brassStart": "anywhere" if allow_pipe_start_anywhere else "owned",
             "bridgeCost": self.state.bridge_cost_per_unit,
             "derivedMode": normalized_mode,
             "gameStart": game_start_mode,
+            "passiveIncome": passive_income_per_second,
+            "neutralCaptureGold": neutral_capture_reward,
+            "ringJuiceToGoldRatio": overflow_ratio,
+            "ringPayoutGold": overflow_payout,
         }
+        sanitized_options["pipeStart"] = sanitized_options["brassStart"]
         if isinstance(options, dict):
             base_mode = options.get("baseMode")
             if isinstance(base_mode, str):
@@ -172,8 +226,12 @@ class GameEngine:
         self.state.auto_brass_on_cross = auto_brass_on_cross
         self.state.manual_brass_selection = manual_brass_selection
         self.state.brass_double_cost = brass_double_cost
-        self.state.allow_brass_start_anywhere = allow_brass_start_anywhere
+        self.state.allow_pipe_start_anywhere = allow_pipe_start_anywhere
         self.state.mode_settings = sanitized_options
+        self.state.passive_income_per_second = passive_income_per_second
+        self.state.neutral_capture_reward = neutral_capture_reward
+        self.state.overflow_juice_to_gold_ratio = overflow_ratio
+        self.state.overflow_pending_gold_payout = overflow_payout
 
         return sanitized_options
 
@@ -1016,10 +1074,10 @@ class GameEngine:
             else:
                 normalized_pipe_type = "normal"
 
-            allow_brass_anywhere = bool(getattr(self.state, "allow_brass_start_anywhere", False))
+            allow_pipe_anywhere = bool(getattr(self.state, "allow_pipe_start_anywhere", False))
 
-            if normalized_pipe_type == "gold" and from_node.owner != player_id and not allow_brass_anywhere:
-                raise GameValidationError("Must control Brass Pipes")
+            if from_node.owner != player_id and not allow_pipe_anywhere:
+                raise GameValidationError("Pipes must start from your nodes")
 
             if from_node_id == to_node_id:
                 raise GameValidationError("Cannot connect node to itself")
@@ -1151,11 +1209,10 @@ class GameEngine:
                         raise GameValidationError("Only golden pipes can cross others")
 
             if (
-                normalized_pipe_type == "gold"
-                and from_node.owner != player_id
-                and not allow_brass_anywhere
+                from_node.owner != player_id
+                and not allow_pipe_anywhere
             ):
-                raise GameValidationError("Must control Brass Pipes")
+                raise GameValidationError("Pipes must start from your nodes")
 
             # Create the edge (always one-way from source to target)
             new_edge_id = max(self.state.edges.keys(), default=0) + 1

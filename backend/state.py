@@ -14,8 +14,7 @@ from .constants import (
     MAX_TRANSFER_RATIO,
     NODE_MIN_JUICE,
     OVERFLOW_PENDING_GOLD_PAYOUT,
-    PASSIVE_GOLD_PER_TICK,
-    PASSIVE_INCOME_ENABLED,
+    TICK_INTERVAL_SECONDS,
     PRODUCTION_RATE_PER_NODE,
     RESERVE_TRANSFER_RATIO,
     STARTING_GOLD,
@@ -74,12 +73,17 @@ class GraphState:
         self.auto_brass_on_cross: bool = False
         self.manual_brass_selection: bool = False
         self.brass_double_cost: bool = False
-        self.allow_brass_start_anywhere: bool = False
+        self.allow_pipe_start_anywhere: bool = False
         self.mode_settings: Dict[str, Any] = {}
 
         # Replay helpers
         self.tick_count: int = 0
         self.pending_edge_removals: List[Dict[str, Any]] = []
+
+        # Economy overrides
+        self.passive_income_per_second: float = 0.0
+        self.overflow_pending_gold_payout: float = OVERFLOW_PENDING_GOLD_PAYOUT
+        self.overflow_juice_to_gold_ratio: float = get_overflow_juice_to_gold_ratio(self.mode)
 
         # Geometry updates queued for the next tick payload
         self.pending_node_movements: Dict[int, Dict[str, float]] = {}
@@ -378,6 +382,13 @@ class GraphState:
             timer_remaining = max(0.0, self.game_duration - elapsed)
         
         neutral_reward = getattr(self, "neutral_capture_reward", get_neutral_capture_reward(self.mode))
+        passive_per_second = max(0.0, getattr(self, "passive_income_per_second", 0.0))
+        overflow_payout = getattr(self, "overflow_pending_gold_payout", OVERFLOW_PENDING_GOLD_PAYOUT)
+        overflow_ratio = getattr(
+            self,
+            "overflow_juice_to_gold_ratio",
+            get_overflow_juice_to_gold_ratio(self.mode),
+        )
 
         return {
             "type": "init",
@@ -391,7 +402,9 @@ class GraphState:
                 "bridgeBaseCost": BRIDGE_BASE_COST,
                 "bridgeCostPerUnit": self.bridge_cost_per_unit,
                 "neutralCaptureReward": neutral_reward,
-                "overflowPendingGoldPayout": OVERFLOW_PENDING_GOLD_PAYOUT,
+                "overflowPendingGoldPayout": overflow_payout,
+                "passiveIncomePerSecond": passive_per_second,
+                "overflowJuiceToGoldRatio": overflow_ratio,
             },
             "phase": self.phase,
             "gold": gold_arr,
@@ -539,6 +552,7 @@ class GraphState:
                 edge.flowing = False
 
     def simulate_tick(self, tick_interval_seconds: float) -> None:
+        self.tick_interval_seconds = float(max(tick_interval_seconds, 1e-9))
         # Progress bridge builds
         for e in list(self.edges.values()):
             if getattr(e, 'building', False):
@@ -593,18 +607,19 @@ class GraphState:
         node_max = getattr(self, "node_max_juice", get_node_max_juice(self.mode))
         normalized_mode = normalize_game_mode(self.mode)
         is_overflow_mode = normalized_mode in {"overflow", "nuke", "cross", "brass-old", "go", "warp", "flat", "i-warp", "i-flat"}
-        overflow_ratio = get_overflow_juice_to_gold_ratio(self.mode)
+        overflow_ratio = getattr(
+            self,
+            "overflow_juice_to_gold_ratio",
+            get_overflow_juice_to_gold_ratio(self.mode),
+        )
         if self.pending_overflow_payouts:
             self.pending_overflow_payouts.clear()
 
-        # Passive gold income for active players ($1 every 3 seconds)
-        if (
-            normalize_game_mode(self.mode) == "basic"
-            and not self.game_ended
-            and PASSIVE_INCOME_ENABLED
-            and PASSIVE_GOLD_PER_TICK > 0.0
-        ):
-            passive_income = PASSIVE_GOLD_PER_TICK
+        # Passive gold income for active players
+        passive_per_second = max(0.0, getattr(self, "passive_income_per_second", 0.0))
+        tick_interval = max(1e-9, getattr(self, "tick_interval_seconds", TICK_INTERVAL_SECONDS))
+        passive_income = passive_per_second * tick_interval
+        if passive_income > 0.0 and not self.game_ended:
             for player_id in self.players.keys():
                 if player_id in self.eliminated_players:
                     continue
@@ -727,7 +742,11 @@ class GraphState:
                     pending_gold += overflow_amount / overflow_ratio
                     updated_amount -= overflow_amount
 
-                    payout_threshold = OVERFLOW_PENDING_GOLD_PAYOUT
+                    payout_threshold = getattr(
+                        self,
+                        "overflow_pending_gold_payout",
+                        OVERFLOW_PENDING_GOLD_PAYOUT,
+                    )
                     payouts = 0
                     epsilon = 1e-6
                     while pending_gold + epsilon >= payout_threshold:
@@ -735,7 +754,7 @@ class GraphState:
                         payouts += 1
 
                     if payouts and node.owner is not None:
-                        gold_award = payouts * OVERFLOW_PENDING_GOLD_PAYOUT
+                        gold_award = payouts * payout_threshold
                         self.player_gold[node.owner] = self.player_gold.get(node.owner, 0.0) + gold_award
                         self.pending_overflow_payouts.append({
                             "nodeId": nid,
@@ -760,7 +779,11 @@ class GraphState:
                 previous_owner = node.owner
                 reward = 0.0
                 if previous_owner is None:
-                    reward = get_neutral_capture_reward(self.mode)
+                    reward = getattr(
+                        self,
+                        "neutral_capture_reward",
+                        get_neutral_capture_reward(self.mode),
+                    )
                     self.neutral_capture_reward = reward
                 elif previous_owner != new_owner:
                     reward = GOLD_REWARD_FOR_ENEMY_CAPTURE

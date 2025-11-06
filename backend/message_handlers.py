@@ -193,8 +193,13 @@ class MessageRouter:
             "brassStart": "anywhere",
             "bridgeCost": 0.9,
             "gameStart": "hidden-split",
+            "passiveIncome": 0.0,
+            "neutralCaptureGold": 10.0,
+            "ringJuiceToGoldRatio": 30.0,
+            "ringPayoutGold": 10.0,
         }
         if not isinstance(payload, dict):
+            settings["pipeStart"] = settings["brassStart"]
             return settings
 
         screen_option = str(payload.get("screen", settings["screen"])).strip().lower()
@@ -205,7 +210,8 @@ class MessageRouter:
         if brass_option in {"cross", "right-click", "rightclick", "right_click"}:
             settings["brass"] = "right-click" if brass_option.startswith("right") else "cross"
 
-        brass_start_option = str(payload.get("brassStart", settings["brassStart"])).strip().lower()
+        brass_start_option = payload.get("pipeStart", payload.get("brassStart", settings["brassStart"]))
+        brass_start_option = str(brass_start_option).strip().lower()
         if brass_start_option in {"owned", "anywhere"}:
             settings["brassStart"] = "anywhere" if brass_start_option == "anywhere" else "owned"
 
@@ -231,6 +237,49 @@ class MessageRouter:
         derived_mode = payload.get("derivedMode")
         if isinstance(derived_mode, str):
             settings["derivedMode"] = derived_mode.strip()
+
+        passive_value = payload.get("passiveIncome", settings["passiveIncome"])
+        if isinstance(passive_value, str):
+            passive_value = passive_value.strip()
+        try:
+            parsed_passive = float(passive_value)
+        except (TypeError, ValueError):
+            parsed_passive = None
+        if parsed_passive is not None and parsed_passive >= 0:
+            snapped = round(parsed_passive * 20.0) / 20.0
+            settings["passiveIncome"] = round(max(0.0, min(1.0, snapped)), 2)
+
+        neutral_value = payload.get("neutralCaptureGold", settings["neutralCaptureGold"])
+        if isinstance(neutral_value, str):
+            neutral_value = neutral_value.strip()
+        try:
+            parsed_neutral = float(neutral_value)
+        except (TypeError, ValueError):
+            parsed_neutral = None
+        if parsed_neutral is not None and parsed_neutral >= 0:
+            settings["neutralCaptureGold"] = max(0.0, min(100.0, round(parsed_neutral, 3)))
+
+        ratio_value = payload.get("ringJuiceToGoldRatio", settings["ringJuiceToGoldRatio"])
+        if isinstance(ratio_value, str):
+            ratio_value = ratio_value.strip()
+        try:
+            parsed_ratio = float(ratio_value)
+        except (TypeError, ValueError):
+            parsed_ratio = None
+        if parsed_ratio is not None and parsed_ratio > 0:
+            settings["ringJuiceToGoldRatio"] = max(5.0, min(500.0, round(parsed_ratio, 4)))
+
+        payout_value = payload.get("ringPayoutGold", settings["ringPayoutGold"])
+        if isinstance(payout_value, str):
+            payout_value = payout_value.strip()
+        try:
+            parsed_payout = float(payout_value)
+        except (TypeError, ValueError):
+            parsed_payout = None
+        if parsed_payout is not None and parsed_payout > 0:
+            settings["ringPayoutGold"] = max(1.0, min(500.0, round(parsed_payout, 4)))
+
+        settings["pipeStart"] = settings["brassStart"]
 
         return settings
 

@@ -6,14 +6,13 @@ from .constants import (
     DEFAULT_GAME_MODE,
     GOLD_REWARD_FOR_ENEMY_CAPTURE,
     NODE_MIN_JUICE,
-    PASSIVE_GOLD_PER_SECOND,
-    PASSIVE_GOLD_PER_TICK,
-    PASSIVE_INCOME_ENABLED,
+    OVERFLOW_PENDING_GOLD_PAYOUT,
     PRODUCTION_RATE_PER_NODE,
     STARTING_NODE_JUICE,
     STARTING_GOLD,
     get_neutral_capture_reward,
     get_node_max_juice,
+    get_overflow_juice_to_gold_ratio,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - import only for type checking
@@ -153,23 +152,38 @@ class GameReplayRecorder:
     def build_package(self, engine: "GameEngine", winner_id: Optional[int]) -> Dict[str, Any]:
         """Produce a serializable payload that fully describes the replay."""
         duration_ticks = 0
-        if engine.state is not None:
-            duration_ticks = int(getattr(engine.state, "tick_count", 0))
+        state = engine.state
+        if state is not None:
+            duration_ticks = int(getattr(state, "tick_count", 0))
 
-        current_mode = getattr(engine.state, "mode", DEFAULT_GAME_MODE)
+        current_mode = getattr(state, "mode", DEFAULT_GAME_MODE)
         current_reward = get_neutral_capture_reward(current_mode)
+        if state is not None:
+            current_reward = getattr(state, "neutral_capture_reward", current_reward)
+
+        passive_per_second = 0.0
+        overflow_payout = OVERFLOW_PENDING_GOLD_PAYOUT
+        overflow_ratio = get_overflow_juice_to_gold_ratio(current_mode)
+        if state is not None:
+            passive_per_second = max(0.0, getattr(state, "passive_income_per_second", 0.0))
+            overflow_payout = getattr(state, "overflow_pending_gold_payout", overflow_payout)
+            overflow_ratio = getattr(state, "overflow_juice_to_gold_ratio", overflow_ratio)
+
+        passive_per_tick = passive_per_second * max(0.0, self.tick_interval)
 
         constants_payload = {
             "NODE_MAX_JUICE": get_node_max_juice(current_mode),
             "NODE_MIN_JUICE": NODE_MIN_JUICE,
-            "PASSIVE_GOLD_PER_SECOND": PASSIVE_GOLD_PER_SECOND,
-            "PASSIVE_GOLD_PER_TICK": PASSIVE_GOLD_PER_TICK,
-            "PASSIVE_INCOME_ENABLED": PASSIVE_INCOME_ENABLED,
+            "PASSIVE_GOLD_PER_SECOND": passive_per_second,
+            "PASSIVE_GOLD_PER_TICK": passive_per_tick,
+            "PASSIVE_INCOME_ENABLED": passive_per_second > 0,
             "PRODUCTION_RATE_PER_NODE": PRODUCTION_RATE_PER_NODE,
             "STARTING_GOLD": STARTING_GOLD,
             "GOLD_REWARD_FOR_NEUTRAL_CAPTURE": current_reward,
             "STARTING_NODE_JUICE": STARTING_NODE_JUICE,
             "GOLD_REWARD_FOR_ENEMY_CAPTURE": GOLD_REWARD_FOR_ENEMY_CAPTURE,
+            "OVERFLOW_PENDING_GOLD_PAYOUT": overflow_payout,
+            "OVERFLOW_JUICE_TO_GOLD_RATIO": overflow_ratio,
         }
 
         starting_nodes_payload = [
