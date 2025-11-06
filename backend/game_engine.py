@@ -12,8 +12,17 @@ from .constants import (
     DEFAULT_GAME_MODE,
     MIN_PIPE_JOIN_ANGLE_DEGREES,
     OVERFLOW_PENDING_GOLD_PAYOUT,
-    TICK_INTERVAL_SECONDS,
+    PRODUCTION_RATE_PER_NODE,
+    MAX_TRANSFER_RATIO,
+    INTAKE_TRANSFER_RATIO,
+    RESERVE_TRANSFER_RATIO,
     STARTING_NODE_JUICE,
+    CLASSIC_PRODUCTION_RATE_PER_NODE,
+    CLASSIC_MAX_TRANSFER_RATIO,
+    CLASSIC_INTAKE_TRANSFER_RATIO,
+    CLASSIC_RESERVE_TRANSFER_RATIO,
+    CLASSIC_STARTING_NODE_JUICE,
+    TICK_INTERVAL_SECONDS,
     WARP_MARGIN_RATIO_X,
     WARP_MARGIN_RATIO_Y,
     get_bridge_cost_per_unit,
@@ -116,6 +125,13 @@ class GameEngine:
         if not self.state:
             return {}
 
+        # Reset per-game dynamics to defaults before applying mode overrides
+        self.state.production_rate_per_node = PRODUCTION_RATE_PER_NODE
+        self.state.max_transfer_ratio = MAX_TRANSFER_RATIO
+        self.state.intake_transfer_ratio = INTAKE_TRANSFER_RATIO
+        self.state.reserve_transfer_ratio = RESERVE_TRANSFER_RATIO
+        self.state.starting_node_juice = STARTING_NODE_JUICE
+
         screen_variant = "warp" if normalized_mode in {"warp-old", "warp", "i-warp"} else "flat"
         auto_brass_on_cross = normalized_mode in {"warp", "flat"}
         manual_brass_selection = normalized_mode in {"i-warp", "i-flat", "cross"}
@@ -197,6 +213,17 @@ class GameEngine:
                 parsed_payout = None
             if parsed_payout is not None and parsed_payout > 0:
                 overflow_payout = max(1.0, min(500.0, round(parsed_payout, 4)))
+
+        if normalized_mode == "basic":
+            auto_brass_on_cross = False
+            manual_brass_selection = False
+            brass_double_cost = False
+            allow_pipe_start_anywhere = False
+            self.state.production_rate_per_node = CLASSIC_PRODUCTION_RATE_PER_NODE
+            self.state.max_transfer_ratio = CLASSIC_MAX_TRANSFER_RATIO
+            self.state.intake_transfer_ratio = CLASSIC_INTAKE_TRANSFER_RATIO
+            self.state.reserve_transfer_ratio = CLASSIC_RESERVE_TRANSFER_RATIO
+            self.state.starting_node_juice = CLASSIC_STARTING_NODE_JUICE
 
         if bridge_cost_override is not None:
             clamped_cost = max(0.5, min(1.0, float(bridge_cost_override)))
@@ -484,7 +511,7 @@ class GameEngine:
                 if self.state.hidden_start_active and not self.state.hidden_start_revealed:
                     self.state.hidden_start_original_sizes[node_id] = node.juice
                 self.state.player_gold[player_id] = self.state.player_gold.get(player_id, 0.0) + reward
-                node.juice = STARTING_NODE_JUICE
+                node.juice = getattr(self.state, "starting_node_juice", STARTING_NODE_JUICE)
                 node.owner = player_id
                 self.state.players_who_picked[player_id] = True
                 if self.state.hidden_start_active:

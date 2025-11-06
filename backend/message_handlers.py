@@ -289,7 +289,7 @@ class MessageRouter:
         derived_mode = settings.get("derivedMode")
         if isinstance(derived_mode, str):
             normalized = normalize_game_mode(derived_mode)
-            if normalized in {"flat", "warp", "i-flat", "i-warp"}:
+            if normalized in {"flat", "warp", "i-flat", "i-warp", "basic"}:
                 return normalized
 
         screen_variant = str(settings.get("screen", "flat")).strip().lower()
@@ -299,6 +299,9 @@ class MessageRouter:
             return "i-warp" if brass_variant.startswith("right") else "warp"
         if screen_variant == "flat":
             return "i-flat" if brass_variant.startswith("right") else "flat"
+
+        if fallback_normalized == "basic":
+            return "basic"
 
         return fallback_normalized
 

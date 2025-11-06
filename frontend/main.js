@@ -1,4 +1,13 @@
 (() => {
+  const LEGACY_CONFIG = window.__DURB_LEGACY_CONFIG || {};
+  const IS_LEGACY_CLIENT = Boolean(LEGACY_CONFIG.isLegacy);
+  const LEGACY_DEFAULT_MODE = (typeof LEGACY_CONFIG.defaultMode === 'string' && LEGACY_CONFIG.defaultMode.trim())
+    ? LEGACY_CONFIG.defaultMode.trim().toLowerCase()
+    : (IS_LEGACY_CLIENT ? 'basic' : null);
+  const MODE_QUEUE_KEY = (typeof LEGACY_CONFIG.queueKey === 'string' && LEGACY_CONFIG.queueKey.trim())
+    ? LEGACY_CONFIG.queueKey.trim().toLowerCase()
+    : (IS_LEGACY_CLIENT ? (LEGACY_DEFAULT_MODE || 'basic') : 'brass');
+
   // Automatically detect environment - no manual changes needed!
   const isLocalhost = window.location.hostname === 'localhost' || 
                      window.location.hostname === '127.0.0.1' || 
@@ -175,22 +184,37 @@
   let currentTargetNodeId = null; // The node currently being targeted (for visual indicator)
   let currentTargetSetTime = null; // Animation time when target was last set
   
-  const MODE_QUEUE_KEY = 'brass';
-  const DEFAULT_MODE_SETTINGS = {
-    screen: 'flat',
-    brass: 'cross',
-    brassStart: 'anywhere',
-    bridgeCost: 0.9,
-    gameStart: 'hidden-split',
-    passiveIncome: 0,
-    neutralCaptureGold: 10,
-    ringJuiceToGoldRatio: 30,
-    ringPayoutGold: 10,
-  };
+  const DEFAULT_MODE_SETTINGS = IS_LEGACY_CLIENT
+    ? {
+        screen: 'flat',
+        brass: 'cross',
+        brassStart: 'anywhere',
+        bridgeCost: 0.9,
+        gameStart: 'open',
+        passiveIncome: 0,
+        neutralCaptureGold: 10,
+        ringJuiceToGoldRatio: 30,
+        ringPayoutGold: 10,
+        baseMode: LEGACY_DEFAULT_MODE || 'basic',
+        derivedMode: LEGACY_DEFAULT_MODE || 'basic',
+      }
+    : {
+        screen: 'flat',
+        brass: 'cross',
+        brassStart: 'anywhere',
+        bridgeCost: 0.9,
+        gameStart: 'hidden-split',
+        passiveIncome: 0,
+        neutralCaptureGold: 10,
+        ringJuiceToGoldRatio: 30,
+        ringPayoutGold: 10,
+      };
+
+  const INITIAL_MODE = LEGACY_DEFAULT_MODE || (IS_LEGACY_CLIENT ? 'basic' : 'flat');
 
   let selectedPlayerCount = 2;
-  let selectedMode = 'flat';
-  let gameMode = 'flat';
+  let selectedMode = INITIAL_MODE;
+  let gameMode = INITIAL_MODE;
   let selectedSettings = { ...DEFAULT_MODE_SETTINGS };
   let modeOptionsButton = null;
   let modeOptionsPanel = null;
@@ -224,6 +248,7 @@
   const RING_PAYOUT_STEP = 1;
   const MODE_LABELS = {
     sparse: 'Sparse',
+    basic: 'OG Durb',
     brass: 'Brass',
     go: 'Go',
     overflow: 'Overflow',
@@ -321,6 +346,9 @@
   }
 
   function deriveModeFromSettings(settings = selectedSettings) {
+    if (IS_LEGACY_CLIENT) {
+      return LEGACY_DEFAULT_MODE || 'basic';
+    }
     if (!settings || typeof settings !== 'object') return 'flat';
     const screen = typeof settings.screen === 'string' ? settings.screen.toLowerCase() : 'flat';
     const brass = typeof settings.brass === 'string' ? settings.brass.toLowerCase() : 'cross';
@@ -403,6 +431,12 @@
   }
 
   function applySelectedSettings(overrides = {}) {
+    if (IS_LEGACY_CLIENT) {
+      selectedSettings = { ...DEFAULT_MODE_SETTINGS };
+      selectedMode = LEGACY_DEFAULT_MODE || 'basic';
+      gameMode = selectedMode;
+      return;
+    }
     const next = { ...selectedSettings };
     if (Object.prototype.hasOwnProperty.call(overrides, 'screen')) {
       const screen = typeof overrides.screen === 'string' ? overrides.screen.toLowerCase() : '';
@@ -1957,13 +1991,19 @@
   }
 
   function normalizeMode(value) {
-    if (typeof value !== 'string') return 'sparse';
+    const fallback = IS_LEGACY_CLIENT ? (LEGACY_DEFAULT_MODE || 'basic') : 'sparse';
+    if (typeof value !== 'string') return fallback;
     let lowered = value.trim().toLowerCase();
-    // Backward compatibility: treat legacy aliases as named modes
-    if (lowered === 'passive' || lowered === 'basic') lowered = 'sparse';
-    else if (lowered === 'pop') lowered = 'warp-old';
-    else if (lowered === 'xb') lowered = 'warp';
-    return Object.prototype.hasOwnProperty.call(MODE_LABELS, lowered) ? lowered : 'sparse';
+    if (lowered === 'passive') {
+      lowered = IS_LEGACY_CLIENT ? 'basic' : 'sparse';
+    } else if (lowered === 'basic' && !IS_LEGACY_CLIENT) {
+      lowered = 'sparse';
+    } else if (lowered === 'pop') {
+      lowered = 'warp-old';
+    } else if (lowered === 'xb') {
+      lowered = 'warp';
+    }
+    return Object.prototype.hasOwnProperty.call(MODE_LABELS, lowered) ? lowered : fallback;
   }
 
   function isRingModeActive() {
@@ -2023,7 +2063,9 @@
   function updatePlayBotAvailability(baseEnabled = true) {
     if (!playBotBtnEl) return;
     const normalized = normalizeMode(selectedMode);
-    const modeAllowsBot = ['flat', 'i-flat'].includes(normalized) || isWarpLike(selectedMode);
+    const modeAllowsBot = IS_LEGACY_CLIENT
+      ? true
+      : (['flat', 'i-flat'].includes(normalized) || isWarpLike(selectedMode));
     const enabled = Boolean(baseEnabled && modeAllowsBot);
     playBotBtnEl.disabled = !enabled;
     playBotBtnEl.title = modeAllowsBot ? '' : 'Bots are unavailable in this mode';
@@ -6337,10 +6379,9 @@ function fallbackRemoveEdgesForNode(nodeId) {
     if (myEliminated || gameEnded) return;
     // Allow abilities during playing phase
     
-    const abilities = {
-      'bridge1way': { cost: 4 },
-      'destroy': { cost: 2 }
-    };
+    const abilities = IS_LEGACY_CLIENT
+      ? { 'bridge1way': { cost: 4 } }
+      : { 'bridge1way': { cost: 4 }, 'destroy': { cost: 2 } };
     
     const ability = abilities[abilityName];
     if (!ability) return;
