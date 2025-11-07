@@ -1,0 +1,880 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Durb 2</title>
+    <style>
+      html, body { margin: 0; padding: 0; background: #111; height: 100vh; min-height: 100vh; overflow: hidden; }
+      #game { width: 100%; height: 100%; overflow: hidden; }
+      #menu {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background: #111;
+        gap: clamp(24px, 6vh, 48px);
+        padding: clamp(32px, 6vh, 120px) clamp(24px, 6vw, 96px);
+        padding-top: clamp(56px, 14vh, 200px);
+        padding-bottom: clamp(24px, 5vh, 120px);
+        box-sizing: border-box;
+      }
+      #menu.hidden { display: none; }
+      #title {
+        font-size: clamp(60px, 12vw, 120px);
+        font-weight: bold;
+        color: white;
+        font-family: Arial, sans-serif;
+        text-shadow: 0 4px 16px rgba(0,0,0,0.8);
+        margin-bottom: clamp(12px, 3vh, 32px);
+        text-align: center;
+      }
+      #playBtn, #playBotBtn { font-size: 64px; padding: 24px 64px; border-radius: 12px; border: none; background: #00cc66; color: #111; cursor: pointer; box-shadow: 0 8px 24px rgba(0,0,0,0.4); margin: 4px 0; }
+      #playBotBtn { background: #ff6600; }
+      .classic-link { font-size: 20px; color: #9ad3ff; text-decoration: none; font-family: monospace; margin-top: 32px; display: inline-block; opacity: 0.9; }
+      .classic-link:hover { text-decoration: underline; }
+      #playBtn:disabled, #playBotBtn:disabled {
+        cursor: not-allowed;
+        filter: grayscale(0.8) brightness(0.7);
+        opacity: 0.55;
+        box-shadow: none;
+      }
+      #lobby {
+        display: none;
+        color: #ddd;
+        font: 20px/1.4 monospace;
+        text-align: center;
+        margin-top: clamp(20px, 4vh, 40px);
+      }
+      #playBtn:hover, #playBotBtn:hover { filter: brightness(1.1); }
+
+      .button-container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: clamp(6px, 1.5vh, 16px);
+        width: min(640px, 100%);
+      }
+      
+      
+      /* Progress bar styles */
+      #progressBar { 
+        position: absolute; 
+        top: 15px; 
+        left: 50%; 
+        transform: translateX(-50%); 
+        width: 80%; 
+        max-width: 800px; 
+        height: 30px; 
+        background: #333; 
+        border: 2px solid #666; 
+        border-radius: 15px; 
+        overflow: hidden; 
+        z-index: 10; 
+        display: none; 
+      }
+      #progressBarInner { 
+        position: relative; 
+        display: flex; 
+        align-items: stretch; 
+        height: 100%; 
+        width: 100%; 
+        overflow: hidden; 
+      }
+      .progressSegment { 
+        position: relative; 
+        display: flex; 
+        align-items: center; 
+        justify-content: center; 
+        font-family: monospace; 
+        font-size: 20px; 
+        font-weight: bold; 
+        color: #000000; 
+        transition: flex 0.3s ease, width 0.3s ease; 
+        min-width: 40px; 
+        padding: 0 6px; 
+      }
+      .segmentLabel { 
+        pointer-events: none; 
+        text-shadow: 0 1px 2px rgba(255,255,255,0.7); 
+      }
+      .progressMarker { 
+        position: absolute; 
+        top: -2px; 
+        width: 4px; 
+        height: 34px; 
+        background: #ffffff; 
+        border: 1px solid #000; 
+        border-radius: 2px; 
+        z-index: 11; 
+        display: none; 
+      }
+      #progressBarNames {
+        position: absolute;
+        top: 38px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 80%;
+        max-width: 800px;
+        display: none;
+        align-items: stretch;
+        justify-content: stretch;
+        pointer-events: none;
+        font-family: "Fira Code", "Source Code Pro", monospace;
+        color: #f5f5f5;
+      }
+      .progressNameCell {
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+        padding-top: 2px;
+        font-size: 16px;
+        min-width: 60px;
+        box-sizing: border-box;
+        white-space: nowrap;
+      }
+
+      /* Top UI background bar */
+      .top-ui-bar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 60px;
+        background: #000000;
+        z-index: 9;
+        display: none;
+      }
+
+      /* Bottom UI background bar */
+      .bottom-ui-bar {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 50px;
+        background: #000000;
+        z-index: 9;
+        display: none;
+      }
+
+      /* Timer display */
+      #timerDisplay { 
+        position: absolute; 
+        bottom: 13px; 
+        right: 8px; 
+        color: #ffffff; 
+        font-family: monospace; 
+        font-size: 24px; 
+        font-weight: bold; 
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.8); 
+        z-index: 10; 
+        display: none; 
+      }
+      
+      /* In-game toggles 2x2 grid top-left */
+      .toggle-grid {
+        position: fixed;
+        top: clamp(45px, 2vh, 34px); /* aligned with settings button vertically */
+        left: 16px; /* positioned to right of settings and sound */
+        display: grid;
+        grid-template-columns: repeat(2, minmax(180px, 1fr));
+        grid-auto-rows: minmax(32px, auto);
+        gap: 12px 16px;
+        width: min(500px, calc(100vw - clamp(88px, 16vw, 220px)));
+        z-index: 10;
+      }
+      /* Children default to block; visibility handled by JS via container */
+
+      /* Settings button */
+      #settingsButton {
+        position: fixed; /* anchor to viewport */
+        top: clamp(8px, 4vh, 20px); /* tight to top edge */
+        left: clamp(6px, 2vw, 8px);  /* tight to left edge */
+        z-index: 11;
+        width: 100px;  /* smaller, more compact */
+        height: 100px;
+        display: inline-flex; /* allow aligning icon inside the box */
+        align-items: flex-start; /* push icon to top of the box */
+        justify-content: flex-start; /* push icon to left of the box */
+        padding: 0; /* remove default padding */
+        margin: 0;  /* remove default margin */
+        -webkit-appearance: none;
+        appearance: none;
+        border: none; /* remove bubble */
+        background: transparent; /* remove bubble */
+        color: #aaaaaa; /* grey gear */
+        font-family: system-ui, sans-serif;
+        font-size: 60px; /* smaller gear */
+        cursor: pointer;
+        line-height: 0; /* minimize baseline gap */
+        text-shadow: 0 2px 6px rgba(0,0,0,0.6);
+        transition: transform 0.08s ease, filter 0.15s ease;
+        transform-origin: top left; /* keep corner anchored during click animation */
+      }
+      #settingsButton:hover { filter: brightness(1.2); }
+      #settingsButton:active {
+        transform: scale(0.85) rotate(-12deg);
+        filter: brightness(1.35);
+      }
+      #settingsButton:focus-visible {
+        outline: 2px solid #ffffff88;
+        outline-offset: 2px;
+      }
+      
+      /* Sound button (right of settings gear) */
+      #soundButton {
+        position: fixed;
+        top: clamp(0px, 1vh, 0px); /* align with settings vertically */
+        left: 50px; /* positioned right next to settings */
+        z-index: 12;
+        width: 48px;
+        height: 48px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        margin: 0;
+        -webkit-appearance: none;
+        appearance: none;
+        border: none;
+        background: transparent;
+        color: #aaaaaa;
+        font-family: system-ui, sans-serif;
+        font-size: 32px;
+        cursor: pointer;
+        line-height: 0;
+        text-shadow: 0 2px 6px rgba(0,0,0,0.6);
+        transition: transform 0.08s ease, filter 0.15s ease;
+        transform-origin: top left;
+      }
+      #soundButton:hover { filter: brightness(1.2); }
+      #soundButton:active {
+        transform: scale(0.9) rotate(-6deg);
+        filter: brightness(1.35);
+      }
+      #soundButton:focus-visible {
+        outline: 2px solid #ffffff88;
+        outline-offset: 2px;
+      }
+
+      .replay-restart-button {
+        width: 64px;
+        height: 64px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0;
+        padding: 0;
+        border: none;
+        background: transparent;
+        color: #aaaaaa;
+        font-family: system-ui, sans-serif;
+        font-size: 42px;
+        line-height: 0;
+        cursor: pointer;
+        text-shadow: 0 2px 6px rgba(0,0,0,0.6);
+        transition: filter 0.15s ease;
+        transform-origin: center;
+        -webkit-appearance: none;
+        appearance: none;
+        user-select: none;
+        touch-action: manipulation;
+      }
+      .replay-restart-button:hover {
+        filter: brightness(1.2);
+      }
+      .replay-restart-button:active {
+        filter: brightness(1.35);
+      }
+      .replay-restart-button:disabled {
+        opacity: 0.45;
+        cursor: default;
+        filter: none;
+        pointer-events: none;
+      }
+      .replay-restart-button--spin {
+        animation: replayRestartSpin 0.35s ease;
+      }
+      @keyframes replayRestartSpin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+
+      
+      .toggle-container {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      
+      /* Move left column items slightly left */
+      #autoExpandToggle,
+      #autoAttackToggle {
+        margin-left: -8px;
+      }
+      
+      /* Move right column items substantially left */
+      #numbersToggle,
+      #edgeFlowToggle {
+        margin-left: -40px;
+      }
+      
+      .toggle-label {
+        color: #ffffff; /* default for menu */
+        font-family: monospace;
+        font-size: 18px;
+        font-weight: bold;
+        user-select: none;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.7);
+      }
+
+      /* In-game: when #menu is hidden, make labels black for better contrast over the board */
+      #menu.hidden ~ #togglesPanel .toggle-label {
+        color: #000000;
+        text-shadow: none;
+      }
+      
+      .toggle-switch {
+        position: relative;
+        width: 60px;
+        height: 32px;
+        background: #666;
+        border-radius: 16px;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        border: 2px solid #888;
+      }
+      
+      .toggle-switch.enabled {
+        background: #00cc66;
+        border-color: #00aa55;
+      }
+      
+      .toggle-slider {
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 24px;
+        height: 24px;
+        background: #ffffff;
+        border-radius: 50%;
+        transition: all 0.3s ease;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+      }
+      
+      .toggle-switch.enabled .toggle-slider {
+        transform: translateX(28px);
+      }
+      
+      
+      /* Home screen toggle styling - match in-game positioning and font size */
+      .home-toggle-container {
+        position: absolute;
+        bottom: 20px;
+        left: 20px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        z-index: 10;
+      }
+      
+      .home-toggle-container .toggle-label {
+        color: #ffffff;
+        font-family: monospace;
+        font-size: 18px;
+        font-weight: bold;
+        user-select: none;
+      }
+      
+      .home-toggle-container .toggle-switch {
+        position: relative;
+        width: 60px;
+        height: 32px;
+        background: #666;
+        border-radius: 16px;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        border: 2px solid #888;
+      }
+      
+      .home-toggle-container .toggle-switch.enabled {
+        background: #00cc66;
+        border-color: #00aa55;
+      }
+      
+      .home-toggle-container .toggle-slider {
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 24px;
+        height: 24px;
+        background: #ffffff;
+        border-radius: 50%;
+        transition: all 0.3s ease;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+      }
+      
+      .home-toggle-container .toggle-switch.enabled .toggle-slider {
+        transform: translateX(28px);
+      }
+
+      .player-count-selector {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: clamp(10px, 2vh, 16px);
+        width: min(480px, 100%);
+        text-align: center;
+      }
+
+      .player-count-selector .selector-label {
+        margin: 0;
+      }
+
+      .mode-selector {
+        position: absolute;
+        top: clamp(8px, 4vh, 20px);
+        right: clamp(6px, 2vw, 8px);
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: clamp(8px, 1.6vh, 16px);
+        max-width: clamp(260px, 28vw, 340px);
+        text-align: right;
+        z-index: 30;
+      }
+
+      .selector-label {
+        color: #ffffff;
+        font-family: monospace;
+        font-size: 18px;
+        letter-spacing: 1px;
+      }
+
+      .mode-label-row {
+        display: flex;
+        align-items: center;
+        justify-content: flex-start;
+        gap: 6px;
+      }
+
+      .mode-info {
+        font-family: monospace;
+        font-size: 18px;
+        color: #f5f5f5;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        line-height: 1;
+        transition: color 0.2s ease, transform 0.1s ease;
+      }
+
+      .mode-info:hover {
+        transform: translateY(-1px);
+        color: #ffffff;
+      }
+
+      .mode-info:focus-visible {
+        outline: 2px solid #ffffff;
+        outline-offset: 2px;
+      }
+
+      .player-count-options {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        justify-content: center;
+      }
+
+      .player-count-option,
+      .mode-option-button,
+      .mode-options-toggle {
+        font-size: 28px;
+        padding: 10px 18px;
+        border-radius: 8px;
+        border: 2px solid #777;
+        background: #222;
+        color: #eee;
+        cursor: pointer;
+        transition: transform 0.15s ease, border-color 0.15s ease;
+      }
+
+      .mode-option-button {
+        flex: 0 0 auto;
+        min-width: 120px;
+        font-size: clamp(22px, 3vw, 26px);
+        padding: clamp(8px, 1.2vw, 10px) clamp(12px, 2.4vw, 18px);
+        white-space: nowrap;
+      }
+
+      .mode-option-button.disabled,
+      .mode-option-button:disabled {
+        cursor: not-allowed;
+        opacity: 0.4;
+        border-color: #555;
+        color: #888;
+        transform: none;
+      }
+
+      .player-count-option.active,
+      .mode-option-button.active {
+        border-color: #ffff00;
+        transform: translateY(-4px);
+        color: #ffff00;
+      }
+
+      .player-count-option:hover,
+      .mode-option-button:not(.disabled):not(:disabled):hover,
+      .mode-options-toggle:hover {
+        border-color: #aaaaaa;
+      }
+
+      .mode-options-panel {
+        position: absolute;
+        top: calc(100% + 12px);
+        right: 0;
+        left: auto;
+        transform: none;
+        display: none;
+        flex-direction: column;
+        align-items: stretch;
+        min-width: clamp(260px, 30vw, 360px);
+        padding: 16px;
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.15);
+        background: rgba(20, 20, 30, 0.95);
+        box-shadow: 0 10px 24px rgba(0,0,0,0.45);
+        z-index: 31;
+        gap: 12px;
+      }
+
+      @media (max-width: 720px) {
+        .mode-selector {
+          position: static;
+          align-items: center;
+          max-width: 100%;
+          text-align: center;
+          margin-top: 12px;
+        }
+
+        .mode-options-panel {
+          left: 50%;
+          right: auto;
+          transform: translateX(-50%);
+        }
+      }
+
+      .mode-option-group {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        width: 100%;
+        flex-wrap: wrap;
+      }
+
+      .mode-option-group .selector-label {
+        flex: 0 0 auto;
+      }
+
+      .mode-option-buttons {
+        display: flex;
+        flex: 1 1 auto;
+        flex-wrap: wrap;
+        gap: 10px;
+        justify-content: flex-start;
+      }
+
+      .bridge-cost-group {
+        width: 100%;
+      }
+
+      .mode-slider {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        width: 100%;
+      }
+
+      .mode-slider input[type="range"] {
+        flex: 1;
+        accent-color: #ffff00;
+      }
+
+      .mode-slider span {
+        font-family: monospace;
+        min-width: 48px;
+        text-align: right;
+        font-size: clamp(20px, 2.6vw, 26px);
+        color: #ffffff;
+        font-weight: 600;
+      }
+
+
+      #playBtn, #playBotBtn {
+        width: 100%;
+        max-width: 640px;
+      }
+
+      .replay-uploader {
+        position: fixed;
+        top: auto;
+        bottom: clamp(24px, 7vh, 96px);
+        left: 50%;
+        transform: translateX(-50%);
+        width: clamp(220px, 48vw, 320px);
+        display: none;
+        flex-direction: column;
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.12);
+        background: rgba(18,18,18,0.85);
+        box-shadow: 0 14px 38px rgba(0,0,0,0.35);
+        backdrop-filter: blur(6px);
+        overflow-x: hidden;
+        overflow-y: auto;
+        z-index: 40;
+        pointer-events: auto;
+        max-height: calc(40vh);
+      }
+
+      .replay-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 14px;
+        cursor: pointer;
+        font-family: monospace;
+        font-size: 15px;
+        color: #f4f4f4;
+        user-select: none;
+        background: rgba(255,255,255,0.06);
+      }
+
+      .replay-header:hover {
+        background: rgba(255,255,255,0.12);
+      }
+
+      .replay-body {
+        display: none;
+        flex-direction: column;
+        gap: 10px;
+        padding: 12px 14px 16px;
+      }
+
+      .replay-file-button {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 12px 18px;
+        border-radius: 10px;
+        border: 2px dashed rgba(255,255,255,0.25);
+        background: rgba(40,40,40,0.85);
+        color: #f0f0f0;
+        cursor: pointer;
+        transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
+        font-family: monospace;
+        font-size: 16px;
+        text-align: center;
+      }
+
+      .replay-file-button:hover {
+        border-color: rgba(255,255,255,0.45);
+        background: rgba(54,54,54,0.9);
+        color: #ffffff;
+      }
+
+      .replay-file-button input {
+        display: none;
+      }
+
+      #replayWatchBtn {
+        font-size: 22px;
+        padding: 10px 16px;
+        border-radius: 10px;
+        border: none;
+        background: linear-gradient(135deg, #5a8bff, #9d73ff);
+        color: #101018;
+        cursor: pointer;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.35);
+        transition: transform 0.14s ease, filter 0.14s ease;
+      }
+
+      #replayWatchBtn:disabled {
+        cursor: default;
+        filter: grayscale(0.5);
+        opacity: 0.55;
+        box-shadow: none;
+      }
+
+      #replayWatchBtn:not(:disabled):hover {
+        transform: translateY(-2px);
+        filter: brightness(1.08);
+      }
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.0/dist/phaser.js"></script>
+  </head>
+  <body>
+    <div id="game"></div>
+    <div id="menu">
+      <div id="title">DURB 2</div>
+      <div class="button-container">
+        <div class="player-count-selector">
+          <span class="selector-label">Players</span>
+          <div class="player-count-options">
+            <button class="player-count-option active" data-count="2">2</button>
+            <button class="player-count-option" data-count="3">3</button>
+            <button class="player-count-option" data-count="4">4</button>
+          </div>
+        </div>
+        <button id="playBtn">PLAY FRIENDS</button>
+        <button id="playBotBtn">PLAY BOT</button>
+        <a class="classic-link" href="/old" target="_blank" rel="noopener">Play OG Durb</a>
+        <div class="replay-uploader" id="replayPanel">
+          <div class="replay-header" id="replayHeader">
+            <span>Replay Upload</span>
+            <span id="replayToggleIcon">▼</span>
+          </div>
+          <div class="replay-body" id="replayBody">
+            <label class="replay-file-button">
+              <input type="file" id="replayFileInput" accept="application/json" />
+              <span id="replayFileLabel">Choose replay file…</span>
+            </label>
+            <button id="replayWatchBtn" disabled>WATCH REPLAY</button>
+          </div>
+        </div>
+
+      </div>
+      <div class="mode-selector">
+        <button id="modeOptionsButton" class="mode-options-toggle" aria-expanded="false">Options ▾</button>
+        <div id="modeOptionsPanel" class="mode-options-panel" role="dialog" aria-hidden="true">
+          <div class="mode-option-group" data-setting-group="screen">
+            <span class="selector-label">Screen</span>
+            <div class="mode-option-buttons">
+              <button class="mode-option-button active" data-setting="screen" data-value="flat">Flat</button>
+              <button class="mode-option-button" data-setting="screen" data-value="warp">Warp</button>
+            </div>
+          </div>
+          <div class="mode-option-group" data-setting-group="brass">
+            <span class="selector-label">Brass</span>
+            <div class="mode-option-buttons">
+              <button class="mode-option-button active" data-setting="brass" data-value="cross">Cross</button>
+              <button class="mode-option-button" data-setting="brass" data-value="right-click">Right-Click</button>
+            </div>
+          </div>
+          <div class="mode-option-group" data-setting-group="brassStart">
+            <span class="selector-label">Pipe Start</span>
+            <div class="mode-option-buttons">
+              <button class="mode-option-button" data-setting="brassStart" data-value="owned">Owned</button>
+              <button class="mode-option-button active" data-setting="brassStart" data-value="anywhere">Anywhere</button>
+            </div>
+          </div>
+          <div class="mode-option-group" data-setting-group="gameStart">
+            <span class="selector-label">Game Start</span>
+            <div class="mode-option-buttons">
+              <button class="mode-option-button" data-setting="gameStart" data-value="open">Open</button>
+              <button class="mode-option-button active" data-setting="gameStart" data-value="hidden-split">Hidden Split</button>
+            </div>
+          </div>
+          <div class="mode-option-group bridge-cost-group" data-setting-group="bridgeCost">
+            <span class="selector-label">Bridge Cost</span>
+            <div class="mode-slider">
+              <input type="range" id="bridgeCostSlider" min="0.5" max="1" step="0.1" value="0.9" aria-label="Bridge cost multiplier" />
+              <span id="bridgeCostValue">0.9</span>
+            </div>
+          </div>
+          <div class="mode-option-group" data-setting-group="passiveIncome">
+            <span class="selector-label">Passive Income</span>
+            <div class="mode-slider">
+              <input type="range" id="passiveIncomeSlider" min="0" max="1" step="0.05" value="0" aria-label="Passive income per second" />
+              <span id="passiveIncomeValue">0.00/s</span>
+            </div>
+          </div>
+          <div class="mode-option-group" data-setting-group="neutralReward">
+            <span class="selector-label">Neutral Capture</span>
+            <div class="mode-slider">
+              <input type="range" id="neutralCaptureSlider" min="0" max="10" step="1" value="10" aria-label="Neutral capture gold" />
+              <span id="neutralCaptureValue">10</span>
+            </div>
+          </div>
+          <div class="mode-option-group" data-setting-group="ringJuiceRatio">
+            <span class="selector-label">Ring Ratio</span>
+            <div class="mode-slider">
+              <input type="range" id="ringRatioSlider" min="5" max="30" step="1" value="30" aria-label="Juice to gold ratio" />
+              <span id="ringRatioValue">30</span>
+            </div>
+          </div>
+          <div class="mode-option-group" data-setting-group="ringPayout">
+            <span class="selector-label">Ring Payout</span>
+            <div class="mode-slider">
+              <input type="range" id="ringPayoutSlider" min="1" max="20" step="1" value="10" aria-label="Gold needed to pop ring" />
+              <span id="ringPayoutValue">10</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="lobby">Joining lobby...</div>
+    </div>
+    
+    <!-- UI Background Bars -->
+    <div class="top-ui-bar" id="topUiBar"></div>
+    <div class="bottom-ui-bar" id="bottomUiBar"></div>
+    
+    <!-- Progress bar for node count victory -->
+    <div id="progressBar">
+      <div id="progressBarInner"></div>
+      <div class="progressMarker" id="progressMarkerLeft"></div>
+      <div class="progressMarker" id="progressMarkerRight"></div>
+    </div>
+    <div id="progressBarNames"></div>
+    
+    <!-- Timer display -->
+    <div id="timerDisplay">7:00</div>
+    
+    <!-- Settings button and unified toggles panel (works in menu and in-game) -->
+    <button id="soundButton" aria-label="Sound" title="Sound">🔊</button>
+    <button id="settingsButton" aria-label="Settings" title="Settings">⚙</button>
+    <div class="toggle-grid" id="togglesPanel" style="display: none;">
+      <div id="autoExpandToggle">
+        <div class="toggle-container">
+          <span class="toggle-label">Auto-expand</span>
+          <div class="toggle-switch">
+            <div class="toggle-slider"></div>
+          </div>
+        </div>
+      </div>
+      <div id="numbersToggle">
+        <div class="toggle-container">
+          <span class="toggle-label">Node Numbers</span>
+          <div class="toggle-switch">
+            <div class="toggle-slider"></div>
+          </div>
+        </div>
+      </div>
+      <div id="autoAttackToggle">
+        <div class="toggle-container">
+          <span class="toggle-label">Auto-attack</span>
+          <div class="toggle-switch">
+            <div class="toggle-slider"></div>
+          </div>
+        </div>
+      </div>
+      <div id="edgeFlowToggle">
+        <div class="toggle-container">
+          <span class="toggle-label">Flow Numbers</span>
+          <div class="toggle-switch">
+            <div class="toggle-slider"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    
+    <script src="main.js"></script>
+  </body>
+  </html>
