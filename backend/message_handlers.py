@@ -289,7 +289,7 @@ class MessageRouter:
         derived_mode = settings.get("derivedMode")
         if isinstance(derived_mode, str):
             normalized = normalize_game_mode(derived_mode)
-            if normalized in {"flat", "warp", "i-flat", "i-warp", "basic"}:
+            if normalized in {"flat", "warp", "i-flat", "i-warp", "basic", "sandbox"}:
                 return normalized
 
         screen_variant = str(settings.get("screen", "flat")).strip().lower()
@@ -1037,6 +1037,11 @@ class MessageRouter:
         mode_settings = self._sanitize_mode_settings(msg.get("settings"))
         mode = self._derive_mode_from_settings(mode_settings, raw_mode)
         mode_settings["derivedMode"] = mode
+        if mode == "sandbox":
+            mode_settings["sandbox"] = True
+            mode_settings["brassStart"] = "anywhere"
+            mode_settings["bridgeCost"] = 0.0
+            mode_settings["gameStart"] = "open"
 
         success, error_msg = bot_game_manager.start_bot_game(
             token,

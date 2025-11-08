@@ -71,6 +71,10 @@ class GraphGenerator:
                 "edge_func": gen_graph.generate_sparse_edges,
                 "desired_edges": None,
             },
+            "sandbox": {
+                "edge_func": gen_graph.generate_planar_edges,
+                "desired_edges": gen_graph.DESIRED_EDGE_COUNT,
+            },
         }
 
     def _resolve_mode(self, mode: str = None) -> str:

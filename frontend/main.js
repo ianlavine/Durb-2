@@ -1,6 +1,7 @@
 (() => {
   const LEGACY_CONFIG = window.__DURB_LEGACY_CONFIG || {};
   const IS_LEGACY_CLIENT = Boolean(LEGACY_CONFIG.isLegacy);
+  const IS_SANDBOX_CLIENT = Boolean(LEGACY_CONFIG.isSandbox);
   const LEGACY_DEFAULT_MODE = (typeof LEGACY_CONFIG.defaultMode === 'string' && LEGACY_CONFIG.defaultMode.trim())
     ? LEGACY_CONFIG.defaultMode.trim().toLowerCase()
     : (IS_LEGACY_CLIENT ? 'basic' : null);
@@ -260,6 +261,7 @@
     'i-flat': 'I-Flat',
     'brass-old': 'Brass-Old',
     flat: 'Flat',
+    sandbox: 'Sandbox',
   };
   const DEFAULT_OVERFLOW_PENDING_GOLD_THRESHOLD = DEFAULT_MODE_SETTINGS.ringPayoutGold;
   let OVERFLOW_PENDING_GOLD_THRESHOLD = DEFAULT_OVERFLOW_PENDING_GOLD_THRESHOLD;
@@ -568,6 +570,9 @@
   }
 
   function pipeStartRequiresOwnership() {
+    if (sandboxModeEnabled()) {
+      return false;
+    }
     return (selectedSettings.brassStart || DEFAULT_MODE_SETTINGS.brassStart) !== 'anywhere';
   }
 
@@ -2015,6 +2020,14 @@
     return normalizeMode(gameMode) === 'nuke';
   }
 
+  function isSandboxModeActive() {
+    return normalizeMode(gameMode) === 'sandbox';
+  }
+
+  function sandboxModeEnabled() {
+    return IS_SANDBOX_CLIENT || isSandboxModeActive();
+  }
+
   function isBrassModeActive() {
     return normalizeMode(gameMode) === 'brass-old';
   }
@@ -2553,9 +2566,18 @@ function clearBridgeSelection() {
           return;
         }
         if (ws && ws.readyState === WebSocket.OPEN) {
-          console.log(`Starting hard bot game with ${formatModeSettingsSummary()} options`);
+          const launchingSandbox = MODE_QUEUE_KEY === 'sandbox';
+          const modeSummary = formatModeSettingsSummary();
+          if (launchingSandbox) {
+            console.log('Launching sandbox session');
+          } else {
+            console.log(`Starting hard bot game with ${modeSummary} options`);
+          }
           showLobby();
-          setLobbyStatus(`Starting hard bot game (${formatModeSettingsSummary()} rules)...`);
+          const statusText = launchingSandbox
+            ? 'Loading sandbox...'
+            : `Starting hard bot game (${modeSummary} rules)...`;
+          setLobbyStatus(statusText);
           // Hide buttons when starting bot game
           if (buttonContainer) {
             buttonContainer.style.display = 'none';
@@ -2563,7 +2585,7 @@ function clearBridgeSelection() {
           setModeSelectorVisibility(false);
           ws.send(JSON.stringify({
             type: 'startBotGame',
-            difficulty: 'hard',
+            difficulty: launchingSandbox ? 'sandbox' : 'hard',
             autoExpand: persistentAutoExpand,
             mode: MODE_QUEUE_KEY,
             settings: buildModeSettingsPayload(),
@@ -3510,6 +3532,10 @@ function clearBridgeSelection() {
         if (Number(pid) === myPlayerId) myPicked = !!picked;
       });
     }
+    if (sandboxModeEnabled()) {
+      myPicked = true;
+      phase = 'playing';
+    }
 
     if (phase === 'playing') {
       if (typeof msg.timerRemaining === 'number') {
@@ -3999,6 +4025,10 @@ function clearBridgeSelection() {
         if (Number(pid) === myPlayerId) myPicked = !!picked;
       });
     }
+    if (sandboxModeEnabled()) {
+      myPicked = true;
+      phase = 'playing';
+    }
 
     if (Array.isArray(msg.gold)) {
       msg.gold.forEach(([pid, value]) => {
@@ -4084,6 +4114,10 @@ function clearBridgeSelection() {
   }
 
   function handleNewEdge(msg) {
+    const builtByMe = Object.prototype.hasOwnProperty.call(msg, 'cost');
+    const reportedCost = builtByMe
+      ? (typeof msg.cost === 'number' ? msg.cost : Number(msg.cost || 0))
+      : 0;
     // Add new edge to the frontend map
     applyNodeMovements(msg.nodeMovements);
     if (Array.isArray(msg.removedEdges) && msg.removedEdges.length > 0) {
@@ -4109,7 +4143,7 @@ function clearBridgeSelection() {
         buildStartTime: animationTime,
         hammerAccumSec: 0,
         hammerHitIndex: 0,
-        builtByMe: !!msg.cost,
+        builtByMe,
         warpAxis: 'none',
         warpSegments: [],
         pipeType: edge.pipeType === 'gold' ? 'gold' : 'normal',
@@ -4118,7 +4152,8 @@ function clearBridgeSelection() {
       edges.set(edgeId, record);
       
       // Show cost indicator for bridge building
-      if (activeAbility === 'bridge1way' && msg.cost) {
+      const shouldShowCost = builtByMe && Math.abs(reportedCost) > 1e-6;
+      if (activeAbility === 'bridge1way' && shouldShowCost) {
         // Position the indicator at the midpoint of the new bridge
         const sourceNode = nodes.get(edge.source);
         const targetNode = nodes.get(edge.target);
@@ -4129,9 +4164,9 @@ function clearBridgeSelection() {
           const [screenX, screenY] = worldToScreen(midX, midY);
           
           createMoneyIndicator(
-            midX, 
-            midY, 
-            `-$${msg.cost}`, 
+            midX,
+            midY,
+            `-$${reportedCost}`,
             MONEY_SPEND_COLOR,
             2000 // 2 seconds
           );
@@ -4145,7 +4180,7 @@ function clearBridgeSelection() {
     
     // Reset bridge building state only when this edge was created by me
     // Backend includes `cost` on the message only for the acting player
-    if (activeAbility === 'bridge1way' && msg.cost) {
+    if (activeAbility === 'bridge1way' && builtByMe) {
       activeAbility = null;
       clearBridgeSelection();
       hideBridgeCostDisplay();
@@ -4857,6 +4892,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     drawPlayAreaBorder();
     drawHiddenStartOverlay();
     const overflowMode = ['overflow', 'nuke', 'cross', 'brass-old', 'go', 'warp', 'i-warp', 'flat', 'i-flat'].includes(normalizeMode(gameMode));
+    const sandboxHoverEnabled = sandboxModeEnabled();
     
     // Show gold display when graph is being drawn and we have nodes/game data
     if (goldDisplay && nodes.size > 0) {
@@ -5014,7 +5050,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
       // Hover effect: show if node can be targeted for flow
       // Only show this when no ability is active to avoid conflicting with ability-specific highlights
       if (hoveredNodeId === id && myPicked && !activeAbility) {
-        if (canTargetNodeForFlow(id)) {
+        if (sandboxHoverEnabled || canTargetNodeForFlow(id)) {
           const myColor = ownerToColor(myPlayerId);
           graphicsNodes.lineStyle(3, myColor, 0.8);
           graphicsNodes.strokeCircle(nx, ny, r + 3);
@@ -6179,7 +6215,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     }
 
     // Handle clicks - check for starting node pick first
-    if (!myPicked && nodeId != null && ws && ws.readyState === WebSocket.OPEN) {
+    if (!myPicked && !sandboxModeEnabled() && nodeId != null && ws && ws.readyState === WebSocket.OPEN) {
       if (hiddenStartActive && !hiddenStartRevealed && phase === 'picking') {
         const candidateNode = nodes.get(nodeId);
         if (candidateNode && !isNodeWithinStartZone(candidateNode)) {
@@ -6193,7 +6229,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     }
 
     if (
-      isCrossLikeModeActive() &&
+      (isCrossLikeModeActive() || sandboxModeEnabled()) &&
       nodeId != null &&
       activeAbility !== 'reverse'
     ) {
@@ -6413,7 +6449,11 @@ function fallbackRemoveEdgesForNode(nodeId) {
   function updateGoldBar() {
     const val = Math.max(0, goldValue || 0);
     if (goldDisplay) {
-      goldDisplay.textContent = `$${formatCost(val)}`;
+      if (sandboxModeEnabled()) {
+        goldDisplay.textContent = '$∞';
+      } else {
+        goldDisplay.textContent = `$${formatCost(val)}`;
+      }
     }
   }
 
