@@ -4114,6 +4114,10 @@ function clearBridgeSelection() {
   }
 
   function handleNewEdge(msg) {
+    const builtByMe = Object.prototype.hasOwnProperty.call(msg, 'cost');
+    const reportedCost = builtByMe
+      ? (typeof msg.cost === 'number' ? msg.cost : Number(msg.cost || 0))
+      : 0;
     // Add new edge to the frontend map
     applyNodeMovements(msg.nodeMovements);
     if (Array.isArray(msg.removedEdges) && msg.removedEdges.length > 0) {
@@ -4139,7 +4143,7 @@ function clearBridgeSelection() {
         buildStartTime: animationTime,
         hammerAccumSec: 0,
         hammerHitIndex: 0,
-        builtByMe: !!msg.cost,
+        builtByMe,
         warpAxis: 'none',
         warpSegments: [],
         pipeType: edge.pipeType === 'gold' ? 'gold' : 'normal',
@@ -4148,7 +4152,8 @@ function clearBridgeSelection() {
       edges.set(edgeId, record);
       
       // Show cost indicator for bridge building
-      if (activeAbility === 'bridge1way' && msg.cost) {
+      const shouldShowCost = builtByMe && Math.abs(reportedCost) > 1e-6;
+      if (activeAbility === 'bridge1way' && shouldShowCost) {
         // Position the indicator at the midpoint of the new bridge
         const sourceNode = nodes.get(edge.source);
         const targetNode = nodes.get(edge.target);
@@ -4159,9 +4164,9 @@ function clearBridgeSelection() {
           const [screenX, screenY] = worldToScreen(midX, midY);
           
           createMoneyIndicator(
-            midX, 
-            midY, 
-            `-$${msg.cost}`, 
+            midX,
+            midY,
+            `-$${reportedCost}`,
             MONEY_SPEND_COLOR,
             2000 // 2 seconds
           );
@@ -4175,7 +4180,7 @@ function clearBridgeSelection() {
     
     // Reset bridge building state only when this edge was created by me
     // Backend includes `cost` on the message only for the acting player
-    if (activeAbility === 'bridge1way' && msg.cost) {
+    if (activeAbility === 'bridge1way' && builtByMe) {
       activeAbility = null;
       clearBridgeSelection();
       hideBridgeCostDisplay();

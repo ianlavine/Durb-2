@@ -36,6 +36,7 @@ from .models import Edge, Node, Player
 from .state import GraphState, build_state_from_dict
 
 SANDBOX_INITIAL_GOLD = 1_000_000_000.0
+SANDBOX_NODE_JUICE = 50.0
 
 
 class GameValidationError(Exception):
@@ -357,7 +358,6 @@ class GameEngine:
         self.state.intake_transfer_ratio = 0.0
         self.state.reserve_transfer_ratio = 0.0
         self.state.starting_node_juice = 0.0
-        self.state.node_max_juice = 0.0
         self.state.neutral_capture_reward = 0.0
         self.state.bridge_cost_per_unit = 0.0
         self.state.passive_income_per_second = 0.0
@@ -373,8 +373,8 @@ class GameEngine:
             self.state.players_who_picked[player_id] = True
 
         for node in self.state.nodes.values():
-            node.owner = primary_player_id
-            node.juice = 0.0
+            node.owner = None
+            node.juice = SANDBOX_NODE_JUICE
             node.pending_gold = 0.0
 
         self.state.phase = "playing"
