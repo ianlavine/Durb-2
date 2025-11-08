@@ -35,6 +35,8 @@ from .graph_generator import graph_generator
 from .models import Edge, Node, Player
 from .state import GraphState, build_state_from_dict
 
+SANDBOX_INITIAL_GOLD = 1_000_000_000.0
+
 
 class GameValidationError(Exception):
     """Raised when a game action fails validation."""
@@ -116,6 +118,9 @@ class GameEngine:
         # Ensure mode settings reflect actual start mode after validation
         if self.state.mode_settings is not None:
             self.state.mode_settings["gameStart"] = self.state.game_start_mode
+
+        if normalized_mode == "sandbox":
+            self._apply_sandbox_rules(player_slots)
 
     def _configure_gameplay_options(
         self,
@@ -336,6 +341,56 @@ class GameEngine:
         if right_player is not None:
             self.state.hidden_start_sides[right_player] = "right"
 
+    def _apply_sandbox_rules(self, player_slots: List[Dict[str, Any]]) -> None:
+        """Override state so a solo player can freely build bridges."""
+        if not self.state or not player_slots:
+            return
+
+        primary_player_id = player_slots[0].get("player_id")
+        if primary_player_id is None:
+            return
+
+        self.state.sandbox_mode = True
+        self.state.allow_pipe_start_anywhere = True
+        self.state.production_rate_per_node = 0.0
+        self.state.max_transfer_ratio = 0.0
+        self.state.intake_transfer_ratio = 0.0
+        self.state.reserve_transfer_ratio = 0.0
+        self.state.starting_node_juice = 0.0
+        self.state.node_max_juice = 0.0
+        self.state.neutral_capture_reward = 0.0
+        self.state.bridge_cost_per_unit = 0.0
+        self.state.passive_income_per_second = 0.0
+        self.state.game_start_mode = "open"
+        self.state.hidden_start_active = False
+        self.state.hidden_start_revealed = True
+
+        unlimited_gold = SANDBOX_INITIAL_GOLD
+        for player_id in self.state.players.keys():
+            self.state.player_gold[player_id] = unlimited_gold
+
+        for player_id in self.state.players.keys():
+            self.state.players_who_picked[player_id] = True
+
+        for node in self.state.nodes.values():
+            node.owner = primary_player_id
+            node.juice = 0.0
+            node.pending_gold = 0.0
+
+        self.state.phase = "playing"
+        self.state.start_game_timer(time.time())
+
+        mode_settings = dict(self.state.mode_settings or {})
+        mode_settings.setdefault("screen", "flat")
+        mode_settings.setdefault("brass", "cross")
+        mode_settings["brassStart"] = "anywhere"
+        mode_settings["pipeStart"] = "anywhere"
+        mode_settings["bridgeCost"] = 0.0
+        mode_settings["gameStart"] = "open"
+        mode_settings["derivedMode"] = "sandbox"
+        mode_settings["sandbox"] = True
+        self.state.mode_settings = mode_settings
+
     def is_game_active(self) -> bool:
         """Check if a game is currently active."""
         return self.game_active and self.state is not None and len(self.token_to_player_id) >= 2
@@ -432,6 +487,9 @@ class GameEngine:
         if not self.state:
             raise GameValidationError("No game state")
         
+        if getattr(self.state, "sandbox_mode", False):
+            return
+
         # Player can act if they have picked their starting node
         if not self.state.players_who_picked.get(player_id, False):
             raise GameValidationError("Must pick starting node first")
@@ -1564,18 +1622,21 @@ class GameEngine:
         for eliminated_id in list(self.state.eliminated_players):
             self._deactivate_player_edges(eliminated_id)
 
-        # Check for node count victory (2/3 rule)
-        winner_id = self.state.check_node_count_victory()
-        if winner_id is not None:
-            self._end_game()
-            return winner_id
-        
-        # Check for zero nodes loss condition
-        winner_id = self.state.check_zero_nodes_loss()
-        if winner_id is not None:
-            self._end_game()
-            return winner_id
-        
+        sandbox_mode = bool(getattr(self.state, "sandbox_mode", False))
+
+        if not sandbox_mode:
+            # Check for node count victory (2/3 rule)
+            winner_id = self.state.check_node_count_victory()
+            if winner_id is not None:
+                self._end_game()
+                return winner_id
+
+            # Check for zero nodes loss condition
+            winner_id = self.state.check_zero_nodes_loss()
+            if winner_id is not None:
+                self._end_game()
+                return winner_id
+
         # Check for timer expiration
         winner_id = self.state.check_timer_expiration(time.time())
         if winner_id is not None:

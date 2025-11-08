@@ -31,6 +31,7 @@ GAME_MODES: Tuple[str, ...] = (
     "brass-old",
     "brass",
     "go",
+    "sandbox",
 )
 DEFAULT_GAME_MODE: str = "sparse"
 
@@ -85,6 +86,7 @@ BRIDGE_COST_PER_UNIT_DISTANCE_BY_MODE: Dict[str, float] = {
     "brass-old": 1.0,
     "brass": 1.0,
     "go": 1.0,
+    "sandbox": 0.0,
 }
 BRIDGE_COST_PER_UNIT_DISTANCE: float = BRIDGE_COST_PER_UNIT_DISTANCE_BY_MODE[DEFAULT_GAME_MODE]
 

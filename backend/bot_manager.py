@@ -37,9 +37,10 @@ class BotGameManager:
         """
         try:
             mode = normalize_game_mode(mode)
+            sandbox_mode = mode == "sandbox"
 
-            # Create bot player with specified difficulty
-            self.bot_player = Bot2(player_id=2, color="#3388ff", difficulty=difficulty)
+            # Create bot player with specified difficulty (unless sandbox)
+            self.bot_player = None if sandbox_mode else Bot2(player_id=2, color="#3388ff", difficulty=difficulty)
             self.human_token = human_token
 
             from .message_handlers import PLAYER_COLOR_SCHEMES  # avoid circular import at top level
@@ -52,19 +53,24 @@ class BotGameManager:
                     "secondary_colors": PLAYER_COLOR_SCHEMES[0]["secondary"],
                     "auto_expand": auto_expand,
                     "auto_attack": auto_attack,
-                },
-                {
-                    "player_id": 2,
-                    "token": self.bot_player.bot_token,
-                    "color": PLAYER_COLOR_SCHEMES[1]["color"],
-                    "secondary_colors": PLAYER_COLOR_SCHEMES[1]["secondary"],
-                    "auto_expand": True,
-                    "auto_attack": True,
-                },
+                }
             ]
 
+            if self.bot_player:
+                player_slots.append(
+                    {
+                        "player_id": 2,
+                        "token": self.bot_player.bot_token,
+                        "color": PLAYER_COLOR_SCHEMES[1]["color"],
+                        "secondary_colors": PLAYER_COLOR_SCHEMES[1]["secondary"],
+                        "auto_expand": True,
+                        "auto_attack": True,
+                    }
+                )
+
             self.game_engine.start_game(player_slots, mode=mode, options=options)
-            self.bot_player.join_game(self.game_engine)
+            if self.bot_player:
+                self.bot_player.join_game(self.game_engine)
             self.game_active = True
 
             return True, None
