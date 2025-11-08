@@ -192,7 +192,7 @@ class GameEngine:
             except (TypeError, ValueError):
                 parsed_neutral = None
             if parsed_neutral is not None and parsed_neutral >= 0:
-                neutral_capture_reward = max(0.0, min(100.0, round(parsed_neutral, 3)))
+                neutral_capture_reward = max(0.0, min(20.0, round(parsed_neutral, 3)))
 
             ratio_value = options.get("ringJuiceToGoldRatio")
             if isinstance(ratio_value, str):
@@ -505,8 +505,12 @@ class GameEngine:
 
             # Check if this is for picking a starting node (node is unowned and player hasn't picked yet)
             if node.owner is None and not self.state.players_who_picked.get(player_id):
-                # This is a starting node pick - give gold reward for capturing unowned node
-                reward = get_neutral_capture_reward(self.state.mode)
+                # This is a starting node pick - grant the configured neutral capture reward
+                reward = getattr(
+                    self.state,
+                    "neutral_capture_reward",
+                    get_neutral_capture_reward(self.state.mode),
+                )
                 self.state.neutral_capture_reward = reward
                 if self.state.hidden_start_active and not self.state.hidden_start_revealed:
                     self.state.hidden_start_original_sizes[node_id] = node.juice

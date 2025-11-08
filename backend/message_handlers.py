@@ -257,7 +257,7 @@ class MessageRouter:
         except (TypeError, ValueError):
             parsed_neutral = None
         if parsed_neutral is not None and parsed_neutral >= 0:
-            settings["neutralCaptureGold"] = max(0.0, min(100.0, round(parsed_neutral, 3)))
+            settings["neutralCaptureGold"] = max(0.0, min(20.0, round(parsed_neutral, 3)))
 
         ratio_value = payload.get("ringJuiceToGoldRatio", settings["ringJuiceToGoldRatio"])
         if isinstance(ratio_value, str):
