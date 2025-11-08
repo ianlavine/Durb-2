@@ -10,7 +10,6 @@ from .constants import (
     BRIDGE_COST_PER_UNIT_DISTANCE,
     BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE,
     DEFAULT_GAME_MODE,
-    MIN_PIPE_JOIN_ANGLE_DEGREES,
     OVERFLOW_PENDING_GOLD_PAYOUT,
     PRODUCTION_RATE_PER_NODE,
     MAX_TRANSFER_RATIO,
@@ -33,6 +32,7 @@ from .constants import (
 )
 from .graph_generator import graph_generator
 from .models import Edge, Node, Player
+from .node_movement import resolve_sharp_angles
 from .state import GraphState, build_state_from_dict
 
 SANDBOX_INITIAL_GOLD = 1_000_000_000.0
@@ -996,103 +996,6 @@ class GameEngine:
         for edge in self.state.edges.values():
             self._apply_edge_warp_geometry(edge)
 
-    def _resolve_sharp_angles(self, new_edge: Edge) -> List[Dict[str, float]]:
-        if not self.state:
-            return []
-
-        min_angle_deg = max(0.0, float(MIN_PIPE_JOIN_ANGLE_DEGREES))
-        if min_angle_deg <= 0.0:
-            return []
-
-        min_angle_rad = math.radians(min_angle_deg)
-        epsilon = 1e-6
-        adjusted: Dict[int, Tuple[float, float]] = {}
-
-        nodes = self.state.nodes
-        edges = self.state.edges
-
-        endpoint_pairs = [
-            (new_edge.source_node_id, new_edge.target_node_id),
-            (new_edge.target_node_id, new_edge.source_node_id),
-        ]
-
-        for shared_id, opposite_id in endpoint_pairs:
-            shared_node = nodes.get(shared_id)
-            opposite_node = nodes.get(opposite_id)
-            if not shared_node or not opposite_node:
-                continue
-
-            base_dx = opposite_node.x - shared_node.x
-            base_dy = opposite_node.y - shared_node.y
-            base_length = math.hypot(base_dx, base_dy)
-            if base_length <= epsilon:
-                continue
-
-            base_angle = math.atan2(base_dy, base_dx)
-
-            attached_ids = list(shared_node.attached_edge_ids)
-            for edge_id in attached_ids:
-                if edge_id == new_edge.id:
-                    continue
-                neighbor_edge = edges.get(edge_id)
-                if not neighbor_edge:
-                    continue
-
-                if neighbor_edge.source_node_id == shared_id:
-                    target_id = neighbor_edge.target_node_id
-                elif neighbor_edge.target_node_id == shared_id:
-                    target_id = neighbor_edge.source_node_id
-                else:
-                    continue
-
-                if target_id == opposite_id:
-                    continue
-
-                target_node = nodes.get(target_id)
-                if not target_node:
-                    continue
-
-                vec_dx = target_node.x - shared_node.x
-                vec_dy = target_node.y - shared_node.y
-                vec_length = math.hypot(vec_dx, vec_dy)
-                if vec_length <= epsilon:
-                    continue
-
-                dot = base_dx * vec_dx + base_dy * vec_dy
-                denom = base_length * vec_length
-                if denom <= epsilon:
-                    continue
-                cos_angle = max(-1.0, min(1.0, dot / denom))
-                angle = math.acos(cos_angle)
-                if angle >= min_angle_rad:
-                    continue
-
-                cross = base_dx * vec_dy - base_dy * vec_dx
-                if abs(cross) <= epsilon:
-                    direction = 1.0
-                else:
-                    direction = 1.0 if cross > 0 else -1.0
-
-                desired_offset = direction * min_angle_rad
-                new_angle = base_angle + desired_offset
-                new_x = shared_node.x + vec_length * math.cos(new_angle)
-                new_y = shared_node.y + vec_length * math.sin(new_angle)
-
-                target_node.x = new_x
-                target_node.y = new_y
-                adjusted[target_id] = (new_x, new_y)
-                self.state.record_node_movement(target_id, new_x, new_y)
-
-                for attached_id in target_node.attached_edge_ids:
-                    attached_edge = edges.get(attached_id)
-                    if attached_edge:
-                        self._apply_edge_warp_geometry(attached_edge)
-
-        return [
-            {"nodeId": node_id, "x": coords[0], "y": coords[1]}
-            for node_id, coords in adjusted.items()
-        ]
-
     def calculate_bridge_cost(
         self,
         from_node: Node,
@@ -1372,7 +1275,11 @@ class GameEngine:
                 setattr(new_edge, 'post_build_turn_on_owner', player_id)
 
             if self.state:
-                node_movements = self._resolve_sharp_angles(new_edge)
+                node_movements = resolve_sharp_angles(
+                    self.state,
+                    new_edge,
+                    self._apply_edge_warp_geometry,
+                )
 
             return True, new_edge, actual_cost, None, removed_edges, node_movements
             
