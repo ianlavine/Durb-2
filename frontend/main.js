@@ -587,6 +587,8 @@
   let sceneRef = null;
   let quitButton = null;
   let forfeitKeyListenerAttached = false;
+  let sandboxResetButton = null;
+  let sandboxClearButton = null;
   let rematchButton = null;
   let saveReplayWrapper = null;
   let saveReplayButton = null;
@@ -2659,6 +2661,47 @@ function clearBridgeSelection() {
     });
     quitButton = quitBtn;
 
+    sandboxResetButton = document.createElement('button');
+    sandboxResetButton.textContent = 'Reset';
+    Object.assign(sandboxResetButton.style, {
+      position: 'absolute', left: '120px', bottom: '10px', zIndex: 10,
+      padding: '8px 14px', borderRadius: '8px', border: 'none',
+      background: '#8fd3ff', color: '#082034', cursor: 'pointer',
+      boxShadow: '0 6px 18px rgba(0,0,0,0.25)', display: 'none',
+      transition: 'transform 120ms ease, opacity 120ms ease'
+    });
+    sandboxResetButton.addEventListener('mouseenter', () => {
+      sandboxResetButton.style.transform = 'scale(1.03)';
+    });
+    sandboxResetButton.addEventListener('mouseleave', () => {
+      sandboxResetButton.style.transform = 'scale(1.0)';
+    });
+    sandboxResetButton.addEventListener('click', () => {
+      requestSandboxReset();
+    });
+    document.body.appendChild(sandboxResetButton);
+
+    sandboxClearButton = document.createElement('button');
+    sandboxClearButton.textContent = 'Clear';
+    Object.assign(sandboxClearButton.style, {
+      position: 'absolute', left: '210px', bottom: '10px', zIndex: 10,
+      padding: '8px 14px', borderRadius: '8px', border: 'none',
+      background: '#ffd37e', color: '#3b2500', cursor: 'pointer',
+      boxShadow: '0 6px 18px rgba(0,0,0,0.25)', display: 'none',
+      transition: 'transform 120ms ease, opacity 120ms ease'
+    });
+    sandboxClearButton.addEventListener('mouseenter', () => {
+      sandboxClearButton.style.transform = 'scale(1.03)';
+    });
+    sandboxClearButton.addEventListener('mouseleave', () => {
+      sandboxClearButton.style.transform = 'scale(1.0)';
+    });
+    sandboxClearButton.addEventListener('click', () => {
+      requestSandboxClear();
+    });
+    document.body.appendChild(sandboxClearButton);
+    updateSandboxButtonVisibility();
+
     if (!forfeitKeyListenerAttached) {
       document.addEventListener('keydown', (event) => {
         if (!quitButton) return;
@@ -2883,6 +2926,7 @@ function clearBridgeSelection() {
       // Buttons now positioned horizontally at bottom with fixed positions
       updateReplaySpeedUI();
       updateReviewReplayDownloadButton();
+      updateSandboxButtonVisibility();
     });
     observer.observe(menu, { attributes: true, attributeFilter: ['class'] });
     // Also hide win/lose overlay when menu is visible (keep settings panel state)
@@ -3247,6 +3291,7 @@ function clearBridgeSelection() {
       // Ask server to send init if a game exists
       const storedToken = localStorage.getItem('token');
       if (storedToken) ws.send(JSON.stringify({ type: 'requestInit', token: storedToken }));
+      updateSandboxButtonVisibility();
     };
     ws.onclose = () => {
       console.log('WS disconnected, retrying in 2s');
@@ -3264,6 +3309,7 @@ function clearBridgeSelection() {
         updateReplaySpeedLabel();
       }
       setTimeout(tryConnectWS, 2000);
+      updateSandboxButtonVisibility();
     };
     ws.onerror = (e) => console.error('WS error', e);
     ws.onmessage = (ev) => {
@@ -3294,6 +3340,9 @@ function clearBridgeSelection() {
       else if (msg.type === 'postgameOpponentLeft') handlePostgameOpponentLeft();
       else if (msg.type === 'replayData') handleReplayDownload(msg);
       else if (msg.type === 'replayError') handleReplayError(msg);
+      else if (msg.type === 'sandboxNodeCreated') handleSandboxNodeCreated(msg);
+      else if (msg.type === 'sandboxBoardCleared') handleSandboxBoardCleared(msg);
+      else if (msg.type === 'sandboxError') handleSandboxError(msg);
     };
   }
 
@@ -3618,6 +3667,8 @@ function clearBridgeSelection() {
     if (progressBar) {
       progressBar.style.display = players.size > 0 ? 'block' : 'none';
     }
+
+    updateSandboxButtonVisibility();
   }
 
   function handlePostgame(msg) {
@@ -4111,6 +4162,7 @@ function clearBridgeSelection() {
     updateGoldBar();
     updateProgressBar();
     redrawStatic();
+    updateSandboxButtonVisibility();
   }
 
   function handleNewEdge(msg) {
@@ -4741,6 +4793,98 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
   function handleNukeError(msg) {
     showErrorMessage(msg.message || "Can't nuke this node!");
+  }
+
+  function handleSandboxNodeCreated(msg) {
+    if (!msg || !msg.node) return;
+    const data = msg.node;
+    const id = Number(data.id);
+    if (!Number.isFinite(id)) return;
+    const x = Number(data.x) || 0;
+    const y = Number(data.y) || 0;
+    const parsedSize = Number(data.size);
+    const size = Number.isFinite(parsedSize) ? parsedSize : 0;
+    const pendingGold = Number(data.pendingGold) || 0;
+    const owner = (data.owner == null) ? null : Number(data.owner);
+    const isBrass = data.isBrass === true || Number(data.isBrass) === 1;
+
+    const existingText = nodeJuiceTexts.get(id);
+    if (existingText) {
+      existingText.destroy();
+      nodeJuiceTexts.delete(id);
+    }
+
+    nodes.set(id, {
+      x,
+      y,
+      startX: x,
+      startY: y,
+      targetX: x,
+      targetY: y,
+      moveStartTime: null,
+      moveDuration: null,
+      size,
+      owner,
+      pendingGold,
+      isBrass,
+    });
+
+    if (typeof msg.totalNodes === 'number') {
+      totalNodes = Number(msg.totalNodes);
+    }
+    if (typeof msg.winThreshold === 'number') {
+      winThreshold = Number(msg.winThreshold);
+    }
+
+    redrawStatic();
+    updateProgressBar();
+  }
+
+  function handleSandboxBoardCleared(msg) {
+    nodeJuiceTexts.forEach((text) => {
+      if (text) text.destroy();
+    });
+    nodeJuiceTexts.clear();
+    edgeFlowTexts.forEach((text) => {
+      if (text) text.destroy();
+    });
+    edgeFlowTexts.clear();
+    edges.clear();
+    nodes.clear();
+    hoveredNodeId = null;
+    hoveredEdgeId = null;
+    currentTargetNodeId = null;
+    currentTargetSetTime = null;
+    activeAbility = null;
+    clearBridgeSelection();
+    hideBridgeCostDisplay();
+    hideReverseCostDisplay();
+    edgeRemovalAnimations.clear();
+    brassPreviewIntersections.clear();
+    moneyIndicators = [];
+    playerStats.forEach((stats) => {
+      if (stats) stats.nodes = 0;
+    });
+
+    if (typeof msg.totalNodes === 'number') {
+      totalNodes = Number(msg.totalNodes);
+    } else {
+      totalNodes = 0;
+    }
+    if (typeof msg.winThreshold === 'number') {
+      winThreshold = Number(msg.winThreshold);
+    } else {
+      winThreshold = 0;
+    }
+
+    updateGoldBar();
+    updateProgressBar();
+    redrawStatic();
+  }
+
+  function handleSandboxError(msg) {
+    const message = (msg && typeof msg.message === 'string') ? msg.message : 'Sandbox action failed';
+    showErrorMessage(message);
   }
 
   function handleNodeCaptured(msg) {
@@ -6240,6 +6384,24 @@ function fallbackRemoveEdgesForNode(nodeId) {
       }
     }
 
+    if (
+      sandboxModeEnabled() &&
+      nodeId == null &&
+      edgeId == null &&
+      ws && ws.readyState === WebSocket.OPEN
+    ) {
+      const token = localStorage.getItem('token');
+      if (token) {
+        ws.send(JSON.stringify({
+          type: 'sandboxCreateNode',
+          x: wx,
+          y: wy,
+          token,
+        }));
+      }
+      return;
+    }
+
     // Handle all other clicks (node flow targeting, edge clicks, etc.)
     if (ws && ws.readyState === WebSocket.OPEN) {
       const token = localStorage.getItem('token');
@@ -6466,6 +6628,60 @@ function fallbackRemoveEdgesForNode(nodeId) {
     quitButton.textContent = (gameEnded || myEliminated) ? 'Quit' : 'Forfeit';
   }
 
+  function updateSandboxButtonVisibility() {
+    if (!sandboxResetButton && !sandboxClearButton) return;
+    const menuEl = document.getElementById('menu');
+    const menuVisible = menuEl ? !menuEl.classList.contains('hidden') : false;
+    const inSandbox = sandboxModeEnabled();
+    const connected = !!(ws && ws.readyState === WebSocket.OPEN);
+    const shouldShow = inSandbox && !menuVisible && !replayMode;
+    const displayStyle = shouldShow ? 'block' : 'none';
+
+    if (sandboxResetButton) {
+      sandboxResetButton.style.display = displayStyle;
+      sandboxResetButton.disabled = !shouldShow || !connected;
+      sandboxResetButton.style.opacity = sandboxResetButton.disabled ? '0.6' : '1';
+      sandboxResetButton.style.cursor = sandboxResetButton.disabled ? 'not-allowed' : 'pointer';
+    }
+
+    if (sandboxClearButton) {
+      sandboxClearButton.style.display = displayStyle;
+      sandboxClearButton.disabled = !shouldShow || !connected;
+      sandboxClearButton.style.opacity = sandboxClearButton.disabled ? '0.6' : '1';
+      sandboxClearButton.style.cursor = sandboxClearButton.disabled ? 'not-allowed' : 'pointer';
+    }
+  }
+
+  function requestSandboxReset() {
+    if (!sandboxModeEnabled()) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      showErrorMessage('Reconnect before resetting sandbox');
+      return;
+    }
+    const token = localStorage.getItem('token');
+    if (!token) return;
+    const payload = {
+      type: 'sandboxReset',
+      token,
+      autoExpand: persistentAutoExpand,
+      autoAttack: persistentAutoAttack,
+      mode: MODE_QUEUE_KEY,
+      settings: buildModeSettingsPayload(),
+    };
+    ws.send(JSON.stringify(payload));
+  }
+
+  function requestSandboxClear() {
+    if (!sandboxModeEnabled()) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      showErrorMessage('Reconnect before clearing sandbox');
+      return;
+    }
+    const token = localStorage.getItem('token');
+    if (!token) return;
+    ws.send(JSON.stringify({ type: 'sandboxClearBoard', token }));
+  }
+
   function showLobby() {
     const lobby = document.getElementById('lobby');
     if (lobby) lobby.style.display = 'block';
@@ -6659,6 +6875,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     hideTimerDisplay();
     const togglesPanel = document.getElementById('togglesPanel');
     if (togglesPanel) togglesPanel.style.display = settingsOpen ? 'grid' : 'none';
+    updateSandboxButtonVisibility();
 
     updateHomeAutoExpandToggle();
     updateHomeAutoAttackToggle();

@@ -1694,6 +1694,77 @@ class GameEngine:
         except GameValidationError as e:
             return False, str(e), None
 
+    def handle_sandbox_create_node(
+        self,
+        token: str,
+        x: Any,
+        y: Any,
+    ) -> Optional[Dict[str, Any]]:
+        """Create a new neutral node at the given coordinates (sandbox only)."""
+        try:
+            self.validate_game_active()
+            self.validate_player(token)
+            if not self.state or not getattr(self.state, "sandbox_mode", False):
+                raise GameValidationError("Sandbox only")
+
+            try:
+                x_val = float(x)
+                y_val = float(y)
+            except (TypeError, ValueError):
+                raise GameValidationError("Invalid coordinates")
+
+            next_id = (max(self.state.nodes.keys(), default=0) + 1) if self.state.nodes else 1
+            node = Node(id=next_id, x=x_val, y=y_val, juice=SANDBOX_NODE_JUICE, owner=None)
+            self.state.nodes[node.id] = node
+
+            return {
+                "node": {
+                    "id": node.id,
+                    "x": round(node.x, 3),
+                    "y": round(node.y, 3),
+                    "size": round(node.juice, 3),
+                    "owner": node.owner,
+                    "pendingGold": round(getattr(node, "pending_gold", 0.0), 3),
+                    "isBrass": getattr(node, "node_type", "normal") == "brass",
+                },
+                "totalNodes": len(self.state.nodes),
+                "winThreshold": self.state.calculate_win_threshold(),
+            }
+        except GameValidationError:
+            return None
+
+    def handle_sandbox_clear_board(self, token: str) -> Optional[Dict[str, Any]]:
+        """Remove all nodes and edges while staying within the same sandbox session."""
+        try:
+            self.validate_game_active()
+            self.validate_player(token)
+            if not self.state or not getattr(self.state, "sandbox_mode", False):
+                raise GameValidationError("Sandbox only")
+
+            removed_nodes = list(self.state.nodes.keys()) if self.state.nodes else []
+            removed_edges = list(self.state.edges.keys()) if self.state.edges else []
+
+            for node_id in removed_nodes:
+                self.state.remove_node_and_edges(node_id)
+
+            self.state.pending_node_movements = {}
+            self.state.pending_edge_removals = []
+            self.state.pending_auto_expand_nodes = {}
+            self.state.pending_auto_attack_nodes = {}
+            if hasattr(self.state, "pending_node_captures"):
+                self.state.pending_node_captures = []
+            if hasattr(self.state, "pending_edge_reversal"):
+                self.state.pending_edge_reversal = None
+
+            return {
+                "removedNodes": removed_nodes,
+                "removedEdges": removed_edges,
+                "totalNodes": len(self.state.nodes),
+                "winThreshold": self.state.calculate_win_threshold(),
+            }
+        except GameValidationError:
+            return None
+
     def _optimize_energy_flow_to_target(self, player_id: int, target_node_id: int) -> None:
         """
         Optimize energy flow to maximize flow towards the target node using shortest paths.
