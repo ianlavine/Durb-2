@@ -78,8 +78,12 @@ class MessageRouter:
     ) -> None:
         msg_type = msg.get("type")
 
-        # Bot game messages are handled separately (except startBotGame)
-        if msg_type != "startBotGame" and bot_game_manager.game_active:
+        if msg_type == "sandboxReset":
+            await self.handle_sandbox_reset(websocket, msg, server_context)
+            return
+
+        # Bot game messages are handled separately (except startBotGame/sandboxReset)
+        if msg_type not in {"startBotGame", "sandboxReset"} and bot_game_manager.game_active:
             human_token = bot_game_manager.human_token
             if human_token and human_token in server_context.get("bot_game_clients", {}):
                 await self._route_to_bot_game(websocket, msg, server_context)
@@ -1096,6 +1100,58 @@ class MessageRouter:
         if bot_game_manager.bot_player:
             await bot_game_manager.make_bot_move()
 
+    async def handle_sandbox_reset(
+        self,
+        websocket: websockets.WebSocketServerProtocol,
+        msg: Dict[str, Any],
+        server_context: Dict[str, Any],
+    ) -> None:
+        token = msg.get("token") or uuid.uuid4().hex
+        if not token:
+            return
+
+        auto_expand = bool(msg.get("autoExpand", False))
+        auto_attack = bool(msg.get("autoAttack", False))
+        mode_settings = self._sanitize_mode_settings(msg.get("settings"))
+        mode_settings["derivedMode"] = "sandbox"
+        mode_settings["sandbox"] = True
+        mode_settings["brassStart"] = "anywhere"
+        mode_settings["pipeStart"] = "anywhere"
+        mode_settings["bridgeCost"] = 0.0
+        mode_settings["gameStart"] = "open"
+
+        success, error_msg = bot_game_manager.start_bot_game(
+            token,
+            difficulty="sandbox",
+            auto_expand=auto_expand,
+            auto_attack=auto_attack,
+            mode="sandbox",
+            options=mode_settings,
+        )
+        if not success:
+            await self._send_safe(
+                websocket,
+                json.dumps({"type": "botGameError", "message": error_msg or "Failed to reset sandbox"}),
+            )
+            return
+
+        bot_game_engine = bot_game_manager.get_game_engine()
+        server_context.setdefault("bot_game_clients", {})[token] = websocket
+        server_context.setdefault("ws_to_token", {})[websocket] = token
+
+        if bot_game_engine.state:
+            message = bot_game_engine.state.to_init_message(
+                bot_game_engine.screen,
+                server_context.get("tick_interval", TICK_INTERVAL_SECONDS),
+                time.time(),
+            )
+            message["type"] = "init"
+            message["myPlayerId"] = 1
+            message["token"] = token
+            player_id = bot_game_engine.token_to_player_id.get(token)
+            message = bot_game_engine.state.build_player_view(message, player_id)
+            await self._send_safe(websocket, json.dumps(message))
+
     async def _route_to_bot_game(
         self,
         websocket: websockets.WebSocketServerProtocol,
@@ -1305,6 +1361,39 @@ class MessageRouter:
                     )
                 else:
                     await self._send_safe(websocket, json.dumps({"type": "nodeDestroyed", "nodeId": int(node_id)}))
+
+        elif msg_type == "sandboxCreateNode":
+            result = bot_game_engine.handle_sandbox_create_node(token, msg.get("x"), msg.get("y"))
+            if not result:
+                await self._send_safe(
+                    websocket,
+                    json.dumps({"type": "sandboxError", "message": "Unable to create node"}),
+                )
+            else:
+                payload = {
+                    "type": "sandboxNodeCreated",
+                    "node": result.get("node", {}),
+                    "totalNodes": result.get("totalNodes", 0),
+                    "winThreshold": result.get("winThreshold", 0),
+                }
+                await self._send_safe(websocket, json.dumps(payload))
+
+        elif msg_type == "sandboxClearBoard":
+            result = bot_game_engine.handle_sandbox_clear_board(token)
+            if not result:
+                await self._send_safe(
+                    websocket,
+                    json.dumps({"type": "sandboxError", "message": "Unable to clear board"}),
+                )
+            else:
+                payload = {
+                    "type": "sandboxBoardCleared",
+                    "removedNodes": [int(nid) for nid in result.get("removedNodes", [])],
+                    "removedEdges": [int(eid) for eid in result.get("removedEdges", [])],
+                    "totalNodes": result.get("totalNodes", 0),
+                    "winThreshold": result.get("winThreshold", 0),
+                }
+                await self._send_safe(websocket, json.dumps(payload))
 
         elif msg_type == "quitGame":
             winner_id = bot_game_engine.handle_quit_game(token)
