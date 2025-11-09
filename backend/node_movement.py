@@ -9,6 +9,10 @@ from .state import GraphState
 from .constants import MIN_PIPE_JOIN_ANGLE_DEGREES
 
 
+# Global switch in case node movement needs to be fully disabled.
+ENABLE_NODE_MOVEMENT = False
+
+
 NodeMovementCallback = Optional[Callable[[Edge], None]]
 
 
@@ -28,7 +32,7 @@ def resolve_sharp_angles(
     Returns:
         A list of movement dicts suitable for frontend updates.
     """
-    if not state:
+    if not state or not ENABLE_NODE_MOVEMENT:
         return []
 
     min_angle_deg = max(0.0, float(MIN_PIPE_JOIN_ANGLE_DEGREES))
