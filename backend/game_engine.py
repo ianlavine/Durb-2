@@ -22,7 +22,9 @@ from .constants import (
     CLASSIC_INTAKE_TRANSFER_RATIO,
     CLASSIC_RESERVE_TRANSFER_RATIO,
     CLASSIC_STARTING_NODE_JUICE,
+    NODE_MAX_JUICE,
     TICK_INTERVAL_SECONDS,
+    UNOWNED_NODE_BASE_JUICE,
     WARP_MARGIN_RATIO_X,
     WARP_MARGIN_RATIO_Y,
     get_bridge_cost_per_unit,
@@ -149,6 +151,8 @@ class GameEngine:
         neutral_capture_reward = get_neutral_capture_reward(normalized_mode)
         overflow_ratio = get_overflow_juice_to_gold_ratio(normalized_mode)
         overflow_payout = OVERFLOW_PENDING_GOLD_PAYOUT
+        starting_node_juice_value = STARTING_NODE_JUICE
+        starting_node_juice_overridden = False
 
         if isinstance(options, dict):
             screen_option = str(options.get("screen", "")).strip().lower()
@@ -220,6 +224,21 @@ class GameEngine:
             if parsed_payout is not None and parsed_payout > 0:
                 overflow_payout = max(1.0, min(500.0, round(parsed_payout, 4)))
 
+            start_juice_value = options.get("startingNodeJuice")
+            if isinstance(start_juice_value, str):
+                start_juice_value = start_juice_value.strip()
+            try:
+                parsed_start_juice = float(start_juice_value)
+            except (TypeError, ValueError):
+                parsed_start_juice = None
+            if parsed_start_juice is not None:
+                clamped_start = max(
+                    UNOWNED_NODE_BASE_JUICE,
+                    min(NODE_MAX_JUICE, parsed_start_juice),
+                )
+                starting_node_juice_value = round(clamped_start, 2)
+                starting_node_juice_overridden = True
+
         if normalized_mode == "basic":
             auto_brass_on_cross = False
             manual_brass_selection = False
@@ -229,11 +248,14 @@ class GameEngine:
             self.state.max_transfer_ratio = CLASSIC_MAX_TRANSFER_RATIO
             self.state.intake_transfer_ratio = CLASSIC_INTAKE_TRANSFER_RATIO
             self.state.reserve_transfer_ratio = CLASSIC_RESERVE_TRANSFER_RATIO
-            self.state.starting_node_juice = CLASSIC_STARTING_NODE_JUICE
+            if not starting_node_juice_overridden:
+                starting_node_juice_value = CLASSIC_STARTING_NODE_JUICE
 
         if bridge_cost_override is not None:
             clamped_cost = max(0.5, min(1.0, float(bridge_cost_override)))
             self.state.bridge_cost_per_unit = round(clamped_cost, 1)
+
+        self.state.starting_node_juice = starting_node_juice_value
 
         brass_double_cost = manual_brass_selection or normalized_mode == "cross"
 
@@ -244,6 +266,7 @@ class GameEngine:
             "bridgeCost": self.state.bridge_cost_per_unit,
             "derivedMode": normalized_mode,
             "gameStart": game_start_mode,
+            "startingNodeJuice": starting_node_juice_value,
             "passiveIncome": passive_income_per_second,
             "neutralCaptureGold": neutral_capture_reward,
             "ringJuiceToGoldRatio": overflow_ratio,
@@ -386,6 +409,7 @@ class GameEngine:
         mode_settings["brassStart"] = "anywhere"
         mode_settings["pipeStart"] = "anywhere"
         mode_settings["bridgeCost"] = 0.0
+        mode_settings["startingNodeJuice"] = self.state.starting_node_juice
         mode_settings["gameStart"] = "open"
         mode_settings["derivedMode"] = "sandbox"
         mode_settings["sandbox"] = True

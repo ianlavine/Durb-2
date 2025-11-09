@@ -192,6 +192,7 @@
         brassStart: 'anywhere',
         bridgeCost: 0.9,
         gameStart: 'open',
+        startingNodeJuice: 150,
         passiveIncome: 0,
         neutralCaptureGold: 10,
         ringJuiceToGoldRatio: 30,
@@ -205,6 +206,7 @@
         brassStart: 'anywhere',
         bridgeCost: 0.9,
         gameStart: 'hidden-split',
+        startingNodeJuice: 150,
         passiveIncome: 0,
         neutralCaptureGold: 10,
         ringJuiceToGoldRatio: 30,
@@ -232,6 +234,8 @@
   let ringRatioValueLabel = null;
   let ringPayoutSlider = null;
   let ringPayoutValueLabel = null;
+  let startingJuiceSlider = null;
+  let startingJuiceValueLabel = null;
   const BRIDGE_COST_MIN = 0.5;
   const BRIDGE_COST_MAX = 1.0;
   const BRIDGE_COST_STEP = 0.1;
@@ -247,6 +251,9 @@
   const RING_PAYOUT_MIN = 1;
   const RING_PAYOUT_MAX = 20;
   const RING_PAYOUT_STEP = 1;
+  const STARTING_JUICE_MIN = 50;
+  const STARTING_JUICE_MAX = 300;
+  const STARTING_JUICE_STEP = 10;
   const MODE_LABELS = {
     sparse: 'Sparse',
     basic: 'OG Durb',
@@ -347,6 +354,14 @@
     return Math.round(clamped);
   }
 
+  function coerceStartingNodeJuice(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return DEFAULT_MODE_SETTINGS.startingNodeJuice;
+    const clamped = Math.min(STARTING_JUICE_MAX, Math.max(STARTING_JUICE_MIN, numeric));
+    const stepped = Math.round(clamped / STARTING_JUICE_STEP) * STARTING_JUICE_STEP;
+    return Math.round(stepped);
+  }
+
   function deriveModeFromSettings(settings = selectedSettings) {
     if (IS_LEGACY_CLIENT) {
       return LEGACY_DEFAULT_MODE || 'basic';
@@ -370,7 +385,8 @@
     const neutralLabel = coerceNeutralCaptureReward(settings.neutralCaptureGold);
     const ringRatioLabel = coerceRingRatio(settings.ringJuiceToGoldRatio);
     const ringPayoutLabel = coerceRingPayout(settings.ringPayoutGold);
-    return `${screenLabel} · ${brassLabel} · ${startLabel} · ${startModeLabel} · ${costLabel} · Passive ${passiveLabel} · Neutral ${neutralLabel} · Ring ${ringRatioLabel}:${ringPayoutLabel}`;
+    const startJuiceLabel = coerceStartingNodeJuice(settings.startingNodeJuice);
+    return `${screenLabel} · ${brassLabel} · ${startLabel} · ${startModeLabel} · ${costLabel} · Passive ${passiveLabel} · Neutral ${neutralLabel} · Ring ${ringRatioLabel}:${ringPayoutLabel} · Start ${startJuiceLabel}`;
   }
 
   function updateModeOptionButtonStates() {
@@ -483,6 +499,11 @@
     } else {
       next.ringPayoutGold = coerceRingPayout(next.ringPayoutGold);
     }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'startingNodeJuice')) {
+      next.startingNodeJuice = coerceStartingNodeJuice(overrides.startingNodeJuice);
+    } else {
+      next.startingNodeJuice = coerceStartingNodeJuice(next.startingNodeJuice);
+    }
 
     if (next.gameStart === 'hidden-split' && !isHiddenStartAllowed()) {
       next.gameStart = 'open';
@@ -496,6 +517,7 @@
     syncNeutralCaptureSlider();
     syncRingRatioSlider();
     syncRingPayoutSlider();
+    syncStartingJuiceSlider();
     updatePlayBotAvailability(true);
   }
 
@@ -506,6 +528,7 @@
       brassStart: selectedSettings.brassStart,
       bridgeCost: Number(coerceBridgeCost(selectedSettings.bridgeCost).toFixed(1)),
       gameStart: selectedSettings.gameStart,
+      startingNodeJuice: coerceStartingNodeJuice(selectedSettings.startingNodeJuice),
       passiveIncome: coercePassiveIncome(selectedSettings.passiveIncome),
       neutralCaptureGold: coerceNeutralCaptureReward(selectedSettings.neutralCaptureGold),
       ringJuiceToGoldRatio: coerceRingRatio(selectedSettings.ringJuiceToGoldRatio),
@@ -523,6 +546,7 @@
     if (typeof payload.pipeStart === 'string') overrides.brassStart = payload.pipeStart;
     else if (typeof payload.brassStart === 'string') overrides.brassStart = payload.brassStart;
     if (typeof payload.gameStart === 'string') overrides.gameStart = payload.gameStart;
+    if (Object.prototype.hasOwnProperty.call(payload, 'startingNodeJuice')) overrides.startingNodeJuice = payload.startingNodeJuice;
     if (Object.prototype.hasOwnProperty.call(payload, 'bridgeCost')) overrides.bridgeCost = payload.bridgeCost;
     if (Object.prototype.hasOwnProperty.call(payload, 'passiveIncome')) overrides.passiveIncome = payload.passiveIncome;
     if (Object.prototype.hasOwnProperty.call(payload, 'neutralCaptureGold')) overrides.neutralCaptureGold = payload.neutralCaptureGold;
@@ -567,6 +591,13 @@
     const value = coerceRingPayout(selectedSettings.ringPayoutGold);
     ringPayoutSlider.value = String(value);
     ringPayoutValueLabel.textContent = String(value);
+  }
+
+  function syncStartingJuiceSlider() {
+    if (!startingJuiceSlider || !startingJuiceValueLabel) return;
+    const value = coerceStartingNodeJuice(selectedSettings.startingNodeJuice);
+    startingJuiceSlider.value = String(value);
+    startingJuiceValueLabel.textContent = String(value);
   }
 
   function pipeStartRequiresOwnership() {
@@ -2410,6 +2441,8 @@ function clearBridgeSelection() {
     ringRatioValueLabel = document.getElementById('ringRatioValue');
     ringPayoutSlider = document.getElementById('ringPayoutSlider');
     ringPayoutValueLabel = document.getElementById('ringPayoutValue');
+    startingJuiceSlider = document.getElementById('startingJuiceSlider');
+    startingJuiceValueLabel = document.getElementById('startingJuiceValue');
 
     if (modeOptionButtons.length) {
       modeOptionButtons.forEach((btn) => {
@@ -2484,6 +2517,18 @@ function clearBridgeSelection() {
       };
       ringPayoutSlider.addEventListener('input', handler);
       ringPayoutSlider.addEventListener('change', handler);
+    }
+
+    if (startingJuiceSlider) {
+      startingJuiceSlider.min = String(STARTING_JUICE_MIN);
+      startingJuiceSlider.max = String(STARTING_JUICE_MAX);
+      startingJuiceSlider.step = String(STARTING_JUICE_STEP);
+      const handler = (event) => {
+        const sliderValue = Number(event.target.value);
+        applySelectedSettings({ startingNodeJuice: sliderValue });
+      };
+      startingJuiceSlider.addEventListener('input', handler);
+      startingJuiceSlider.addEventListener('change', handler);
     }
 
     const closeModePanel = () => {
@@ -3395,6 +3440,9 @@ function clearBridgeSelection() {
       };
       if (msg.settings && typeof msg.settings.bridgeCostPerUnit === 'number') {
         inferred.bridgeCost = msg.settings.bridgeCostPerUnit;
+      }
+      if (msg.settings && typeof msg.settings.startingNodeJuice === 'number') {
+        inferred.startingNodeJuice = msg.settings.startingNodeJuice;
       }
       applySelectedSettings(inferred);
       selectedMode = deriveModeFromSettings(selectedSettings);

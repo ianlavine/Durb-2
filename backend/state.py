@@ -407,6 +407,7 @@ class GraphState:
                 "nodeMaxJuice": node_max,
                 "bridgeBaseCost": BRIDGE_BASE_COST,
                 "bridgeCostPerUnit": self.bridge_cost_per_unit,
+                "startingNodeJuice": getattr(self, "starting_node_juice", STARTING_NODE_JUICE),
                 "neutralCaptureReward": neutral_reward,
                 "overflowPendingGoldPayout": overflow_payout,
                 "passiveIncomePerSecond": passive_per_second,
