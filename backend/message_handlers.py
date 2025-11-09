@@ -11,8 +11,10 @@ from .constants import (
     GAME_MODES,
     MAX_FRIEND_PLAYERS,
     MIN_FRIEND_PLAYERS,
+    NODE_MAX_JUICE,
     PLAYER_COLOR_SCHEMES,
     TICK_INTERVAL_SECONDS,
+    UNOWNED_NODE_BASE_JUICE,
     normalize_game_mode,
 )
 from .game_engine import GameEngine
@@ -197,13 +199,14 @@ class MessageRouter:
             "neutralCaptureGold": 10.0,
             "ringJuiceToGoldRatio": 30.0,
             "ringPayoutGold": 10.0,
+            "startingNodeJuice": 150.0,
         }
         if not isinstance(payload, dict):
             settings["pipeStart"] = settings["brassStart"]
             return settings
 
         screen_option = str(payload.get("screen", settings["screen"])).strip().lower()
-        if screen_option in {"warp", "flat"}:
+        if screen_option in {"warp", "semi", "flat"}:
             settings["screen"] = screen_option
 
         brass_option = str(payload.get("brass", settings["brass"])).strip().lower()
@@ -279,6 +282,18 @@ class MessageRouter:
         if parsed_payout is not None and parsed_payout > 0:
             settings["ringPayoutGold"] = max(1.0, min(500.0, round(parsed_payout, 4)))
 
+        start_juice_value = payload.get("startingNodeJuice", settings["startingNodeJuice"])
+        if isinstance(start_juice_value, str):
+            start_juice_value = start_juice_value.strip()
+        try:
+            parsed_start = float(start_juice_value)
+        except (TypeError, ValueError):
+            parsed_start = None
+        if parsed_start is not None:
+            clamped_start = max(UNOWNED_NODE_BASE_JUICE, min(NODE_MAX_JUICE, parsed_start))
+            snapped = round(clamped_start / 10.0) * 10.0
+            settings["startingNodeJuice"] = max(UNOWNED_NODE_BASE_JUICE, min(NODE_MAX_JUICE, snapped))
+
         settings["pipeStart"] = settings["brassStart"]
 
         return settings
@@ -289,7 +304,7 @@ class MessageRouter:
         derived_mode = settings.get("derivedMode")
         if isinstance(derived_mode, str):
             normalized = normalize_game_mode(derived_mode)
-            if normalized in {"flat", "warp", "i-flat", "i-warp", "basic", "sandbox"}:
+            if normalized in {"flat", "warp", "semi", "i-flat", "i-warp", "i-semi", "basic", "sandbox"}:
                 return normalized
 
         screen_variant = str(settings.get("screen", "flat")).strip().lower()
@@ -297,6 +312,8 @@ class MessageRouter:
 
         if screen_variant == "warp":
             return "i-warp" if brass_variant.startswith("right") else "warp"
+        if screen_variant == "semi":
+            return "i-semi" if brass_variant.startswith("right") else "semi"
         if screen_variant == "flat":
             return "i-flat" if brass_variant.startswith("right") else "flat"
 

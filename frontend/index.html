@@ -443,7 +443,7 @@
         flex-direction: column;
         align-items: flex-end;
         gap: clamp(8px, 1.6vh, 16px);
-        max-width: clamp(260px, 28vw, 340px);
+        max-width: clamp(320px, 32vw, 420px);
         text-align: right;
         z-index: 30;
       }
@@ -494,8 +494,8 @@
       .player-count-option,
       .mode-option-button,
       .mode-options-toggle {
-        font-size: 28px;
-        padding: 10px 18px;
+        font-size: 26px;
+        padding: 8px 16px;
         border-radius: 8px;
         border: 2px solid #777;
         background: #222;
@@ -506,9 +506,9 @@
 
       .mode-option-button {
         flex: 0 0 auto;
-        min-width: 120px;
-        font-size: clamp(22px, 3vw, 26px);
-        padding: clamp(8px, 1.2vw, 10px) clamp(12px, 2.4vw, 18px);
+        min-width: 110px;
+        font-size: clamp(18px, 2.4vw, 22px);
+        padding: clamp(4px, 0.8vw, 6px) clamp(10px, 2vw, 14px);
         white-space: nowrap;
       }
 
@@ -543,14 +543,14 @@
         display: none;
         flex-direction: column;
         align-items: stretch;
-        min-width: clamp(260px, 30vw, 360px);
-        padding: 16px;
-        border-radius: 12px;
+        min-width: clamp(320px, 36vw, 420px);
+        padding: 12px 16px;
+        border-radius: 10px;
         border: 1px solid rgba(255,255,255,0.15);
         background: rgba(20, 20, 30, 0.95);
         box-shadow: 0 10px 24px rgba(0,0,0,0.45);
         z-index: 31;
-        gap: 12px;
+        gap: 10px;
       }
 
       @media (max-width: 720px) {
@@ -572,7 +572,7 @@
       .mode-option-group {
         display: flex;
         align-items: center;
-        gap: 12px;
+        gap: 10px;
         width: 100%;
         flex-wrap: wrap;
       }
@@ -585,7 +585,7 @@
         display: flex;
         flex: 1 1 auto;
         flex-wrap: wrap;
-        gap: 10px;
+        gap: 8px;
         justify-content: flex-start;
       }
 
@@ -757,6 +757,7 @@
             <span class="selector-label">Screen</span>
             <div class="mode-option-buttons">
               <button class="mode-option-button active" data-setting="screen" data-value="flat">Flat</button>
+              <button class="mode-option-button" data-setting="screen" data-value="semi">Semi</button>
               <button class="mode-option-button" data-setting="screen" data-value="warp">Warp</button>
             </div>
           </div>

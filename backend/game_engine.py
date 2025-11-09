@@ -140,9 +140,14 @@ class GameEngine:
         self.state.reserve_transfer_ratio = RESERVE_TRANSFER_RATIO
         self.state.starting_node_juice = STARTING_NODE_JUICE
 
-        screen_variant = "warp" if normalized_mode in {"warp-old", "warp", "i-warp"} else "flat"
-        auto_brass_on_cross = normalized_mode in {"warp", "flat"}
-        manual_brass_selection = normalized_mode in {"i-warp", "i-flat", "cross"}
+        if normalized_mode in {"warp-old", "warp", "i-warp"}:
+            screen_variant = "warp"
+        elif normalized_mode in {"semi", "i-semi"}:
+            screen_variant = "semi"
+        else:
+            screen_variant = "flat"
+        auto_brass_on_cross = normalized_mode in {"warp", "semi", "flat"}
+        manual_brass_selection = normalized_mode in {"i-warp", "i-semi", "i-flat", "cross"}
         brass_double_cost = manual_brass_selection or normalized_mode == "cross"
         allow_pipe_start_anywhere = False
         bridge_cost_override: Optional[float] = None
@@ -156,7 +161,7 @@ class GameEngine:
 
         if isinstance(options, dict):
             screen_option = str(options.get("screen", "")).strip().lower()
-            if screen_option in {"warp", "flat"}:
+            if screen_option in {"warp", "semi", "flat"}:
                 screen_variant = screen_option
 
             brass_option = str(options.get("brass", "")).strip().lower()
@@ -737,10 +742,10 @@ class GameEngine:
     def _is_warp_mode_active(self) -> bool:
         if not self.state:
             return False
-        if getattr(self.state, "screen_variant", None) == "warp":
+        if getattr(self.state, "screen_variant", None) in {"warp", "semi"}:
             return True
         current_mode = normalize_game_mode(getattr(self.state, "mode", DEFAULT_GAME_MODE))
-        return current_mode in {"warp-old", "warp", "i-warp", "sparse", "overflow", "nuke", "cross", "brass-old", "go"}
+        return current_mode in {"warp-old", "warp", "i-warp", "semi", "i-semi", "sparse", "overflow", "nuke", "cross", "brass-old", "go"}
 
     def _compute_warp_bounds(self) -> Optional[Dict[str, float]]:
         if not self._is_warp_mode_active():
@@ -768,6 +773,16 @@ class GameEngine:
             "height": height + 2.0 * margin_y,
         }
 
+    def _warp_axis_permissions(self) -> Tuple[bool, bool]:
+        if not self.state or not self._is_warp_mode_active():
+            return False, False
+        current_mode = normalize_game_mode(getattr(self.state, "mode", DEFAULT_GAME_MODE))
+        screen_variant = getattr(self.state, "screen_variant", None)
+        allow_horizontal = True
+        if current_mode in {"semi", "i-semi"} or screen_variant == "semi":
+            allow_horizontal = False
+        return allow_horizontal, True
+
     def _parse_client_warp_info(
         self,
         warp_info: Dict[str, Any],
@@ -790,6 +805,13 @@ class GameEngine:
 
         if axis != "none" and not self._is_warp_mode_active():
             raise GameValidationError("Warp bridges only allowed in warp mode")
+
+        if axis != "none":
+            allow_horizontal, allow_vertical = self._warp_axis_permissions()
+            if axis == "horizontal" and not allow_horizontal:
+                raise GameValidationError("Horizontal warping unavailable in this mode")
+            if axis == "vertical" and not allow_vertical:
+                raise GameValidationError("Vertical warping unavailable in this mode")
 
         segments_raw = warp_info.get("segments")
         if segments_raw is None:
@@ -921,8 +943,10 @@ class GameEngine:
 
         EPS = 1e-6
 
+        allow_horizontal, allow_vertical = self._warp_axis_permissions()
+
         # Horizontal wrap candidate
-        if abs(dx) > width / 2.0 + EPS:
+        if allow_horizontal and abs(dx) > width / 2.0 + EPS:
             adjust = -width if dx > 0 else width
             adjusted_target_x = to_node.x + adjust
             dx_wrap = adjusted_target_x - from_node.x
@@ -945,7 +969,7 @@ class GameEngine:
                             ]
 
         # Vertical wrap candidate
-        if abs(dy) > height / 2.0 + EPS:
+        if allow_vertical and abs(dy) > height / 2.0 + EPS:
             adjust = -height if dy > 0 else height
             adjusted_target_y = to_node.y + adjust
             dy_wrap = adjusted_target_y - from_node.y
@@ -1169,11 +1193,15 @@ class GameEngine:
             current_mode = normalize_game_mode(getattr(self.state, "mode", DEFAULT_GAME_MODE))
             is_cross_mode = current_mode == "cross"
             is_brass_mode = current_mode == "brass-old"
-            auto_brass_on_cross = bool(getattr(self.state, "auto_brass_on_cross", current_mode in {"warp", "flat"}))
-            manual_brass_selection = bool(getattr(self.state, "manual_brass_selection", current_mode in {"i-warp", "i-flat", "cross"}))
+            auto_brass_on_cross = bool(getattr(self.state, "auto_brass_on_cross", current_mode in {"warp", "semi", "flat"}))
+            manual_brass_selection = bool(getattr(self.state, "manual_brass_selection", current_mode in {"i-warp", "i-semi", "i-flat", "cross"}))
             brass_double_cost = bool(getattr(self.state, "brass_double_cost", manual_brass_selection or current_mode == "cross"))
-            screen_variant = getattr(self.state, "screen_variant", "warp" if current_mode in {"warp", "i-warp", "warp-old"} else "flat")
-            is_warp_variant_mode = auto_brass_on_cross or screen_variant == "warp" or current_mode in {"warp", "i-warp", "warp-old"}
+            screen_variant = getattr(
+                self.state,
+                "screen_variant",
+                "warp" if current_mode in {"warp", "i-warp", "warp-old", "semi", "i-semi"} else "flat",
+            )
+            is_warp_variant_mode = auto_brass_on_cross or screen_variant in {"warp", "semi"} or current_mode in {"warp", "i-warp", "warp-old", "semi", "i-semi"}
             is_cross_like_mode = current_mode in {"cross", "brass-old"}
 
             # Validate nodes

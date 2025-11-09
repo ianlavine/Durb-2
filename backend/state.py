@@ -512,7 +512,7 @@ class GraphState:
         """
         node_max = getattr(self, "node_max_juice", get_node_max_juice(self.mode))
         normalized_mode = normalize_game_mode(self.mode)
-        is_overflow_mode = normalized_mode in {"overflow", "nuke", "cross", "brass-old", "go", "warp", "flat", "i-warp", "i-flat"}
+        is_overflow_mode = normalized_mode in {"overflow", "nuke", "cross", "brass-old", "go", "warp", "semi", "flat", "i-warp", "i-semi", "i-flat"}
         is_go_mode = normalized_mode == "go"
         for edge in self.edges.values():
             # Handle bridge build gating: while building, edge cannot be on/flowing
@@ -613,7 +613,7 @@ class GraphState:
 
         node_max = getattr(self, "node_max_juice", get_node_max_juice(self.mode))
         normalized_mode = normalize_game_mode(self.mode)
-        is_overflow_mode = normalized_mode in {"overflow", "nuke", "cross", "brass-old", "go", "warp", "flat", "i-warp", "i-flat"}
+        is_overflow_mode = normalized_mode in {"overflow", "nuke", "cross", "brass-old", "go", "warp", "semi", "flat", "i-warp", "i-semi", "i-flat"}
         overflow_ratio = getattr(
             self,
             "overflow_juice_to_gold_ratio",

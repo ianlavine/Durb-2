@@ -264,6 +264,8 @@
     cross: 'Cross',
     warp: 'Warp',
     'warp-old': 'Warp (Old)',
+    semi: 'Semi',
+    'i-semi': 'I-Semi',
     'i-warp': 'I-Warp',
     'i-flat': 'I-Flat',
     'brass-old': 'Brass-Old',
@@ -372,11 +374,15 @@
     if (screen === 'warp') {
       return brass.startsWith('right') ? 'i-warp' : 'warp';
     }
+    if (screen === 'semi') {
+      return brass.startsWith('right') ? 'i-semi' : 'semi';
+    }
     return brass.startsWith('right') ? 'i-flat' : 'flat';
   }
 
   function formatModeSettingsSummary(settings = selectedSettings) {
-    const screenLabel = (settings.screen === 'warp') ? 'Warp' : 'Flat';
+    const screenValue = typeof settings.screen === 'string' ? settings.screen.toLowerCase() : 'flat';
+    const screenLabel = screenValue === 'warp' ? 'Warp' : (screenValue === 'semi' ? 'Semi' : 'Flat');
     const brassLabel = (settings.brass === 'right-click') ? 'Right-Click' : 'Cross';
     const startLabel = (settings.brassStart === 'anywhere') ? 'Anywhere' : 'Owned';
     const startModeLabel = (settings.gameStart === 'hidden-split') ? 'Hidden' : 'Open';
@@ -458,7 +464,14 @@
     const next = { ...selectedSettings };
     if (Object.prototype.hasOwnProperty.call(overrides, 'screen')) {
       const screen = typeof overrides.screen === 'string' ? overrides.screen.toLowerCase() : '';
-      next.screen = screen === 'warp' ? 'warp' : 'flat';
+      if (screen === 'warp' || screen === 'semi') {
+        next.screen = screen;
+      } else {
+        next.screen = 'flat';
+      }
+    } else {
+      const currentScreen = typeof next.screen === 'string' ? next.screen.toLowerCase() : 'flat';
+      next.screen = (currentScreen === 'warp' || currentScreen === 'semi') ? currentScreen : 'flat';
     }
     if (Object.prototype.hasOwnProperty.call(overrides, 'brass')) {
       const brass = typeof overrides.brass === 'string' ? overrides.brass.toLowerCase() : '';
@@ -609,7 +622,36 @@
 
   function isWarpLike(mode) {
     const normalized = normalizeMode(mode);
-    return ['warp-old', 'warp', 'i-warp', 'sparse', 'overflow', 'nuke', 'cross', 'brass-old', 'go'].includes(normalized);
+    return ['warp-old', 'warp', 'i-warp', 'semi', 'i-semi', 'sparse', 'overflow', 'nuke', 'cross', 'brass-old', 'go'].includes(normalized);
+  }
+
+  function isSemiWarpMode(value) {
+    const normalized = normalizeMode(value);
+    return normalized === 'semi' || normalized === 'i-semi';
+  }
+
+  function isSemiWarpDisplayActive() {
+    if (isSemiWarpMode(gameMode) && isWarpLike(gameMode)) {
+      return true;
+    }
+    if (!isWarpLike(gameMode)) {
+      return isSemiWarpMode(selectedMode);
+    }
+    return false;
+  }
+
+  function isSemiWarpGameplayActive() {
+    return isSemiWarpMode(gameMode);
+  }
+
+  function getWarpAxisPermissionsForGameplay() {
+    if (!isWarpLike(gameMode)) {
+      return { horizontal: false, vertical: false };
+    }
+    return {
+      horizontal: !isSemiWarpGameplayActive(),
+      vertical: true,
+    };
   }
 
   // Money transparency system
@@ -1467,7 +1509,13 @@
       return { allowWarp: false, preferredWrapAxis: null, preferredWrapDirection: null };
     }
     const axis = (lastWarpAxis === 'horizontal' || lastWarpAxis === 'vertical') ? lastWarpAxis : null;
-    if (!axis) {
+    const permissions = getWarpAxisPermissionsForGameplay();
+    const axisAllowed = axis === 'horizontal'
+      ? permissions.horizontal
+      : axis === 'vertical'
+        ? permissions.vertical
+        : false;
+    if (!axis || !axisAllowed) {
       return { allowWarp: false, preferredWrapAxis: null, preferredWrapDirection: null };
     }
     const direction = typeof lastWarpDirection === 'string' ? lastWarpDirection : null;
@@ -1490,6 +1538,9 @@
     const forcedAxis = allowWarp && (preferredAxis === 'horizontal' || preferredAxis === 'vertical') ? preferredAxis : null;
     const preferredDirection = options && typeof options.preferredWrapDirection === 'string' ? options.preferredWrapDirection : null;
     const forcedDirection = forcedAxis ? preferredDirection : null;
+    const permissions = getWarpAxisPermissionsForGameplay();
+    const horizontalAllowed = permissions.horizontal;
+    const verticalAllowed = permissions.vertical;
 
     const baseSegment = {
       wrapAxis: 'none',
@@ -1532,11 +1583,13 @@
       return best;
     }
 
-    const forceHorizontal = forcedAxis === 'horizontal';
-    const forceVertical = forcedAxis === 'vertical';
+    const forceHorizontal = horizontalAllowed && forcedAxis === 'horizontal';
+    const forceVertical = verticalAllowed && forcedAxis === 'vertical';
+    const allowHorizontalCandidate = horizontalAllowed && !forceVertical;
+    const allowVerticalCandidate = verticalAllowed && !forceHorizontal;
 
     // Horizontal wrap candidate (left/right)
-    if (forceHorizontal || (!forceVertical && Math.abs(dx) > width / 2 + EPS)) {
+    if (forceHorizontal || (allowHorizontalCandidate && Math.abs(dx) > width / 2 + EPS)) {
       const adjust = forceHorizontal
         ? (forcedDirection === 'leftToRight' ? -width
           : forcedDirection === 'rightToLeft' ? width
@@ -1576,7 +1629,7 @@
     }
 
     // Vertical wrap candidate (top/bottom)
-    if (forceVertical || (!forceHorizontal && Math.abs(dy) > height / 2 + EPS)) {
+    if (forceVertical || (allowVerticalCandidate && Math.abs(dy) > height / 2 + EPS)) {
       const adjust = forceVertical
         ? (forcedDirection === 'topToBottom' ? -height
           : forcedDirection === 'bottomToTop' ? height
@@ -2044,7 +2097,7 @@
 
   function isRingModeActive() {
     const mode = normalizeMode(gameMode);
-    return ['overflow', 'go', 'warp', 'i-warp', 'flat', 'i-flat'].includes(mode);
+    return ['overflow', 'go', 'warp', 'i-warp', 'semi', 'i-semi', 'flat', 'i-flat'].includes(mode);
   }
 
   function isNukeModeActive() {
@@ -2069,7 +2122,7 @@
 
   function isIntentionalBrassMode(mode) {
     const normalized = normalizeMode(mode);
-    return normalized === 'cross' || normalized === 'i-warp' || normalized === 'i-flat';
+    return normalized === 'cross' || normalized === 'i-warp' || normalized === 'i-flat' || normalized === 'i-semi';
   }
 
   function isIntentionalBrassModeActive() {
@@ -2078,7 +2131,7 @@
 
   function isCrossLikeModeActive() {
     const mode = normalizeMode(gameMode);
-    return mode === 'cross' || mode === 'brass-old' || mode === 'warp' || mode === 'i-warp' || mode === 'flat' || mode === 'i-flat';
+    return mode === 'cross' || mode === 'brass-old' || mode === 'warp' || mode === 'i-warp' || mode === 'semi' || mode === 'i-semi' || mode === 'flat' || mode === 'i-flat';
   }
 
   function isTrueCrossModeActive() {
@@ -2087,12 +2140,12 @@
 
   function isNukeLikeModeActive() {
     const mode = normalizeMode(gameMode);
-    return ['nuke', 'cross', 'brass-old', 'warp', 'i-warp', 'flat', 'i-flat'].includes(mode);
+    return ['nuke', 'cross', 'brass-old', 'warp', 'i-warp', 'semi', 'i-semi', 'flat', 'i-flat'].includes(mode);
   }
 
   function isXbModeActive() {
     const mode = normalizeMode(gameMode);
-    return mode === 'warp' || mode === 'flat';
+    return mode === 'warp' || mode === 'semi' || mode === 'flat';
   }
 
   function brassPipesDoubleCost() {
@@ -3434,9 +3487,15 @@ function clearBridgeSelection() {
       selectedMode = deriveModeFromSettings(selectedSettings);
       setSelectedMode(selectedMode, { force: true });
     } else {
+      let inferredScreen = 'flat';
+      if (gameMode === 'warp' || gameMode === 'i-warp') {
+        inferredScreen = 'warp';
+      } else if (gameMode === 'semi' || gameMode === 'i-semi') {
+        inferredScreen = 'semi';
+      }
       const inferred = {
-        screen: (gameMode === 'warp' || gameMode === 'i-warp') ? 'warp' : 'flat',
-        brass: (gameMode === 'i-warp' || gameMode === 'i-flat') ? 'right-click' : 'cross',
+        screen: inferredScreen,
+        brass: (gameMode === 'i-warp' || gameMode === 'i-flat' || gameMode === 'i-semi') ? 'right-click' : 'cross',
       };
       if (msg.settings && typeof msg.settings.bridgeCostPerUnit === 'number') {
         inferred.bridgeCost = msg.settings.bridgeCostPerUnit;
@@ -4939,7 +4998,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     // Draw border box around play area (warp border handles inner toggle)
     drawPlayAreaBorder();
     drawHiddenStartOverlay();
-    const overflowMode = ['overflow', 'nuke', 'cross', 'brass-old', 'go', 'warp', 'i-warp', 'flat', 'i-flat'].includes(normalizeMode(gameMode));
+    const overflowMode = ['overflow', 'nuke', 'cross', 'brass-old', 'go', 'warp', 'i-warp', 'semi', 'i-semi', 'flat', 'i-flat'].includes(normalizeMode(gameMode));
     const sandboxHoverEnabled = sandboxModeEnabled();
     
     // Show gold display when graph is being drawn and we have nodes/game data
@@ -5361,11 +5420,18 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
       graphicsEdges.lineStyle(5, WARP_BORDER_COLOR, 0.92);
       graphicsEdges.beginPath();
-      graphicsEdges.moveTo(warpTopLeftX, warpTopLeftY);
-      graphicsEdges.lineTo(warpTopRightX, warpTopRightY);
-      graphicsEdges.lineTo(warpBottomRightX, warpBottomRightY);
-      graphicsEdges.lineTo(warpBottomLeftX, warpBottomLeftY);
-      graphicsEdges.closePath();
+      if (isSemiWarpDisplayActive()) {
+        graphicsEdges.moveTo(warpTopLeftX, warpTopLeftY);
+        graphicsEdges.lineTo(warpTopRightX, warpTopRightY);
+        graphicsEdges.moveTo(warpBottomLeftX, warpBottomLeftY);
+        graphicsEdges.lineTo(warpBottomRightX, warpBottomRightY);
+      } else {
+        graphicsEdges.moveTo(warpTopLeftX, warpTopLeftY);
+        graphicsEdges.lineTo(warpTopRightX, warpTopRightY);
+        graphicsEdges.lineTo(warpBottomRightX, warpBottomRightY);
+        graphicsEdges.lineTo(warpBottomLeftX, warpBottomLeftY);
+        graphicsEdges.closePath();
+      }
       graphicsEdges.strokePath();
     } else {
       warpBoundsWorld = null;
@@ -5726,6 +5792,9 @@ function fallbackRemoveEdgesForNode(nodeId) {
     const bounds = warpBoundsScreen;
     const width = bounds.maxX - bounds.minX;
     const height = bounds.maxY - bounds.minY;
+    const permissions = getWarpAxisPermissionsForGameplay();
+    const horizontalAllowed = permissions.horizontal;
+    const verticalAllowed = permissions.vertical;
     let nextX = x;
     let nextY = y;
     const originalX = x;
@@ -5735,7 +5804,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     let wrapAxis = null;
     let wrapDirection = null;
 
-    if (width > 0) {
+    if (horizontalAllowed && width > 0) {
       if (originalX < bounds.minX) {
         const delta = bounds.minX - nextX;
         const wraps = Math.floor(delta / width) + 1;
@@ -5753,7 +5822,19 @@ function fallbackRemoveEdgesForNode(nodeId) {
       }
     }
 
-    if (height > 0) {
+    if (!horizontalAllowed) {
+      const clampedX = Math.max(bounds.minX, Math.min(bounds.maxX, nextX));
+      if (clampedX !== nextX) {
+        horizontalWrap = false;
+        if (!verticalWrap) {
+          wrapAxis = null;
+          wrapDirection = null;
+        }
+      }
+      nextX = clampedX;
+    }
+
+    if (verticalAllowed && height > 0) {
       if (originalY < bounds.minY) {
         const delta = bounds.minY - nextY;
         const wraps = Math.floor(delta / height) + 1;

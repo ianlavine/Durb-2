@@ -51,6 +51,14 @@ class GraphGenerator:
                 "edge_func": gen_graph.generate_sparse_edges,
                 "desired_edges": None,
             },
+            "semi": {
+                "edge_func": gen_graph.generate_sparse_edges,
+                "desired_edges": None,
+            },
+            "i-semi": {
+                "edge_func": gen_graph.generate_sparse_edges,
+                "desired_edges": None,
+            },
             "i-warp": {
                 "edge_func": gen_graph.generate_sparse_edges,
                 "desired_edges": None,
