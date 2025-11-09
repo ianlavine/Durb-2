@@ -105,6 +105,10 @@
   };
   const NODE_MOVE_DURATION_SEC = 1.8;
   const NODE_MOVE_EPSILON = 1e-4;
+  const PRE_PIPE_COLOR = 0xbec4cf;
+  const PRE_PIPE_OUTLINE_COLOR = 0x4a5568;
+  const PRE_PIPE_SHAKE_SPEED = 6.4;
+  const PRE_PIPE_SHAKE_AMPLITUDE = 2.1;
   let pendingSingleClickTimeout = null;
   let pendingSingleClickData = null;
 
@@ -175,6 +179,14 @@
   let persistentEdgeFlow = true; // persistent setting stored in localStorage (default to true)
   let edgeFlowTexts = new Map(); // edgeId -> text object
   const edgeRemovalAnimations = new Map(); // edgeId -> removal animation state
+
+  // Pre-move pipe system
+  let preMoveToggle = null;
+  let homePreMoveToggle = null;
+  let persistentPreMove = false;
+  const prePipes = new Map(); // id -> record
+  const prePipeKeyIndex = new Map(); // "from->to" -> id
+  let nextPrePipeId = 1;
   
   // Targeting overlay support (legacy feature locked off for now)
   let persistentTargeting = false;
@@ -1492,6 +1504,17 @@
     localStorage.setItem('edgeFlow', value.toString());
   }
 
+  function loadPersistentPreMove() {
+    const saved = localStorage.getItem('preMovePipes');
+    persistentPreMove = saved === 'true';
+    return persistentPreMove;
+  }
+
+  function savePersistentPreMove(value) {
+    persistentPreMove = !!value;
+    localStorage.setItem('preMovePipes', persistentPreMove.toString());
+  }
+
   // Helper: convert 0xRRGGBB -> "#rrggbb"
   function toCssColor(hex) {
     if (typeof hex === 'string') return hex;
@@ -2430,6 +2453,7 @@ function clearBridgeSelection() {
     loadPersistentAutoAttack();
     loadPersistentNumbers();
     loadPersistentEdgeFlow();
+    loadPersistentPreMove();
     loadPersistentSound();
 
     tryConnectWS();
@@ -3192,6 +3216,25 @@ function clearBridgeSelection() {
     }
   }
 
+  // Initialize pre-move toggle
+  preMoveToggle = document.getElementById('preMoveToggle');
+  if (preMoveToggle) {
+    const toggleSwitch = preMoveToggle.querySelector('.toggle-switch');
+    if (toggleSwitch) {
+      toggleSwitch.addEventListener('click', () => {
+        const newValue = !persistentPreMove;
+        savePersistentPreMove(newValue);
+        updatePreMoveToggle();
+        updateHomePreMoveToggle();
+        if (!newValue) {
+          clearAllPrePipes('toggleOff');
+        }
+        redrawStatic();
+      });
+    }
+  }
+  updatePreMoveToggle();
+
     // Initialize home screen auto-expand toggle
     homeAutoExpandToggle = document.getElementById('homeAutoExpandToggle');
     if (homeAutoExpandToggle) {
@@ -3252,6 +3295,23 @@ function clearBridgeSelection() {
       }
       // Initialize the toggle state
       updateHomeEdgeFlowToggle();
+    }
+
+    // Initialize potential home pre-move toggle shell
+    homePreMoveToggle = document.getElementById('homePreMoveToggle');
+    if (homePreMoveToggle) {
+      const toggleSwitch = homePreMoveToggle.querySelector('.toggle-switch');
+      if (toggleSwitch) {
+        toggleSwitch.addEventListener('click', () => {
+          const newValue = !persistentPreMove;
+          savePersistentPreMove(newValue);
+          updateHomePreMoveToggle();
+          updatePreMoveToggle();
+          if (!newValue) clearAllPrePipes('toggleOff');
+          redrawStatic();
+        });
+      }
+      updateHomePreMoveToggle();
     }
 
 
@@ -3321,6 +3381,8 @@ function clearBridgeSelection() {
 
     // Update money indicators
     updateMoneyIndicators();
+
+    const prePipeStateChanged = updatePrePipesState();
     
     // Update game timer
     const remainingTime = updateTimer();
@@ -3341,8 +3403,9 @@ function clearBridgeSelection() {
     }
     const anySpinning = updateReverseSpinAnimations();
     const removalAnimating = updateEdgeRemovalAnimations();
+    const prePipesAnimating = prePipes.size > 0;
     
-    if (hasFlowingEdges || anySpinning || removalAnimating || moneyIndicators.length > 0 || (persistentTargeting && currentTargetNodeId !== null) || nodesAnimating) {
+    if (hasFlowingEdges || anySpinning || removalAnimating || moneyIndicators.length > 0 || (persistentTargeting && currentTargetNodeId !== null) || nodesAnimating || prePipesAnimating || prePipeStateChanged) {
       redrawStatic();
     }
   }
@@ -3521,6 +3584,7 @@ function clearBridgeSelection() {
     hoveredNodeId = null;
     hoveredEdgeId = null;
     edgeRemovalAnimations.clear();
+    clearAllPrePipes('init', { skipRedraw: true });
     progressNameSegments.clear();
     if (progressNameContainer) progressNameContainer.innerHTML = '';
 
@@ -3751,6 +3815,10 @@ function clearBridgeSelection() {
     updateAutoAttackToggle();
     updateNumbersToggle();
     updateEdgeFlowToggle();
+    updatePreMoveToggle();
+    updateHomePreMoveToggle();
+    updatePreMoveToggle();
+    updateHomePreMoveToggle();
 
     myEliminated = eliminatedPlayers.has(myPlayerId);
     updateQuitButtonLabel();
@@ -4003,6 +4071,7 @@ function clearBridgeSelection() {
     }
     gameEnded = true;
     releaseVirtualCursor();
+    clearAllPrePipes('gameOver');
     if (!viewingReplay) {
       myEliminated = msg.winnerId !== myId;
     }
@@ -4968,6 +5037,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     hideReverseCostDisplay();
     edgeRemovalAnimations.clear();
     brassPreviewIntersections.clear();
+    clearAllPrePipes('sandbox', { skipRedraw: true });
     moneyIndicators = [];
     playerStats.forEach((stats) => {
       if (stats) stats.nodes = 0;
@@ -5197,6 +5267,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
         if (textObj) textObj.setVisible(false);
       }
     }
+
+    drawPrePipes();
 
     graphicsNodes.clear();
     for (const [id, n] of nodes.entries()) {
@@ -5890,6 +5962,14 @@ function fallbackRemoveEdgesForNode(nodeId) {
     }
 
     const edgeId = pickEdgeNear(wx, wy, 14 / baseScale);
+    if (edgeId == null) {
+      const prePipeId = pickPrePipeNear(wx, wy, 14 / baseScale);
+      if (prePipeId != null) {
+        removePrePipeById(prePipeId, { reason: 'player' });
+        lastPointerDownButton = -1;
+        return;
+      }
+    }
     if (edgeId != null && ws && ws.readyState === WebSocket.OPEN) {
       const edge = edges.get(edgeId);
       if (edge) {
@@ -6260,7 +6340,9 @@ function fallbackRemoveEdgesForNode(nodeId) {
       wantBrass = !!useBrass;
     }
 
-    if (pipeStartRequiresOwnership() && node.owner !== myPlayerId) {
+    const ownershipRequired = pipeStartRequiresOwnership();
+    const lacksOwnership = ownershipRequired && node.owner !== myPlayerId;
+    if (lacksOwnership && !isPreMoveEnabled()) {
       showErrorMessage('Pipes must start from your nodes', 'money');
       brassActivationDenied = true;
       return false;
@@ -6293,7 +6375,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
       if (node) {
         if (bridgeFirstNode === null) {
           // Start bridge building from any node
-          if (pipeStartRequiresOwnership() && node.owner !== myPlayerId) {
+          if (pipeStartRequiresOwnership() && node.owner !== myPlayerId && !isPreMoveEnabled()) {
             showErrorMessage('Pipes must start from your nodes', 'money');
             return true;
           }
@@ -6317,19 +6399,16 @@ function fallbackRemoveEdgesForNode(nodeId) {
             showErrorMessage('Cannot cross brass pipe');
             return true;
           }
-          if (pipeStartRequiresOwnership()) {
-            const firstOwner = firstNode.owner;
-            if (firstOwner !== myPlayerId) {
-              showErrorMessage('Pipes must start from your nodes', 'money');
-              return true;
-            }
-          }
+          const ownershipRequired = pipeStartRequiresOwnership();
+          const firstOwner = firstNode.owner;
+          const lacksOwnership = ownershipRequired && firstOwner !== myPlayerId;
           const useBrassPipe = bridgePreviewWillBeBrass && isCrossLikeModeActive();
           const warpPreference = getActiveWarpPreference();
           const cost = calculateBridgeCost(firstNode, node, applyBrassCost, warpPreference);
+          const hasFunds = sandboxModeEnabled() || goldValue >= cost;
+          const shouldQueuePrePipe = isPreMoveEnabled() && (lacksOwnership || !hasFunds);
 
-          if (goldValue >= cost && ws && ws.readyState === WebSocket.OPEN) {
-
+          if (!lacksOwnership && hasFunds && ws && ws.readyState === WebSocket.OPEN) {
             const token = localStorage.getItem('token');
             const warpInfo = buildWarpInfoForBridge(firstNode, node, warpPreference);
             const warpInfoPayload = warpInfo ? {
@@ -6359,10 +6438,30 @@ function fallbackRemoveEdgesForNode(nodeId) {
             ws.send(JSON.stringify(buildBridgePayload));
             // Don't reset bridge building state here - wait for server response
             return true; // Handled
-          } else if (goldValue < cost) {
-            // Not enough gold to complete bridge building - show brief error
+          }
+
+          if (shouldQueuePrePipe) {
+            queuePrePipe(bridgeFirstNode, nodeId, {
+              warpPreference,
+              pipeType: useBrassPipe ? 'gold' : 'normal',
+              waitingForOwnership: lacksOwnership,
+              waitingForGold: !sandboxModeEnabled() && !hasFunds,
+              estimatedCost: cost,
+            });
+            activeAbility = null;
+            clearBridgeSelection();
+            hideBridgeCostDisplay();
+            hideReverseCostDisplay();
+            return true;
+          }
+
+          if (lacksOwnership) {
+            showErrorMessage('Pipes must start from your nodes', 'money');
+            return true;
+          }
+          if (!hasFunds) {
             showErrorMessage('Not enough money', 'money');
-            return true; // Handled
+            return true;
           }
         } else {
           // Clicked same node, cancel selection
@@ -6434,6 +6533,12 @@ function fallbackRemoveEdgesForNode(nodeId) {
     // Handle bridge building mode
     if (handleBridgeBuilding(wx, wy, baseScale, false)) {
       return; // Bridge building was handled
+    }
+
+    const prePipeId = pickPrePipeNear(wx, wy, 14 / baseScale);
+    if (prePipeId != null) {
+      removePrePipeById(prePipeId, { reason: 'player' });
+      return;
     }
     
     // Reverse is not a persistent mode anymore (handled via right-click only)
@@ -6966,6 +7071,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
       stopReplaySession();
     }
     releaseVirtualCursor();
+    clearAllPrePipes('menu');
     replayMode = false;
     replayStartPending = false;
     replaySessionActive = false;
@@ -7175,6 +7281,349 @@ function fallbackRemoveEdgesForNode(nodeId) {
     if (!toggleSwitch) return;
     if (persistentEdgeFlow) toggleSwitch.classList.add('enabled');
     else toggleSwitch.classList.remove('enabled');
+  }
+
+  function updatePreMoveToggle() {
+    if (!preMoveToggle) return;
+    const toggleSwitch = preMoveToggle.querySelector('.toggle-switch');
+    if (!toggleSwitch) return;
+    if (persistentPreMove) toggleSwitch.classList.add('enabled');
+    else toggleSwitch.classList.remove('enabled');
+  }
+
+  function updateHomePreMoveToggle() {
+    const toggleSwitch = document.querySelector('#preMoveToggle .toggle-switch');
+    if (!toggleSwitch) return;
+    if (persistentPreMove) toggleSwitch.classList.add('enabled');
+    else toggleSwitch.classList.remove('enabled');
+  }
+
+  function isPreMoveEnabled() {
+    if (!persistentPreMove) return false;
+    if (replayMode || replayStartPending || replaySessionActive) return false;
+    return true;
+  }
+
+  function getPrePipeKey(fromNodeId, toNodeId) {
+    return `${fromNodeId}->${toNodeId}`;
+  }
+
+  function clearAllPrePipes(reason = '', options = {}) {
+    if (!prePipes.size) return;
+    prePipes.clear();
+    prePipeKeyIndex.clear();
+    if (!options.skipRedraw && graphicsEdges) {
+      redrawStatic();
+    }
+  }
+
+  function removePrePipeById(id, options = {}) {
+    const record = prePipes.get(id);
+    if (!record) return;
+    prePipes.delete(id);
+    const key = getPrePipeKey(record.fromNodeId, record.toNodeId);
+    if (prePipeKeyIndex.get(key) === id) {
+      prePipeKeyIndex.delete(key);
+    }
+    if (options.reason === 'brass') {
+      showPrePipeIndicator(record, 'Blocked', '#f9aa7a');
+    } else if (options.reason === 'player') {
+      showPrePipeIndicator(record, 'Canceled', '#d4dae4');
+    }
+    if (!options.skipRedraw && graphicsEdges) {
+      redrawStatic();
+    }
+  }
+
+  function showPrePipeIndicator(prePipe, text, color) {
+    if (!prePipe) return;
+    const fromNode = nodes.get(prePipe.fromNodeId);
+    const toNode = nodes.get(prePipe.toNodeId);
+    if (!fromNode || !toNode) return;
+    const midX = (fromNode.x + toNode.x) / 2;
+    const midY = (fromNode.y + toNode.y) / 2;
+    createMoneyIndicator(midX, midY, text, color || '#dfe3ea', 1400, {
+      strokeColor: 'rgba(0,0,0,0.4)',
+      strokeThickness: 0.6,
+      worldOffset: -0.3,
+      floatDistance: 18,
+    });
+  }
+
+  function queuePrePipe(fromNodeId, toNodeId, options = {}) {
+    if (!isPreMoveEnabled()) return;
+    if (fromNodeId == null || toNodeId == null || fromNodeId === toNodeId) return;
+    const fromNode = nodes.get(fromNodeId);
+    const toNode = nodes.get(toNodeId);
+    if (!fromNode || !toNode) return;
+
+    const key = getPrePipeKey(fromNodeId, toNodeId);
+    let record = null;
+    if (prePipeKeyIndex.has(key)) {
+      const existingId = prePipeKeyIndex.get(key);
+      record = prePipes.get(existingId) || null;
+    }
+    const isNewRecord = !record;
+
+    const warpPreference = options.warpPreference && typeof options.warpPreference === 'object'
+      ? { ...options.warpPreference }
+      : null;
+    const waitingForOwnership = !!options.waitingForOwnership;
+    const waitingForGold = !!options.waitingForGold;
+    const pipeType = options.pipeType === 'gold' ? 'gold' : 'normal';
+    const basePlayerColor = ownerToColor(myPlayerId) || 0xffffff;
+    const baseColorCss = toCssColor(basePlayerColor);
+    const outlineCss = lightenColor(baseColorCss, 0.75);
+    const outlineColor = hexToInt(outlineCss);
+
+    if (record) {
+      record.waitingForOwnership = waitingForOwnership || record.waitingForOwnership;
+      record.waitingForGold = waitingForGold || record.waitingForGold;
+      record.warpPreference = warpPreference || record.warpPreference;
+      record.pipeType = pipeType;
+    } else {
+      const id = nextPrePipeId++;
+      record = {
+        id,
+        fromNodeId,
+        toNodeId,
+        pipeType,
+        warpPreference,
+        waitingForOwnership,
+        waitingForGold,
+        createdAt: Date.now(),
+        lastKnownCost: Number(options.estimatedCost) || 0,
+        outlineColor,
+      };
+      prePipes.set(id, record);
+      prePipeKeyIndex.set(key, id);
+    }
+
+    if (isNewRecord) {
+      showPrePipeIndicator(record, options.message || 'Queued', '#dce2ec');
+    }
+    updatePrePipesState();
+    if (graphicsEdges) {
+      redrawStatic();
+    }
+  }
+
+  function getPrePipeSegments(prePipe, options = {}) {
+    const includeMeta = !!options.includeMeta;
+    if (!prePipe) return [];
+    const fromNode = nodes.get(prePipe.fromNodeId);
+    const toNode = nodes.get(prePipe.toNodeId);
+    if (!fromNode || !toNode) return [];
+    const path = computeWarpBridgeSegments(fromNode, toNode, prePipe.warpPreference || {});
+    const segments = [];
+    if (!path || !Array.isArray(path.segments) || !path.segments.length) {
+      const entry = { sx: fromNode.x, sy: fromNode.y, ex: toNode.x, ey: toNode.y };
+      if (includeMeta) {
+        entry.startNode = fromNode;
+        entry.endNode = toNode;
+      }
+      segments.push(entry);
+      return segments;
+    }
+    path.segments.forEach((segment) => {
+      if (!segment || !segment.start || !segment.end) return;
+      const sx = Number(segment.start.x);
+      const sy = Number(segment.start.y);
+      const ex = Number(segment.end.x);
+      const ey = Number(segment.end.y);
+      if (![sx, sy, ex, ey].every((value) => Number.isFinite(value))) return;
+      const entry = { sx, sy, ex, ey };
+      if (includeMeta) {
+        entry.startNode = segment.start.node || null;
+        entry.endNode = segment.end.node || null;
+      }
+      segments.push(entry);
+    });
+    return segments;
+  }
+
+  function prePipeBlockedByBrass(prePipe) {
+    const segments = getPrePipeSegments(prePipe);
+    if (!segments.length) return false;
+    let blocked = false;
+    edges.forEach((edge) => {
+      if (blocked || !edge || edge.removing) return;
+      if (edge.pipeType !== 'gold') return;
+      if (edge.source === prePipe.fromNodeId || edge.source === prePipe.toNodeId || edge.target === prePipe.fromNodeId || edge.target === prePipe.toNodeId) {
+        return;
+      }
+      const edgeSegments = getEdgeWarpSegments(edge);
+      if (!edgeSegments.length) return;
+      for (const cand of segments) {
+        for (const existing of edgeSegments) {
+          if (![cand, existing].every(Boolean)) continue;
+          if ([cand.sx, cand.sy, cand.ex, cand.ey, existing.sx, existing.sy, existing.ex, existing.ey].every((value) => Number.isFinite(value)) &&
+            segmentsIntersect(cand.sx, cand.sy, cand.ex, cand.ey, existing.sx, existing.sy, existing.ex, existing.ey)) {
+            blocked = true;
+            return;
+          }
+        }
+      }
+    });
+    return blocked;
+  }
+
+  function attemptSendPrePipe(prePipe, forcedCost) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    const token = localStorage.getItem('token');
+    if (!token) return false;
+    const fromNode = nodes.get(prePipe.fromNodeId);
+    const toNode = nodes.get(prePipe.toNodeId);
+    if (!fromNode || !toNode) return false;
+    const warpInfo = buildWarpInfoForBridge(fromNode, toNode, prePipe.warpPreference || {});
+    const applyBrassCost = prePipe.pipeType === 'gold' && brassPipesDoubleCost();
+    const cost = Number.isFinite(forcedCost)
+      ? forcedCost
+      : calculateBridgeCost(fromNode, toNode, applyBrassCost, prePipe.warpPreference || {});
+    const payload = {
+      type: 'buildBridge',
+      fromNodeId: prePipe.fromNodeId,
+      toNodeId: prePipe.toNodeId,
+      cost,
+      warpInfo,
+      token,
+      pipeType: prePipe.pipeType || 'normal',
+    };
+    ws.send(JSON.stringify(payload));
+    showPrePipeIndicator(prePipe, 'Building', '#b7f1c0');
+    return true;
+  }
+
+  function updatePrePipesState() {
+    if (!prePipes.size) return false;
+    if (!isPreMoveEnabled()) {
+      clearAllPrePipes('disabled', { skipRedraw: true });
+      return true;
+    }
+    const removals = [];
+    prePipes.forEach((prePipe, id) => {
+      const fromNode = nodes.get(prePipe.fromNodeId);
+      const toNode = nodes.get(prePipe.toNodeId);
+      if (!fromNode || !toNode) {
+        removals.push({ id, reason: 'missing' });
+        return;
+      }
+      const applyBrassCost = prePipe.pipeType === 'gold' && brassPipesDoubleCost();
+      const cost = calculateBridgeCost(fromNode, toNode, applyBrassCost, prePipe.warpPreference || {});
+      prePipe.lastKnownCost = cost;
+      prePipe.waitingForOwnership = pipeStartRequiresOwnership() && fromNode.owner !== myPlayerId;
+      const infiniteMoney = sandboxModeEnabled();
+      prePipe.waitingForGold = !infiniteMoney && goldValue < cost;
+      if (prePipeBlockedByBrass(prePipe)) {
+        removals.push({ id, reason: 'brass' });
+        return;
+      }
+      if (!prePipe.waitingForOwnership && !prePipe.waitingForGold) {
+        const sent = attemptSendPrePipe(prePipe, cost);
+        if (sent) {
+          removals.push({ id, reason: 'sent' });
+        }
+      }
+    });
+
+    let changed = removals.length > 0;
+    removals.forEach(({ id, reason }) => {
+      if (reason === 'brass') {
+        removePrePipeById(id, { reason: 'brass', skipRedraw: true });
+      } else {
+        removePrePipeById(id, { skipRedraw: true });
+      }
+    });
+    if (changed && graphicsEdges) {
+      redrawStatic();
+    }
+    return changed;
+  }
+
+  function drawPrePipes() {
+    if (!prePipes.size) return;
+    const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
+    prePipes.forEach((prePipe) => {
+      const segments = getPrePipeSegments(prePipe, { includeMeta: true });
+      if (!segments.length) return;
+      segments.forEach((segment, index) => {
+        drawPrePipeSegment(segment, prePipe, index, baseScale);
+      });
+    });
+  }
+
+  function drawPrePipeSegment(segment, prePipe, segmentIndex, baseScale) {
+    if (!segment) return;
+    const [sx0, sy0] = worldToScreen(segment.sx, segment.sy);
+    const [tx0, ty0] = worldToScreen(segment.ex, segment.ey);
+    const dx0 = tx0 - sx0;
+    const dy0 = ty0 - sy0;
+    const len0 = Math.max(1, Math.hypot(dx0, dy0));
+    const ux0 = dx0 / len0;
+    const uy0 = dy0 / len0;
+
+    const startRadius = segment.startNode ? endpointRadius({ node: segment.startNode }, baseScale) : 0;
+    const endRadius = segment.endNode ? endpointRadius({ node: segment.endNode }, baseScale) : 0;
+
+    const sx = sx0 + ux0 * startRadius;
+    const sy = sy0 + uy0 * startRadius;
+    const tx = tx0 - ux0 * endRadius;
+    const ty = ty0 - uy0 * endRadius;
+
+    const dx = tx - sx;
+    const dy = ty - sy;
+    const len = Math.max(1, Math.hypot(dx, dy));
+    const ux = dx / len;
+    const uy = dy / len;
+
+    const normalX = -uy;
+    const normalY = ux;
+
+    const triH = PIPE_TRIANGLE_HEIGHT;
+    const triW = PIPE_TRIANGLE_WIDTH;
+    const spacing = triH;
+    const count = Math.max(1, Math.floor(len / spacing));
+    const actualSpacing = len / count;
+    const angle = Math.atan2(uy, ux);
+    const waitingOwnership = !!prePipe.waitingForOwnership;
+    const waitingGold = !!prePipe.waitingForGold;
+    const outlineColor = Number.isFinite(prePipe.outlineColor) ? prePipe.outlineColor : PRE_PIPE_OUTLINE_COLOR;
+    const outlineAlpha = waitingOwnership ? 0.8 : (waitingGold ? 0.55 : 0.3);
+    const wave = Math.sin(animationTime * PRE_PIPE_SHAKE_SPEED);
+
+    for (let i = 0; i < count; i++) {
+      const alternatingSign = (i % 2 === 0) ? 1 : -1;
+      const sway = PRE_PIPE_SHAKE_AMPLITUDE * alternatingSign * wave;
+      const offsetX = normalX * sway;
+      const offsetY = normalY * sway;
+      const cx = sx + (i + 0.5) * actualSpacing * ux + offsetX;
+      const cy = sy + (i + 0.5) * actualSpacing * uy + offsetY;
+      drawPrePipeTriangle(cx, cy, triW, triH, angle, outlineColor, outlineAlpha);
+    }
+  }
+
+  function drawPrePipeTriangle(cx, cy, baseW, height, angle, outlineColor, outlineAlpha) {
+    const [p1, p2, p3] = computeTrianglePoints(cx, cy, baseW, height, angle);
+    graphicsEdges.lineStyle(1.4, outlineColor, outlineAlpha);
+    graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
+  }
+
+  function pickPrePipeNear(wx, wy, maxDist) {
+    if (!prePipes.size) return null;
+    const maxD2 = maxDist * maxDist;
+    let bestId = null;
+    let bestD2 = maxD2;
+    prePipes.forEach((prePipe, id) => {
+      const segments = getPrePipeSegments(prePipe);
+      segments.forEach((seg) => {
+        const d2 = pointToSegmentDistanceSquared(wx, wy, seg.sx, seg.sy, seg.ex, seg.ey);
+        if (d2 <= bestD2) {
+          bestId = id;
+          bestD2 = d2;
+        }
+      });
+    });
+    return bestId;
   }
 
 
