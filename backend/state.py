@@ -851,9 +851,30 @@ class GraphState:
                 if getattr(self, "win_condition", "dominate") == "king":
                     king_owner_id = getattr(node, "king_owner_id", None)
                     if king_owner_id is not None and king_owner_id != new_owner:
-                        self.game_ended = True
-                        self.winner_id = new_owner
-                        king_victory_triggered = True
+                        # Remove king tracking for the eliminated player
+                        self.player_king_nodes.pop(king_owner_id, None)
+                        setattr(node, "king_owner_id", None)
+
+                        if king_owner_id not in self.eliminated_players:
+                            self.eliminated_players.add(king_owner_id)
+                            self.pending_eliminations.append(king_owner_id)
+                            if king_owner_id in self.player_auto_expand:
+                                self.player_auto_expand[king_owner_id] = False
+                            if king_owner_id in self.player_auto_attack:
+                                self.player_auto_attack[king_owner_id] = False
+                            if hasattr(self, "pending_auto_expand_nodes"):
+                                self.pending_auto_expand_nodes.pop(king_owner_id, None)
+                            if hasattr(self, "pending_auto_attack_nodes"):
+                                self.pending_auto_attack_nodes.pop(king_owner_id, None)
+
+                        remaining_players = [
+                            pid for pid in self.players.keys() if pid not in self.eliminated_players
+                        ]
+
+                        if len(remaining_players) == 1:
+                            self.game_ended = True
+                            self.winner_id = remaining_players[0]
+                            king_victory_triggered = True
                         # Continue processing other pending ownership changes to keep state consistent
 
         # All edges are now one-way only - no auto-adjustment needed
