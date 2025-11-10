@@ -204,6 +204,7 @@ class MessageRouter:
             "ringJuiceToGoldRatio": 30.0,
             "ringPayoutGold": 10.0,
             "startingNodeJuice": 150.0,
+            "winCondition": "dominate",
         }
         if not isinstance(payload, dict):
             settings["pipeStart"] = settings["brassStart"]
@@ -297,6 +298,12 @@ class MessageRouter:
             clamped_start = max(UNOWNED_NODE_BASE_JUICE, min(NODE_MAX_JUICE, parsed_start))
             snapped = round(clamped_start / 10.0) * 10.0
             settings["startingNodeJuice"] = max(UNOWNED_NODE_BASE_JUICE, min(NODE_MAX_JUICE, snapped))
+
+        win_condition_value = payload.get("winCondition", settings.get("winCondition"))
+        if isinstance(win_condition_value, str) and win_condition_value.strip().lower() == "king":
+            settings["winCondition"] = "king"
+        else:
+            settings["winCondition"] = "dominate"
 
         settings["pipeStart"] = settings["brassStart"]
 

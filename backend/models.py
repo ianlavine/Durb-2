@@ -23,6 +23,7 @@ class Node:
     cur_intake: float = 0.0  # amount of juice received from friendly nodes in last tick
     pending_gold: float = 0.0  # overflow progress towards gold payout
     node_type: str = "normal"  # 'normal' or 'brass'
+    king_owner_id: Optional[int] = None  # original owner when node is a king
     
 
 

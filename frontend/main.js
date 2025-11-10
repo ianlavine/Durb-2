@@ -126,6 +126,8 @@
   let progressNameSegments = new Map();
   let winThreshold = 40; // default, will be updated from backend
   let totalNodes = 60; // default, will be updated from backend
+  let winCondition = 'dominate';
+  const kingNodesByPlayer = new Map();
   
   // UI background bars
   let topUiBar = null;
@@ -211,6 +213,7 @@
         ringPayoutGold: 10,
         baseMode: LEGACY_DEFAULT_MODE || 'basic',
         derivedMode: LEGACY_DEFAULT_MODE || 'basic',
+        winCondition: 'dominate',
       }
     : {
         screen: 'flat',
@@ -223,6 +226,7 @@
         neutralCaptureGold: 10,
         ringJuiceToGoldRatio: 30,
         ringPayoutGold: 10,
+        winCondition: 'dominate',
       };
 
   const INITIAL_MODE = LEGACY_DEFAULT_MODE || (IS_LEGACY_CLIENT ? 'basic' : 'flat');
@@ -376,6 +380,11 @@
     return Math.round(stepped);
   }
 
+  function normalizeWinCondition(value) {
+    if (typeof value !== 'string') return 'dominate';
+    return value.trim().toLowerCase() === 'king' ? 'king' : 'dominate';
+  }
+
   function deriveModeFromSettings(settings = selectedSettings) {
     if (IS_LEGACY_CLIENT) {
       return LEGACY_DEFAULT_MODE || 'basic';
@@ -404,7 +413,8 @@
     const ringRatioLabel = coerceRingRatio(settings.ringJuiceToGoldRatio);
     const ringPayoutLabel = coerceRingPayout(settings.ringPayoutGold);
     const startJuiceLabel = coerceStartingNodeJuice(settings.startingNodeJuice);
-    return `${screenLabel} · ${brassLabel} · ${startLabel} · ${startModeLabel} · ${costLabel} · Passive ${passiveLabel} · Neutral ${neutralLabel} · Ring ${ringRatioLabel}:${ringPayoutLabel} · Start ${startJuiceLabel}`;
+    const winConLabel = normalizeWinCondition(settings.winCondition) === 'king' ? 'King' : 'Dominate';
+    return `Win-Con ${winConLabel} · ${screenLabel} · ${brassLabel} · ${startLabel} · ${startModeLabel} · ${costLabel} · Passive ${passiveLabel} · Neutral ${neutralLabel} · Ring ${ringRatioLabel}:${ringPayoutLabel} · Start ${startJuiceLabel}`;
   }
 
   function updateModeOptionButtonStates() {
@@ -449,6 +459,9 @@
         }
       } else if (setting === 'bridgeCost') {
         isActive = Number(value) === currentCost;
+      } else if (setting === 'winCondition') {
+        const normalized = normalizeWinCondition(value);
+        isActive = normalized === normalizeWinCondition(selectedSettings.winCondition);
       }
       btn.classList.toggle('active', isActive);
     });
@@ -529,6 +542,11 @@
     } else {
       next.startingNodeJuice = coerceStartingNodeJuice(next.startingNodeJuice);
     }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'winCondition')) {
+      next.winCondition = normalizeWinCondition(overrides.winCondition);
+    } else {
+      next.winCondition = normalizeWinCondition(next.winCondition);
+    }
 
     if (next.gameStart === 'hidden-split' && !isHiddenStartAllowed()) {
       next.gameStart = 'open';
@@ -560,6 +578,7 @@
       ringPayoutGold: coerceRingPayout(selectedSettings.ringPayoutGold),
       baseMode: selectedMode,
       derivedMode: selectedMode,
+      winCondition: selectedSettings.winCondition || 'dominate',
     };
   }
 
@@ -577,6 +596,7 @@
     if (Object.prototype.hasOwnProperty.call(payload, 'neutralCaptureGold')) overrides.neutralCaptureGold = payload.neutralCaptureGold;
     if (Object.prototype.hasOwnProperty.call(payload, 'ringJuiceToGoldRatio')) overrides.ringJuiceToGoldRatio = payload.ringJuiceToGoldRatio;
     if (Object.prototype.hasOwnProperty.call(payload, 'ringPayoutGold')) overrides.ringPayoutGold = payload.ringPayoutGold;
+    if (Object.prototype.hasOwnProperty.call(payload, 'winCondition')) overrides.winCondition = payload.winCondition;
     applySelectedSettings(overrides);
   }
 
@@ -3355,6 +3375,7 @@ function clearBridgeSelection() {
       tickIntervalSec = msg.tickInterval;
     }
     nodes.clear();
+    kingNodesByPlayer.clear();
     edges.clear();
     players.clear();
     playerStats.clear();
@@ -3374,6 +3395,8 @@ function clearBridgeSelection() {
     nodeJuiceTexts.clear();
 
     gameMode = normalizeMode(msg.mode || 'basic');
+    const initWinCon = msg.winCondition ?? (msg.modeSettings && msg.modeSettings.winCondition);
+    winCondition = normalizeWinCondition(initWinCon || 'dominate');
     if (msg.modeSettings) {
       syncSelectedSettingsFromPayload(msg.modeSettings);
       selectedMode = deriveModeFromSettings(selectedSettings);
@@ -3413,8 +3436,10 @@ function clearBridgeSelection() {
 
     if (Array.isArray(msg.nodes)) {
       for (const arr of msg.nodes) {
-        const [id, x, y, size, owner, pendingGold = 0, brassFlag = 0] = arr;
+        const [id, x, y, size, owner, pendingGold = 0, brassFlag = 0, kingOwnerRaw = null] = arr;
         const isBrass = Number(brassFlag) === 1;
+        const parsedKingOwner = kingOwnerRaw == null ? null : Number(kingOwnerRaw);
+        const kingOwnerId = Number.isFinite(parsedKingOwner) ? parsedKingOwner : null;
         nodes.set(id, {
           x,
           y,
@@ -3428,9 +3453,13 @@ function clearBridgeSelection() {
           owner,
           pendingGold: Number(pendingGold) || 0,
           isBrass,
+          kingOwnerId,
+          isKing: kingOwnerId != null,
         });
       }
     }
+
+    rebuildKingNodes();
 
     const edgeWarpMap = msg.edgeWarp || {};
     if (Array.isArray(msg.edges)) {
@@ -3937,9 +3966,12 @@ function clearBridgeSelection() {
     if (typeof msg.mode === 'string') {
       gameMode = normalizeMode(msg.mode);
     }
+    if (typeof msg.winCondition === 'string') {
+      winCondition = normalizeWinCondition(msg.winCondition);
+    }
     if (Array.isArray(msg.nodes)) {
       msg.nodes.forEach((entry) => {
-        const [id, size, owner, pendingGold = 0, brassFlag = 0] = entry;
+        const [id, size, owner, pendingGold = 0, brassFlag = 0, kingOwnerRaw = null] = entry;
         const node = nodes.get(id);
         if (node) {
           const oldOwner = node.owner;
@@ -3947,6 +3979,10 @@ function clearBridgeSelection() {
           node.owner = owner;
           node.pendingGold = Number(pendingGold) || 0;
           node.isBrass = Number(brassFlag) === 1;
+        const parsedKingOwner = kingOwnerRaw == null ? null : Number(kingOwnerRaw);
+          const kingOwnerId = Number.isFinite(parsedKingOwner) ? parsedKingOwner : null;
+          node.kingOwnerId = kingOwnerId;
+          node.isKing = kingOwnerId != null;
           if (oldOwner !== owner) {
             // Enemy capture sound: you captured from someone else
             if (owner === myPlayerId && oldOwner != null && oldOwner !== myPlayerId) {
@@ -3960,6 +3996,8 @@ function clearBridgeSelection() {
         }
       });
     }
+
+    rebuildKingNodes();
 
     if (Array.isArray(msg.edges)) {
       const seenEdgeIds = new Set();
@@ -4118,6 +4156,16 @@ function clearBridgeSelection() {
     updateProgressBar();
     redrawStatic();
     updateSandboxButtonVisibility();
+  }
+
+  function rebuildKingNodes() {
+    kingNodesByPlayer.clear();
+    if (winCondition !== 'king') return;
+    nodes.forEach((node, nodeId) => {
+      if (node && Number.isFinite(node.kingOwnerId)) {
+        kingNodesByPlayer.set(Number(node.kingOwnerId), nodeId);
+      }
+    });
   }
 
   function handleNewEdge(msg) {
@@ -4732,6 +4780,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
       );
     }
 
+    rebuildKingNodes();
     redrawStatic();
 
     // Reset destroy mode on successful node destruction
@@ -4752,6 +4801,9 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
   function handleSandboxNodeCreated(msg) {
     if (!msg || !msg.node) return;
+    if (typeof msg.winCondition === 'string') {
+      winCondition = normalizeWinCondition(msg.winCondition);
+    }
     const data = msg.node;
     const id = Number(data.id);
     if (!Number.isFinite(id)) return;
@@ -4782,6 +4834,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
       owner,
       pendingGold,
       isBrass,
+      kingOwnerId: null,
+      isKing: false,
     });
 
     if (typeof msg.totalNodes === 'number') {
@@ -4791,11 +4845,18 @@ function fallbackRemoveEdgesForNode(nodeId) {
       winThreshold = Number(msg.winThreshold);
     }
 
+    rebuildKingNodes();
+
     redrawStatic();
     updateProgressBar();
   }
 
   function handleSandboxBoardCleared(msg) {
+    if (typeof msg?.winCondition === 'string') {
+      winCondition = normalizeWinCondition(msg.winCondition);
+    } else {
+      winCondition = 'dominate';
+    }
     nodeJuiceTexts.forEach((text) => {
       if (text) text.destroy();
     });
@@ -4806,6 +4867,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     edgeFlowTexts.clear();
     edges.clear();
     nodes.clear();
+    kingNodesByPlayer.clear();
     hoveredNodeId = null;
     hoveredEdgeId = null;
     currentTargetNodeId = null;
@@ -4833,6 +4895,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
       winThreshold = 0;
     }
 
+    rebuildKingNodes();
     updateGoldBar();
     updateProgressBar();
     redrawStatic();
@@ -4957,6 +5020,47 @@ function fallbackRemoveEdgesForNode(nodeId) {
     if (context === 'bridge') return original || 'Invalid Pipe!';
     if (context === 'reverse') return original || "Can't reverse this pipe!";
     return original || 'Error';
+  }
+
+  function drawKingCrown(nx, ny, radius, ownerColor) {
+    if (!graphicsNodes) return;
+    const baseWidth = Math.max(18, radius * 2.4);
+    const baseHeight = Math.max(3, radius * 0.3);
+    const baseY = ny - radius - 6;
+    const leftX = nx - baseWidth / 2;
+    const spikeHeight = Math.max(10, radius * 1.1);
+    const spikeHalfWidth = Math.max(4, baseWidth * 0.12);
+    const spikeOffsets = [-0.35, 0, 0.35];
+    const highlightColor = ownerColor || 0xffcc33;
+
+    graphicsNodes.fillStyle(0xffd700, 1);
+    graphicsNodes.fillRect(leftX, baseY, baseWidth, baseHeight);
+    graphicsNodes.lineStyle(2, highlightColor, 0.9);
+    graphicsNodes.strokeRect(leftX, baseY, baseWidth, baseHeight);
+
+    spikeOffsets.forEach((offset) => {
+      const centerX = nx + baseWidth * offset * 0.8;
+      const heightScale = offset === 0 ? 1 : 0.85;
+      const spikeTopY = baseY - spikeHeight * heightScale;
+      graphicsNodes.fillStyle(0xffd700, 1);
+      graphicsNodes.fillTriangle(
+        centerX,
+        spikeTopY,
+        centerX - spikeHalfWidth,
+        baseY,
+        centerX + spikeHalfWidth,
+        baseY
+      );
+      graphicsNodes.lineStyle(2, highlightColor, 0.9);
+      graphicsNodes.strokeTriangle(
+        centerX,
+        spikeTopY,
+        centerX - spikeHalfWidth,
+        baseY,
+        centerX + spikeHalfWidth,
+        baseY
+      );
+    });
   }
 
   function redrawStatic() {
@@ -5140,6 +5244,12 @@ function fallbackRemoveEdgesForNode(nodeId) {
           graphicsNodes.lineStyle(1, 0x000000, 0.35);
           graphicsNodes.strokeTriangle(topX, topY, leftX, leftY, rightX, rightY);
         }
+      }
+
+      const kingOwnerId = Number.isFinite(n.kingOwnerId) ? Number(n.kingOwnerId) : null;
+      if (winCondition === 'king' && kingOwnerId != null) {
+        const crownColor = ownerToColor(kingOwnerId);
+        drawKingCrown(nx, ny, r, crownColor);
       }
 
       // Hover effect: player's color border when eligible for starting node pick
@@ -6739,6 +6849,26 @@ function fallbackRemoveEdgesForNode(nodeId) {
       return;
     }
 
+    if (winCondition !== 'dominate') {
+      progressBarInner.innerHTML = '';
+      progressSegments.clear();
+      const notice = document.createElement('div');
+      notice.className = 'progressSegment winConNotice';
+      notice.textContent = 'Win-Con: King · Capture the crowned node';
+      notice.style.flex = '1';
+      progressBarInner.appendChild(notice);
+      progressBarInner.style.justifyContent = 'center';
+      if (progressBar) progressBar.style.display = nodes.size > 0 ? 'block' : 'none';
+      if (progressMarkerLeft) progressMarkerLeft.style.display = 'none';
+      if (progressMarkerRight) progressMarkerRight.style.display = 'none';
+      if (progressNameContainer) {
+        progressNameContainer.innerHTML = '';
+        progressNameContainer.style.display = 'none';
+      }
+      progressNameSegments.clear();
+      return;
+    }
+
     const orderedIds = playerOrder.length ? playerOrder : Array.from(players.keys()).sort((a, b) => a - b);
     const activeIds = orderedIds.filter((id) => players.has(id) && !eliminatedPlayers.has(id));
 
@@ -6851,6 +6981,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     }
     releaseVirtualCursor();
     clearAllPrePipes('menu');
+    kingNodesByPlayer.clear();
     replayMode = false;
     replayStartPending = false;
     replaySessionActive = false;
