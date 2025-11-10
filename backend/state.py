@@ -103,6 +103,10 @@ class GraphState:
         self.hidden_start_picks: Dict[int, int] = {}
         self.hidden_start_bounds: Optional[Dict[str, float]] = None
         self.hidden_start_original_sizes: Dict[int, float] = {}
+
+        # Win condition configuration
+        self.win_condition: str = "dominate"
+        self.player_king_nodes: Dict[int, int] = {}
         
 
     def add_player(self, player: Player) -> None:
@@ -133,6 +137,8 @@ class GraphState:
     def calculate_win_threshold(self) -> int:
         """Calculate the number of nodes needed to win based on total nodes (2/3 rule)."""
         total_nodes = len(self.nodes)
+        if getattr(self, "win_condition", "dominate") != "dominate":
+            return total_nodes
         if total_nodes % 3 == 0:
             # If divisible by 3, need exactly 2/3
             return (total_nodes * 2) // 3
@@ -144,6 +150,9 @@ class GraphState:
         """Check if any player has reached the win threshold. Returns winner ID or None."""
         if self.game_ended:
             return self.winner_id
+
+        if getattr(self, "win_condition", "dominate") != "dominate":
+            return None
             
         # Only check after picking phase is complete
         if self.phase == "picking":
@@ -250,6 +259,7 @@ class GraphState:
             "y": node.y,
             "owner": node.owner,
             "juice": node.juice,
+            "kingOwnerId": getattr(node, "king_owner_id", None),
         }
 
         edges_to_remove = list(node.attached_edge_ids)
@@ -267,6 +277,10 @@ class GraphState:
         for pending_nodes in self.pending_auto_expand_nodes.values():
             if pending_nodes and node_id in pending_nodes:
                 pending_nodes.discard(node_id)
+
+        king_owner = getattr(node, "king_owner_id", None)
+        if king_owner is not None and self.player_king_nodes.get(king_owner) == node_id:
+            self.player_king_nodes.pop(king_owner, None)
 
         self.nodes.pop(node_id, None)
 
@@ -336,6 +350,7 @@ class GraphState:
                 (n.owner if n.owner is not None else None),
                 round(getattr(n, "pending_gold", 0.0), 3),
                 1 if getattr(n, "node_type", "normal") == "brass" else 0,
+                getattr(n, "king_owner_id", None),
             ]
             for nid, n in self.nodes.items()
         ]
@@ -379,6 +394,15 @@ class GraphState:
         picked_arr = [[pid, bool(self.players_who_picked.get(pid, False))] for pid in self.players.keys()]
         auto_expand_arr = [[pid, bool(self.player_auto_expand.get(pid, False))] for pid in self.players.keys()]
         auto_attack_arr = [[pid, bool(self.player_auto_attack.get(pid, False))] for pid in self.players.keys()]
+
+        king_nodes_payload: List[List[int]] = []
+        for pid, nid in self.player_king_nodes.items():
+            if nid not in self.nodes:
+                continue
+            try:
+                king_nodes_payload.append([int(pid), int(nid)])
+            except (TypeError, ValueError):
+                continue
         
         # Calculate win threshold for progress bar
         win_threshold = self.calculate_win_threshold()
@@ -426,6 +450,8 @@ class GraphState:
             "mode": self.mode,
             "modeSettings": dict(self.mode_settings or {}),
             "edgeWarp": edge_warp,
+            "winCondition": self.win_condition,
+            "kingNodes": king_nodes_payload,
         }
 
     def to_tick_message(self, current_time: float = 0.0) -> Dict:
@@ -447,6 +473,7 @@ class GraphState:
                 (n.owner if n.owner is not None else None),
                 round(getattr(n, "pending_gold", 0.0), 3),
                 1 if getattr(n, "node_type", "normal") == "brass" else 0,
+                getattr(n, "king_owner_id", None),
             ]
             for nid, n in self.nodes.items()
         ]
@@ -470,6 +497,15 @@ class GraphState:
         self.pending_edge_removals = []
         node_movements = self.pop_pending_node_movements()
 
+        king_nodes_payload: List[List[int]] = []
+        for pid, nid in self.player_king_nodes.items():
+            if nid not in self.nodes:
+                continue
+            try:
+                king_nodes_payload.append([int(pid), int(nid)])
+            except (TypeError, ValueError):
+                continue
+
         message = {
             "type": "tick",
             "edges": edges_arr,
@@ -488,6 +524,8 @@ class GraphState:
             "timerRemaining": timer_remaining,
             "mode": self.mode,
             "modeSettings": dict(self.mode_settings or {}),
+            "winCondition": self.win_condition,
+            "kingNodes": king_nodes_payload,
         }
 
         if node_movements:
@@ -777,6 +815,7 @@ class GraphState:
                 node.juice = max(NODE_MIN_JUICE, min(node_max, updated_amount))
 
         # Apply pending ownership changes and award gold for capturing unowned nodes
+        king_victory_triggered = False
         for nid, new_owner in pending_ownership.items():
             node = self.nodes.get(nid)
             if node is None:
@@ -809,8 +848,20 @@ class GraphState:
 
                 node.owner = new_owner
 
+                if getattr(self, "win_condition", "dominate") == "king":
+                    king_owner_id = getattr(node, "king_owner_id", None)
+                    if king_owner_id is not None and king_owner_id != new_owner:
+                        self.game_ended = True
+                        self.winner_id = new_owner
+                        king_victory_triggered = True
+                        # Continue processing other pending ownership changes to keep state consistent
+
         # All edges are now one-way only - no auto-adjustment needed
         
+        if king_victory_triggered:
+            self.tick_count += 1
+            return
+
         # Handle auto-expand for newly captured nodes
         for nid, new_owner in pending_ownership.items():
             if self.player_auto_expand.get(new_owner, False):

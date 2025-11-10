@@ -158,6 +158,7 @@ class GameEngine:
         overflow_payout = OVERFLOW_PENDING_GOLD_PAYOUT
         starting_node_juice_value = STARTING_NODE_JUICE
         starting_node_juice_overridden = False
+        win_condition = "dominate"
 
         if isinstance(options, dict):
             screen_option = str(options.get("screen", "")).strip().lower()
@@ -244,6 +245,10 @@ class GameEngine:
                 starting_node_juice_value = round(clamped_start, 2)
                 starting_node_juice_overridden = True
 
+            win_condition_option = options.get("winCondition")
+            if isinstance(win_condition_option, str) and win_condition_option.strip().lower() == "king":
+                win_condition = "king"
+
         if normalized_mode == "basic":
             auto_brass_on_cross = False
             manual_brass_selection = False
@@ -276,6 +281,7 @@ class GameEngine:
             "neutralCaptureGold": neutral_capture_reward,
             "ringJuiceToGoldRatio": overflow_ratio,
             "ringPayoutGold": overflow_payout,
+            "winCondition": win_condition,
         }
         sanitized_options["pipeStart"] = sanitized_options["brassStart"]
         if isinstance(options, dict):
@@ -293,6 +299,9 @@ class GameEngine:
         self.state.neutral_capture_reward = neutral_capture_reward
         self.state.overflow_juice_to_gold_ratio = overflow_ratio
         self.state.overflow_pending_gold_payout = overflow_payout
+        self.state.win_condition = win_condition
+        if win_condition != "king":
+            self.state.player_king_nodes.clear()
 
         return sanitized_options
 
@@ -466,6 +475,8 @@ class GameEngine:
         new_state.eliminated_players.clear()
         new_state.pending_eliminations = []
         new_state.mode = DEFAULT_GAME_MODE
+        new_state.win_condition = "dominate"
+        new_state.player_king_nodes.clear()
         new_state.node_max_juice = get_node_max_juice(DEFAULT_GAME_MODE)
         new_state.neutral_capture_reward = get_neutral_capture_reward(DEFAULT_GAME_MODE)
         new_state.bridge_cost_per_unit = get_bridge_cost_per_unit(DEFAULT_GAME_MODE)
@@ -604,6 +615,9 @@ class GameEngine:
                 self.state.player_gold[player_id] = self.state.player_gold.get(player_id, 0.0) + reward
                 node.juice = getattr(self.state, "starting_node_juice", STARTING_NODE_JUICE)
                 node.owner = player_id
+                if getattr(self.state, "win_condition", "dominate") == "king":
+                    self.state.player_king_nodes[player_id] = node_id
+                    setattr(node, "king_owner_id", player_id)
                 self.state.players_who_picked[player_id] = True
                 if self.state.hidden_start_active:
                     self.state.hidden_start_picks[player_id] = node_id
@@ -1585,14 +1599,19 @@ class GameEngine:
         for eliminated_id in list(self.state.eliminated_players):
             self._deactivate_player_edges(eliminated_id)
 
+        if self.state.game_ended and self.state.winner_id is not None:
+            self._end_game()
+            return self.state.winner_id
+
         sandbox_mode = bool(getattr(self.state, "sandbox_mode", False))
 
         if not sandbox_mode:
-            # Check for node count victory (2/3 rule)
-            winner_id = self.state.check_node_count_victory()
-            if winner_id is not None:
-                self._end_game()
-                return winner_id
+            if getattr(self.state, "win_condition", "dominate") == "dominate":
+                # Check for node count victory (2/3 rule)
+                winner_id = self.state.check_node_count_victory()
+                if winner_id is not None:
+                    self._end_game()
+                    return winner_id
 
             # Check for zero nodes loss condition
             winner_id = self.state.check_zero_nodes_loss()
@@ -1698,6 +1717,9 @@ class GameEngine:
             # Validate node
             node = self.validate_node_exists(node_id)
             self.validate_player_owns_node(node, player_id)
+
+            if getattr(self.state, "win_condition", "dominate") == "king" and getattr(node, "king_owner_id", None) == player_id:
+                raise GameValidationError("Can't destroy your king node")
             
             # Validate gold
             self.validate_sufficient_gold(player_id, cost)
@@ -1734,6 +1756,9 @@ class GameEngine:
 
             node = self.validate_node_exists(node_id)
             self.validate_player_owns_node(node, player_id)
+
+            if getattr(self.state, "win_condition", "dominate") == "king" and getattr(node, "king_owner_id", None) == player_id:
+                raise GameValidationError("Can't nuke your king node")
 
             removal_info = self.state.remove_node_and_edges(node_id)
             if not removal_info:
@@ -1781,6 +1806,7 @@ class GameEngine:
                 },
                 "totalNodes": len(self.state.nodes),
                 "winThreshold": self.state.calculate_win_threshold(),
+                "winCondition": getattr(self.state, "win_condition", "dominate"),
             }
         except GameValidationError:
             return None
@@ -1807,12 +1833,14 @@ class GameEngine:
                 self.state.pending_node_captures = []
             if hasattr(self.state, "pending_edge_reversal"):
                 self.state.pending_edge_reversal = None
+            self.state.player_king_nodes.clear()
 
             return {
                 "removedNodes": removed_nodes,
                 "removedEdges": removed_edges,
                 "totalNodes": len(self.state.nodes),
                 "winThreshold": self.state.calculate_win_threshold(),
+                "winCondition": getattr(self.state, "win_condition", "dominate"),
             }
         except GameValidationError:
             return None
