@@ -56,6 +56,8 @@ class MessageRouter:
             "localTargeting": self.handle_local_targeting,
             "destroyNode": self.handle_destroy_node,
             "nukeNode": self.handle_nuke_node,
+            "kingRequestMoves": self.handle_king_request_moves,
+            "kingMove": self.handle_king_move,
             "quitGame": self.handle_quit_game,
             "toggleAutoExpand": self.handle_toggle_auto_expand,
             "toggleAutoAttack": self.handle_toggle_auto_attack,
@@ -910,6 +912,94 @@ class MessageRouter:
             },
         )
 
+    async def handle_king_request_moves(
+        self,
+        websocket: websockets.WebSocketServerProtocol,
+        msg: Dict[str, Any],
+        server_context: Dict[str, Any],
+    ) -> None:
+        token = msg.get("token")
+        origin_node_id = msg.get("originNodeId")
+        if token is None:
+            return
+
+        game_info = self._get_game_info(token, server_context)
+        if not game_info:
+            return
+
+        engine = game_info["engine"]
+        origin_arg: Optional[int] = None
+        if origin_node_id is not None:
+            try:
+                origin_arg = int(origin_node_id)
+            except (TypeError, ValueError):
+                origin_arg = None
+
+        success, targets, error_msg, current_node_id = engine.get_king_move_options(token, origin_arg)
+        if not success:
+            await self._send_safe(
+                websocket,
+                json.dumps({"type": "kingMoveError", "message": error_msg or "Unable to calculate king moves"}),
+            )
+            return
+
+        payload = {
+            "type": "kingMoveOptions",
+            "originNodeId": current_node_id,
+            "targets": [int(t) for t in targets],
+        }
+        await self._send_safe(websocket, json.dumps(payload))
+
+    async def handle_king_move(
+        self,
+        websocket: websockets.WebSocketServerProtocol,
+        msg: Dict[str, Any],
+        server_context: Dict[str, Any],
+    ) -> None:
+        token = msg.get("token")
+        destination_node_id = msg.get("destinationNodeId")
+        if destination_node_id is None:
+            destination_node_id = msg.get("targetNodeId")
+        if token is None or destination_node_id is None:
+            return
+
+        try:
+            destination_int = int(destination_node_id)
+        except (TypeError, ValueError):
+            await self._send_safe(
+                websocket,
+                json.dumps({"type": "kingMoveError", "message": "Invalid destination node"}),
+            )
+            return
+
+        game_info = self._get_game_info(token, server_context)
+        if not game_info:
+            return
+
+        engine = game_info["engine"]
+        success, error_msg, payload = engine.handle_move_king(token, destination_int)
+        if not success or not payload:
+            await self._send_safe(
+                websocket,
+                json.dumps({"type": "kingMoveError", "message": error_msg or "Unable to move king"}),
+            )
+            return
+
+        broadcast_payload = {
+            "type": "kingMoved",
+            "playerId": int(payload["playerId"]),
+            "fromNodeId": int(payload["fromNodeId"]),
+            "toNodeId": int(payload["toNodeId"]),
+        }
+        await self._broadcast_to_game(game_info, broadcast_payload)
+
+        event_payload = {
+            "playerId": int(payload["playerId"]),
+            "fromNodeId": int(payload["fromNodeId"]),
+            "toNodeId": int(payload["toNodeId"]),
+        }
+        self._record_game_event(game_info, token, "moveKing", event_payload)
+
     async def handle_quit_game(
         self,
         websocket: websockets.WebSocketServerProtocol,
@@ -1326,6 +1416,57 @@ class MessageRouter:
             target_node_id = msg.get("targetNodeId")
             if target_node_id is not None:
                 bot_game_engine.handle_redirect_energy(token, int(target_node_id))
+
+        elif msg_type == "kingRequestMoves":
+            origin_node_id = msg.get("originNodeId")
+            origin_arg: Optional[int] = None
+            if origin_node_id is not None:
+                try:
+                    origin_arg = int(origin_node_id)
+                except (TypeError, ValueError):
+                    origin_arg = None
+
+            success, targets, error_msg, current_node_id = bot_game_engine.get_king_move_options(token, origin_arg)
+            if not success:
+                await self._send_safe(
+                    websocket,
+                    json.dumps({"type": "kingMoveError", "message": error_msg or "Unable to calculate king moves"}),
+                )
+            else:
+                payload = {
+                    "type": "kingMoveOptions",
+                    "originNodeId": current_node_id,
+                    "targets": [int(t) for t in targets],
+                }
+                await self._send_safe(websocket, json.dumps(payload))
+
+        elif msg_type == "kingMove":
+            destination_node_id = msg.get("destinationNodeId")
+            if destination_node_id is None:
+                destination_node_id = msg.get("targetNodeId")
+            if destination_node_id is not None:
+                try:
+                    destination_int = int(destination_node_id)
+                except (TypeError, ValueError):
+                    await self._send_safe(
+                        websocket,
+                        json.dumps({"type": "kingMoveError", "message": "Invalid destination node"}),
+                    )
+                else:
+                    success, error_msg, payload = bot_game_engine.handle_move_king(token, destination_int)
+                    if not success or not payload:
+                        await self._send_safe(
+                            websocket,
+                            json.dumps({"type": "kingMoveError", "message": error_msg or "Unable to move king"}),
+                        )
+                    else:
+                        message = {
+                            "type": "kingMoved",
+                            "playerId": int(payload["playerId"]),
+                            "fromNodeId": int(payload["fromNodeId"]),
+                            "toNodeId": int(payload["toNodeId"]),
+                        }
+                        await self._send_safe(websocket, json.dumps(message))
 
         elif msg_type == "localTargeting":
             target_node_id = msg.get("targetNodeId")

@@ -4,7 +4,8 @@ Handles game state management, validation, and game rules.
 """
 import math
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from collections import deque
+from typing import Any, Dict, List, Optional, Set, Tuple
 from .constants import (
     BRIDGE_BASE_COST,
     BRIDGE_COST_PER_UNIT_DISTANCE,
@@ -649,6 +650,134 @@ class GameEngine:
         except GameValidationError:
             return False
     
+    def _validate_king_context(self, player_id: int) -> int:
+        """Ensure king movement is available and return the current king node id."""
+        if not self.state:
+            raise GameValidationError("No game state")
+        if getattr(self.state, "win_condition", "dominate") != "king":
+            raise GameValidationError("King moves are disabled")
+        if player_id in self.state.eliminated_players:
+            raise GameValidationError("Player eliminated")
+        king_node_id = self.state.player_king_nodes.get(player_id)
+        if king_node_id is None:
+            raise GameValidationError("No king to move")
+        king_node = self.state.nodes.get(king_node_id)
+        if king_node is None or king_node.owner != player_id:
+            raise GameValidationError("King node not controlled")
+        return king_node_id
+
+    def _compute_king_reachable_nodes(self, *, player_id: int, origin_node_id: int) -> Set[int]:
+        """Return the set of nodes the king can reach via owned nodes and forward pipes."""
+        if not self.state:
+            return set()
+
+        visited: Set[int] = {origin_node_id}
+        reachable: Set[int] = set()
+        queue = deque([origin_node_id])
+
+        while queue:
+            current_id = queue.popleft()
+            current_node = self.state.nodes.get(current_id)
+            if not current_node or current_node.owner != player_id:
+                continue
+
+            for edge_id in list(current_node.attached_edge_ids):
+                edge = self.state.edges.get(edge_id)
+                if not edge:
+                    continue
+                if getattr(edge, "building", False):
+                    continue
+                if edge.source_node_id != current_id:
+                    continue
+
+                target_id = edge.target_node_id
+                if target_id in visited:
+                    continue
+                target_node = self.state.nodes.get(target_id)
+                if not target_node or target_node.owner != player_id:
+                    continue
+
+                visited.add(target_id)
+                queue.append(target_id)
+                if target_id != origin_node_id:
+                    reachable.add(target_id)
+
+        return reachable
+
+    def get_king_move_options(
+        self,
+        token: str,
+        origin_node_id: Optional[int] = None,
+    ) -> Tuple[bool, List[int], Optional[str], Optional[int]]:
+        """Return reachable nodes for the requesting player's king."""
+        try:
+            self.validate_game_active()
+            player_id = self.validate_player(token)
+            self.validate_player_can_act(player_id)
+
+            current_node_id = self._validate_king_context(player_id)
+            if origin_node_id is not None:
+                try:
+                    origin_int = int(origin_node_id)
+                except (TypeError, ValueError):
+                    raise GameValidationError("Invalid king node")
+                if origin_int != current_node_id:
+                    raise GameValidationError("King location has changed")
+
+            reachable = sorted(
+                self._compute_king_reachable_nodes(
+                    player_id=player_id,
+                    origin_node_id=current_node_id,
+                )
+            )
+            return True, reachable, None, current_node_id
+
+        except GameValidationError as exc:
+            return False, [], str(exc), None
+
+    def handle_move_king(
+        self,
+        token: str,
+        destination_node_id: int,
+    ) -> Tuple[bool, Optional[str], Optional[Dict[str, int]]]:
+        """Attempt to move the player's king to a new node."""
+        try:
+            self.validate_game_active()
+            player_id = self.validate_player(token)
+            self.validate_player_can_act(player_id)
+            current_node_id = self._validate_king_context(player_id)
+
+            destination_node = self.validate_node_exists(destination_node_id)
+            if destination_node.owner != player_id:
+                raise GameValidationError("Must move to a controlled node")
+            if current_node_id == destination_node_id:
+                raise GameValidationError("King already occupies this node")
+
+            reachable = self._compute_king_reachable_nodes(
+                player_id=player_id,
+                origin_node_id=current_node_id,
+            )
+            if destination_node_id not in reachable:
+                raise GameValidationError("Destination not reachable")
+
+            current_node = self.state.nodes.get(current_node_id) if self.state else None
+            if current_node:
+                setattr(current_node, "king_owner_id", None)
+            setattr(destination_node, "king_owner_id", player_id)
+
+            if self.state:
+                self.state.player_king_nodes[player_id] = destination_node_id
+
+            payload = {
+                "playerId": player_id,
+                "fromNodeId": current_node_id,
+                "toNodeId": destination_node_id,
+            }
+            return True, None, payload
+
+        except GameValidationError as exc:
+            return False, str(exc), None
+
     def handle_edge_click(self, token: str, edge_id: int) -> bool:
         """
         Handle an edge click to toggle flow.
