@@ -20,6 +20,7 @@ from .constants import (
     STARTING_GOLD,
     STARTING_NODE_JUICE,
     UNOWNED_NODE_BASE_JUICE,
+    KING_CROWN_MAX_HEALTH,
     get_neutral_capture_reward,
     get_node_max_juice,
     get_overflow_juice_to_gold_ratio,
@@ -90,6 +91,7 @@ class GraphState:
         self.intake_transfer_ratio: float = INTAKE_TRANSFER_RATIO
         self.reserve_transfer_ratio: float = RESERVE_TRANSFER_RATIO
         self.starting_node_juice: float = STARTING_NODE_JUICE
+        self.king_crown_max_health: float = KING_CROWN_MAX_HEALTH
 
         # Geometry updates queued for the next tick payload
         self.pending_node_movements: Dict[int, Dict[str, float]] = {}
@@ -351,6 +353,15 @@ class GraphState:
                 round(getattr(n, "pending_gold", 0.0), 3),
                 1 if getattr(n, "node_type", "normal") == "brass" else 0,
                 getattr(n, "king_owner_id", None),
+                round(getattr(n, "king_crown_health", 0.0), 3),
+                round(
+                    getattr(
+                        n,
+                        "king_crown_max_health",
+                        getattr(self, "king_crown_max_health", KING_CROWN_MAX_HEALTH),
+                    ),
+                    3,
+                ),
             ]
             for nid, n in self.nodes.items()
         ]
@@ -474,6 +485,15 @@ class GraphState:
                 round(getattr(n, "pending_gold", 0.0), 3),
                 1 if getattr(n, "node_type", "normal") == "brass" else 0,
                 getattr(n, "king_owner_id", None),
+                round(getattr(n, "king_crown_health", 0.0), 3),
+                round(
+                    getattr(
+                        n,
+                        "king_crown_max_health",
+                        getattr(self, "king_crown_max_health", KING_CROWN_MAX_HEALTH),
+                    ),
+                    3,
+                ),
             ]
             for nid, n in self.nodes.items()
         ]
@@ -765,10 +785,30 @@ class GraphState:
                 intake_tracking[to_id] += actual_transfer
                 size_delta[to_id] += actual_transfer
             elif to_node.owner is None or (from_node.owner is not None and to_node.owner != from_node.owner):
-                size_delta[to_id] -= actual_transfer
-                projected = max(NODE_MIN_JUICE, to_node.juice + size_delta[to_id])
-                if projected <= NODE_MIN_JUICE and from_node.owner is not None:
-                    pending_ownership[to_id] = from_node.owner
+                remaining_attack = actual_transfer
+                crown_owner_id = getattr(to_node, "king_owner_id", None)
+                if (
+                    crown_owner_id is not None
+                    and to_node.owner is not None
+                    and to_node.owner == crown_owner_id
+                ):
+                    crown_health = max(0.0, float(getattr(to_node, "king_crown_health", 0.0)))
+                    if crown_health > 0.0:
+                        absorbed = min(crown_health, remaining_attack)
+                        crown_health = max(0.0, crown_health - absorbed)
+                        remaining_attack -= absorbed
+                        setattr(to_node, "king_crown_health", crown_health)
+                        if not hasattr(to_node, "king_crown_max_health") or getattr(to_node, "king_crown_max_health", 0.0) <= 0.0:
+                            setattr(
+                                to_node,
+                                "king_crown_max_health",
+                                getattr(self, "king_crown_max_health", KING_CROWN_MAX_HEALTH),
+                            )
+                if remaining_attack > 0.0:
+                    size_delta[to_id] -= remaining_attack
+                    projected = max(NODE_MIN_JUICE, to_node.juice + size_delta[to_id])
+                    if projected <= NODE_MIN_JUICE and from_node.owner is not None:
+                        pending_ownership[to_id] = from_node.owner
             else:
                 size_delta[to_id] += actual_transfer
 
@@ -854,6 +894,8 @@ class GraphState:
                         # Remove king tracking for the eliminated player
                         self.player_king_nodes.pop(king_owner_id, None)
                         setattr(node, "king_owner_id", None)
+                        setattr(node, "king_crown_health", 0.0)
+                        setattr(node, "king_crown_max_health", 0.0)
 
                         if king_owner_id not in self.eliminated_players:
                             self.eliminated_players.add(king_owner_id)

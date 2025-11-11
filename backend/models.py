@@ -24,6 +24,8 @@ class Node:
     pending_gold: float = 0.0  # overflow progress towards gold payout
     node_type: str = "normal"  # 'normal' or 'brass'
     king_owner_id: Optional[int] = None  # original owner when node is a king
+    king_crown_health: float = 0.0  # remaining crown durability
+    king_crown_max_health: float = 0.0  # maximum crown durability for this crown
     
 
 

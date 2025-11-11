@@ -128,6 +128,7 @@
   let totalNodes = 60; // default, will be updated from backend
   let winCondition = 'dominate';
   const kingNodesByPlayer = new Map();
+  let kingCrownDefaultMax = 0;
   let kingSelectionActive = false;
   let kingSelectedNodeId = null;
   const kingMoveTargets = new Set();
@@ -3423,6 +3424,7 @@ function clearBridgeSelection() {
     }
     nodes.clear();
     kingNodesByPlayer.clear();
+    kingCrownDefaultMax = 0;
     clearKingSelection({ skipRedraw: true });
     edges.clear();
     players.clear();
@@ -3484,10 +3486,45 @@ function clearBridgeSelection() {
 
     if (Array.isArray(msg.nodes)) {
       for (const arr of msg.nodes) {
-        const [id, x, y, size, owner, pendingGold = 0, brassFlag = 0, kingOwnerRaw = null] = arr;
+        const [
+          id,
+          x,
+          y,
+          size,
+          owner,
+          pendingGold = 0,
+          brassFlag = 0,
+          kingOwnerRaw = null,
+          crownHealthRaw = null,
+          crownMaxRaw = null,
+        ] = arr;
         const isBrass = Number(brassFlag) === 1;
         const parsedKingOwner = kingOwnerRaw == null ? null : Number(kingOwnerRaw);
         const kingOwnerId = Number.isFinite(parsedKingOwner) ? parsedKingOwner : null;
+        let crownHealth = Number(crownHealthRaw);
+        if (!Number.isFinite(crownHealth)) crownHealth = null;
+        let crownMax = Number(crownMaxRaw);
+        if (!Number.isFinite(crownMax)) crownMax = null;
+        if (kingOwnerId != null) {
+          if (Number.isFinite(crownMax) && crownMax > 0) {
+            kingCrownDefaultMax = Math.max(kingCrownDefaultMax, crownMax);
+          } else if (Number.isFinite(crownHealth) && crownHealth > 0) {
+            crownMax = crownHealth;
+          } else if (kingCrownDefaultMax > 0) {
+            crownMax = kingCrownDefaultMax;
+          }
+          if (!Number.isFinite(crownHealth) && Number.isFinite(crownMax)) {
+            crownHealth = crownMax;
+          }
+        } else {
+          crownHealth = 0;
+          crownMax = 0;
+        }
+        if (kingOwnerId != null && Number.isFinite(crownMax) && crownMax > 0) {
+          kingCrownDefaultMax = Math.max(kingCrownDefaultMax, crownMax);
+        }
+        const normalizedCrownMax = Number.isFinite(crownMax) ? Math.max(0, crownMax) : 0;
+        const normalizedCrownHealth = Number.isFinite(crownHealth) ? Math.max(0, crownHealth) : 0;
         nodes.set(id, {
           x,
           y,
@@ -3503,6 +3540,8 @@ function clearBridgeSelection() {
           isBrass,
           kingOwnerId,
           isKing: kingOwnerId != null,
+          kingCrownHealth: normalizedCrownHealth,
+          kingCrownMax: normalizedCrownMax,
         });
       }
     }
@@ -4021,7 +4060,16 @@ function clearBridgeSelection() {
     }
     if (Array.isArray(msg.nodes)) {
       msg.nodes.forEach((entry) => {
-        const [id, size, owner, pendingGold = 0, brassFlag = 0, kingOwnerRaw = null] = entry;
+        const [
+          id,
+          size,
+          owner,
+          pendingGold = 0,
+          brassFlag = 0,
+          kingOwnerRaw = null,
+          crownHealthRaw = null,
+          crownMaxRaw = null,
+        ] = entry;
         const node = nodes.get(id);
         if (node) {
           const oldOwner = node.owner;
@@ -4029,10 +4077,36 @@ function clearBridgeSelection() {
           node.owner = owner;
           node.pendingGold = Number(pendingGold) || 0;
           node.isBrass = Number(brassFlag) === 1;
-        const parsedKingOwner = kingOwnerRaw == null ? null : Number(kingOwnerRaw);
+          const parsedKingOwner = kingOwnerRaw == null ? null : Number(kingOwnerRaw);
           const kingOwnerId = Number.isFinite(parsedKingOwner) ? parsedKingOwner : null;
           node.kingOwnerId = kingOwnerId;
           node.isKing = kingOwnerId != null;
+          let crownHealth = Number(crownHealthRaw);
+          if (!Number.isFinite(crownHealth)) crownHealth = null;
+          let crownMax = Number(crownMaxRaw);
+          if (!Number.isFinite(crownMax)) crownMax = null;
+          if (kingOwnerId != null) {
+            if (Number.isFinite(crownMax) && crownMax > 0) {
+              kingCrownDefaultMax = Math.max(kingCrownDefaultMax, crownMax);
+            } else if (Number.isFinite(crownHealth) && crownHealth > 0) {
+              crownMax = crownHealth;
+            } else if (Number.isFinite(node.kingCrownMax) && node.kingCrownMax > 0) {
+              crownMax = node.kingCrownMax;
+            } else if (kingCrownDefaultMax > 0) {
+              crownMax = kingCrownDefaultMax;
+            }
+            if (!Number.isFinite(crownHealth) && Number.isFinite(crownMax)) {
+              crownHealth = crownMax;
+            }
+          } else {
+            crownHealth = 0;
+            crownMax = 0;
+          }
+          if (kingOwnerId != null && Number.isFinite(crownMax) && crownMax > 0) {
+            kingCrownDefaultMax = Math.max(kingCrownDefaultMax, crownMax);
+          }
+          node.kingCrownMax = Number.isFinite(crownMax) ? Math.max(0, crownMax) : 0;
+          node.kingCrownHealth = Number.isFinite(crownHealth) ? Math.max(0, crownHealth) : (node.kingCrownMax || 0);
           if (oldOwner !== owner) {
             // Enemy capture sound: you captured from someone else
             if (owner === myPlayerId && oldOwner != null && oldOwner !== myPlayerId) {
@@ -5056,6 +5130,12 @@ function fallbackRemoveEdgesForNode(nodeId) {
     const playerId = Number(msg?.playerId);
     const fromNodeId = Number(msg?.fromNodeId);
     const toNodeId = Number(msg?.toNodeId);
+    const crownHealthRaw = msg?.crownHealth;
+    const crownMaxRaw = msg?.crownMax;
+    let crownHealth = Number(crownHealthRaw);
+    let crownMax = Number(crownMaxRaw);
+    if (!Number.isFinite(crownHealth)) crownHealth = null;
+    if (!Number.isFinite(crownMax)) crownMax = null;
     if (!Number.isFinite(playerId) || !Number.isFinite(toNodeId)) {
       return;
     }
@@ -5065,6 +5145,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
       if (sourceNode) {
         sourceNode.kingOwnerId = null;
         sourceNode.isKing = false;
+        sourceNode.kingCrownHealth = 0;
+        sourceNode.kingCrownMax = 0;
       }
     }
 
@@ -5072,6 +5154,33 @@ function fallbackRemoveEdgesForNode(nodeId) {
     if (targetNode) {
       targetNode.kingOwnerId = playerId;
       targetNode.isKing = true;
+      let resolvedCrownMax = crownMax;
+      let resolvedCrownHealth = crownHealth;
+      if (!Number.isFinite(resolvedCrownMax) || resolvedCrownMax <= 0) {
+        if (Number.isFinite(targetNode.kingCrownMax) && targetNode.kingCrownMax > 0) {
+          resolvedCrownMax = targetNode.kingCrownMax;
+        } else if (kingCrownDefaultMax > 0) {
+          resolvedCrownMax = kingCrownDefaultMax;
+        } else if (Number.isFinite(resolvedCrownHealth) && resolvedCrownHealth > 0) {
+          resolvedCrownMax = resolvedCrownHealth;
+        }
+      }
+      if (!Number.isFinite(resolvedCrownHealth) || resolvedCrownHealth < 0) {
+        if (Number.isFinite(crownHealth)) {
+          resolvedCrownHealth = crownHealth;
+        } else if (Number.isFinite(resolvedCrownMax)) {
+          resolvedCrownHealth = resolvedCrownMax;
+        } else if (Number.isFinite(targetNode.kingCrownHealth)) {
+          resolvedCrownHealth = targetNode.kingCrownHealth;
+        } else {
+          resolvedCrownHealth = 0;
+        }
+      }
+      if (Number.isFinite(resolvedCrownMax) && resolvedCrownMax > 0) {
+        kingCrownDefaultMax = Math.max(kingCrownDefaultMax, resolvedCrownMax);
+      }
+      targetNode.kingCrownMax = Number.isFinite(resolvedCrownMax) ? Math.max(0, resolvedCrownMax) : 0;
+      targetNode.kingCrownHealth = Number.isFinite(resolvedCrownHealth) ? Math.max(0, resolvedCrownHealth) : targetNode.kingCrownMax;
     }
 
     kingMovePendingDestinationId = null;
@@ -5200,41 +5309,153 @@ function fallbackRemoveEdgesForNode(nodeId) {
     return original || 'Error';
   }
 
+  function createKingCrownLayout(centerX, baseBottomY, radius) {
+    const crownRadius = Math.max(1, radius);
+    const bodyHeight = Math.max(38, crownRadius * 2.65);
+    const stemHeight = Math.max(12, bodyHeight * 0.36);
+    const bowlHeight = bodyHeight - stemHeight;
+    const bottomWidth = Math.max(10, crownRadius * 0.55);
+    const stemWidth = Math.max(bottomWidth + 8, crownRadius * 0.95);
+    const topWidth = Math.max(stemWidth + 22, crownRadius * 1.6);
+    const spikeHeight = Math.max(12, crownRadius * 0.66);
+    const topBandY = baseBottomY - bodyHeight;
+    const stemTopY = baseBottomY - stemHeight;
+    const topPeakY = topBandY - spikeHeight;
+    const paddingX = Math.max(12, crownRadius * 0.5);
+    const paddingY = Math.max(12, bodyHeight * 0.2);
+
+    const outlinePoints = [];
+    const bottomLeft = { x: centerX - bottomWidth / 2, y: baseBottomY };
+    const bottomRight = { x: centerX + bottomWidth / 2, y: baseBottomY };
+    const stemRight = { x: centerX + stemWidth / 2, y: stemTopY };
+    const stemLeft = { x: centerX - stemWidth / 2, y: stemTopY };
+    const topRight = { x: centerX + topWidth / 2, y: topBandY };
+    outlinePoints.push(bottomLeft, bottomRight, stemRight, topRight);
+
+    const spikeCount = 3;
+    const segmentWidth = topWidth / spikeCount;
+    let currentX = topRight.x;
+    for (let i = 0; i < spikeCount; i += 1) {
+      const tipX = currentX - segmentWidth / 2;
+      outlinePoints.push({ x: tipX, y: topPeakY });
+      currentX -= segmentWidth;
+      outlinePoints.push({ x: currentX, y: topBandY });
+    }
+    outlinePoints.push(stemLeft);
+
+    const widthAt = (y) => {
+      if (y >= stemTopY) {
+        const progress = (baseBottomY - y) / Math.max(stemHeight, 1e-6);
+        return bottomWidth + (stemWidth - bottomWidth) * Math.max(0, Math.min(1, progress));
+      }
+      const progress = (stemTopY - y) / Math.max(bowlHeight, 1e-6);
+      return stemWidth + (topWidth - stemWidth) * Math.max(0, Math.min(1, progress));
+    };
+
+    const bounds = {
+      left: centerX - topWidth / 2 - paddingX,
+      right: centerX + topWidth / 2 + paddingX,
+      top: topPeakY - paddingY,
+      bottom: baseBottomY + paddingY,
+    };
+
+    return {
+      centerX,
+      centerY: (topPeakY + baseBottomY) / 2,
+      baseBottomY,
+      stemTopY,
+      topBandY,
+      topPeakY,
+      bottomWidth,
+      stemWidth,
+      topWidth,
+      spikeHeight,
+      outlinePoints,
+      paddingX,
+      paddingY,
+      fillableHeight: baseBottomY - topBandY,
+      height: baseBottomY - topPeakY,
+      widthAt,
+      bounds,
+      hitRadius: Math.max(topWidth / 2 + paddingX, (baseBottomY - topPeakY) / 2 + paddingY),
+    };
+  }
+
+  function buildCrownFillPolygon(layout, ratio) {
+    if (!layout) return null;
+    const clamped = Math.max(0, Math.min(1, Number(ratio) || 0));
+    if (clamped <= 0) return null;
+    const {
+      centerX,
+      baseBottomY,
+      stemTopY,
+      topBandY,
+      bottomWidth,
+      stemWidth,
+      widthAt,
+      fillableHeight,
+    } = layout;
+    const effectiveHeight = Math.max(fillableHeight || (baseBottomY - topBandY), 1e-6);
+    let fillTopY = baseBottomY - effectiveHeight * clamped;
+    fillTopY = Math.min(baseBottomY, Math.max(topBandY, fillTopY));
+
+    const points = [];
+    points.push({ x: centerX - bottomWidth / 2, y: baseBottomY });
+    points.push({ x: centerX + bottomWidth / 2, y: baseBottomY });
+
+    if (fillTopY >= stemTopY) {
+      const half = (widthAt ? widthAt(fillTopY) : stemWidth) / 2;
+      points.push({ x: centerX + half, y: fillTopY });
+      points.push({ x: centerX - half, y: fillTopY });
+    } else {
+      const stemHalf = stemWidth / 2;
+      const upperHalf = (widthAt ? widthAt(fillTopY) : stemWidth) / 2;
+      points.push({ x: centerX + stemHalf, y: stemTopY });
+      points.push({ x: centerX + upperHalf, y: fillTopY });
+      points.push({ x: centerX - upperHalf, y: fillTopY });
+      points.push({ x: centerX - stemHalf, y: stemTopY });
+    }
+
+    points.push({ x: centerX - bottomWidth / 2, y: baseBottomY });
+    return points;
+  }
+
+  function fillCrownPolygon(points, color, alpha) {
+    if (!graphicsNodes || !points || points.length < 3) return;
+    const useAlpha = Number.isFinite(alpha) ? alpha : 1;
+    if (useAlpha <= 0) return;
+    graphicsNodes.fillStyle(color, useAlpha);
+    graphicsNodes.beginPath();
+    graphicsNodes.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i += 1) {
+      graphicsNodes.lineTo(points[i].x, points[i].y);
+    }
+    graphicsNodes.closePath();
+    graphicsNodes.fillPath();
+  }
+
+  function strokeCrownPolygon(points, width, color, alpha) {
+    if (!graphicsNodes || !points || points.length < 2) return;
+    const useAlpha = Number.isFinite(alpha) ? alpha : 1;
+    if (useAlpha <= 0) return;
+    graphicsNodes.lineStyle(width, color, useAlpha);
+    graphicsNodes.beginPath();
+    graphicsNodes.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i += 1) {
+      graphicsNodes.lineTo(points[i].x, points[i].y);
+    }
+    graphicsNodes.closePath();
+    graphicsNodes.strokePath();
+  }
+
   function computePlacedKingCrownLayout(screenX, screenY, crownRadius) {
     const radius = Math.max(1, crownRadius);
     const nodeRadiusEquivalent = Math.max(1, radius / KING_CROWN_TO_NODE_RATIO);
-    const baseWidth = Math.max(18, nodeRadiusEquivalent * 2.4);
-    const baseHeight = Math.max(3, nodeRadiusEquivalent * 0.3);
-    const baseTopY = screenY - nodeRadiusEquivalent - 6;
-    const baseBottomY = baseTopY + baseHeight;
-    const leftX = screenX - baseWidth / 2;
-    const spikeHeight = Math.max(10, nodeRadiusEquivalent * 1.1);
-    const spikeHalfWidth = Math.max(4, baseWidth * 0.12);
-    const spikeOffsets = [-0.35, 0, 0.35];
-    const crownTopY = baseTopY - spikeHeight;
-    const paddingX = Math.max(8, nodeRadiusEquivalent * 0.4);
-    const paddingY = Math.max(6, nodeRadiusEquivalent * 0.3);
-    return {
-      baseWidth,
-      baseHeight,
-      baseTopY,
-      baseBottomY,
-      leftX,
-      spikeHeight,
-      spikeHalfWidth,
-      spikeOffsets,
-      crownTopY,
-      centerX: screenX,
-      centerY: (crownTopY + baseBottomY) / 2,
-      nodeRadius: nodeRadiusEquivalent,
-      bounds: {
-        left: leftX - paddingX,
-        right: leftX + baseWidth + paddingX,
-        top: crownTopY - paddingY,
-        bottom: baseBottomY + paddingY,
-      },
-      hitRadius: Math.max(baseWidth / 2 + paddingX, (baseBottomY - crownTopY) / 2 + paddingY),
-    };
+    const verticalOffset = Math.max(6, nodeRadiusEquivalent * 0.35);
+    const baseBottomY = screenY - nodeRadiusEquivalent - verticalOffset;
+    const layout = createKingCrownLayout(screenX, baseBottomY, radius);
+    layout.nodeRadius = nodeRadiusEquivalent;
+    return layout;
   }
 
   function isPointWithinRect(px, py, rect) {
@@ -5244,7 +5465,12 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
   function drawKingCrown(nx, ny, radius, ownerColor, options = {}) {
     if (!graphicsNodes) return null;
-    const { highlighted = false, highlightColor: overrideHighlightColor } = options;
+    const {
+      highlighted = false,
+      highlightColor: overrideHighlightColor,
+      crownHealth: crownHealthOpt = null,
+      crownMax: crownMaxOpt = null,
+    } = options;
     const layout = computePlacedKingCrownLayout(nx, ny, radius);
     if (!layout) return null;
 
@@ -5252,116 +5478,65 @@ function fallbackRemoveEdgesForNode(nodeId) {
       ? overrideHighlightColor
       : (Number.isFinite(ownerColor) ? ownerColor : 0xffcc33);
     const strokeColor = highlighted ? darkenColor(baseStrokeColor, 0.65) : baseStrokeColor;
-    const fillColor = highlighted ? darkenColor(KING_CROWN_FILL_COLOR, 0.7) : KING_CROWN_FILL_COLOR;
-    const outlineWidth = highlighted ? 3 : 2;
-    const outlineAlpha = highlighted ? 0.95 : 0.9;
+    const fillColor = highlighted ? darkenColor(KING_CROWN_FILL_COLOR, 0.75) : KING_CROWN_FILL_COLOR;
+    const outlineWidth = highlighted ? 2.8 : 2.2;
+    const outlineAlpha = highlighted ? 0.96 : 0.92;
+    const emptyFillAlpha = highlighted ? 0.22 : 0.14;
+    const liquidFillAlpha = highlighted ? 0.92 : 0.82;
 
-    graphicsNodes.fillStyle(fillColor, 1);
-    graphicsNodes.fillRect(layout.leftX, layout.baseTopY, layout.baseWidth, layout.baseHeight);
-    graphicsNodes.lineStyle(outlineWidth, strokeColor, outlineAlpha);
-    graphicsNodes.strokeRect(layout.leftX, layout.baseTopY, layout.baseWidth, layout.baseHeight);
+    let crownMaxValue = Number.isFinite(crownMaxOpt) ? Math.max(0, crownMaxOpt) : 0;
+    let crownHealthValue = Number.isFinite(crownHealthOpt) ? Math.max(0, crownHealthOpt) : NaN;
+    if ((crownMaxValue <= 0 || !Number.isFinite(crownMaxValue)) && Number.isFinite(crownHealthValue) && crownHealthValue > 0) {
+      crownMaxValue = crownHealthValue;
+    }
+    if (!Number.isFinite(crownHealthValue)) {
+      crownHealthValue = crownMaxValue;
+    }
+    const fillRatio = crownMaxValue > 0 ? Math.max(0, Math.min(1, crownHealthValue / crownMaxValue)) : 0;
 
-    layout.spikeOffsets.forEach((offset) => {
-      const centerX = nx + layout.baseWidth * offset * 0.8;
-      const heightScale = offset === 0 ? 1 : 0.85;
-      const spikeTopY = layout.baseTopY - layout.spikeHeight * heightScale;
-      graphicsNodes.fillStyle(fillColor, 1);
-      graphicsNodes.fillTriangle(
-        centerX,
-        spikeTopY,
-        centerX - layout.spikeHalfWidth,
-        layout.baseTopY,
-        centerX + layout.spikeHalfWidth,
-        layout.baseTopY
-      );
-      graphicsNodes.lineStyle(outlineWidth, strokeColor, outlineAlpha);
-      graphicsNodes.strokeTriangle(
-        centerX,
-        spikeTopY,
-        centerX - layout.spikeHalfWidth,
-        layout.baseTopY,
-        centerX + layout.spikeHalfWidth,
-        layout.baseTopY
-      );
-    });
+    fillCrownPolygon(layout.outlinePoints, fillColor, emptyFillAlpha);
+
+    const fillPoints = buildCrownFillPolygon(layout, fillRatio);
+    if (fillPoints) {
+      fillCrownPolygon(fillPoints, fillColor, liquidFillAlpha);
+    }
+
+    strokeCrownPolygon(layout.outlinePoints, outlineWidth, strokeColor, outlineAlpha);
 
     if (highlighted) {
       const innerStrokeColor = darkenColor(strokeColor, 0.85);
-      graphicsNodes.lineStyle(1.5, innerStrokeColor, 0.8);
-      graphicsNodes.strokeRect(layout.leftX + 1.5, layout.baseTopY + 1.5, layout.baseWidth - 3, layout.baseHeight - 3);
+      strokeCrownPolygon(layout.outlinePoints, 1.4, innerStrokeColor, 0.7);
     }
 
     return layout;
   }
 
-  function drawKingMovePreviewCrown(nx, anchorY, radius, options = {}) {
+  function drawKingMovePreviewCrown(nx, baseBottomY, radius, options = {}) {
     if (!graphicsNodes) return null;
     const {
       highlighted = false,
       strokeColor: overrideStrokeColor,
       fillColor: overrideFillColor,
     } = options;
-    const crownRadius = Math.max(1, radius);
-    const baseWidth = Math.max(18, crownRadius * 1.95);
-    const baseHeight = Math.max(3, crownRadius * 0.35);
-    const baseTopY = anchorY - baseHeight;
-    const baseBottomY = anchorY;
-    const leftX = nx - baseWidth / 2;
-    const spikeOffsets = [-0.4, 0, 0.4];
-    const spikeHeight = Math.max(9, crownRadius * 0.95);
-    const spikeHalfWidth = Math.max(3.5, baseWidth * 0.14);
-    const crownTopY = baseTopY - spikeHeight;
-    const paddingX = Math.max(10, crownRadius * 0.4);
-    const paddingY = Math.max(8, crownRadius * 0.35);
+    const layout = createKingCrownLayout(nx, baseBottomY, radius);
+    if (!layout) return null;
     const baseStrokeColor = Number.isFinite(overrideStrokeColor)
       ? overrideStrokeColor
-      : (highlighted ? ownerToColor(myPlayerId) || 0x000000 : 0x000000);
-    const strokeColor = highlighted ? baseStrokeColor : darkenColor(baseStrokeColor, 0.85);
+      : (highlighted ? ownerToColor(myPlayerId) || 0x000000 : darkenColor(0x000000, 0.85));
+    const strokeColor = highlighted ? baseStrokeColor : darkenColor(baseStrokeColor, 0.9);
     const fillColor = Number.isFinite(overrideFillColor) ? overrideFillColor : KING_CROWN_FILL_COLOR;
-    const strokeAlpha = highlighted ? 0.95 : 0.75;
-    const strokeWidth = highlighted ? 3 : 2;
-    const fillAlpha = highlighted ? 0.45 : 0.28;
+    const strokeAlpha = highlighted ? 0.88 : 0.65;
+    const strokeWidth = highlighted ? 2.4 : 2.0;
+    const fillAlpha = highlighted ? 0.35 : 0.24;
 
-    graphicsNodes.fillStyle(fillColor, fillAlpha);
-    graphicsNodes.fillRect(leftX, baseTopY, baseWidth, baseHeight);
-
-    graphicsNodes.lineStyle(strokeWidth, strokeColor, strokeAlpha);
-    graphicsNodes.strokeRect(leftX, baseTopY, baseWidth, baseHeight);
-
-    spikeOffsets.forEach((offset) => {
-      const centerX = nx + baseWidth * offset * 0.75;
-      const heightScale = offset === 0 ? 1 : 0.85;
-      const spikeTopY = baseTopY - spikeHeight * heightScale;
-      graphicsNodes.fillStyle(fillColor, fillAlpha);
-      graphicsNodes.fillTriangle(
-        centerX,
-        spikeTopY,
-        centerX - spikeHalfWidth,
-        baseBottomY,
-        centerX + spikeHalfWidth,
-        baseBottomY
-      );
-      graphicsNodes.lineStyle(strokeWidth, strokeColor, strokeAlpha);
-      graphicsNodes.strokeTriangle(
-        centerX,
-        spikeTopY,
-        centerX - spikeHalfWidth,
-        baseBottomY,
-        centerX + spikeHalfWidth,
-        baseBottomY
-      );
-    });
+    fillCrownPolygon(layout.outlinePoints, fillColor, fillAlpha);
+    strokeCrownPolygon(layout.outlinePoints, strokeWidth, strokeColor, strokeAlpha);
 
     return {
-      centerX: nx,
-      centerY: (crownTopY + baseBottomY) / 2,
-      bounds: {
-        left: leftX - paddingX,
-        right: leftX + baseWidth + paddingX,
-        top: crownTopY - paddingY,
-        bottom: baseBottomY + paddingY,
-      },
-      hitRadius: Math.max(baseWidth / 2 + paddingX, (baseBottomY - crownTopY) / 2 + paddingY),
+      centerX: layout.centerX,
+      centerY: layout.centerY,
+      bounds: layout.bounds,
+      hitRadius: layout.hitRadius,
     };
   }
 
@@ -5635,6 +5810,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
         drawKingCrown(nx, ny, kingCrownRadius, crownColor, {
           highlighted: isSelectedKing,
           highlightColor: selectionColor,
+          crownHealth: Number.isFinite(n.kingCrownHealth) ? n.kingCrownHealth : null,
+          crownMax: Number.isFinite(n.kingCrownMax) ? n.kingCrownMax : null,
         });
       }
 

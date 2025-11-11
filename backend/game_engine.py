@@ -17,6 +17,7 @@ from .constants import (
     INTAKE_TRANSFER_RATIO,
     RESERVE_TRANSFER_RATIO,
     STARTING_NODE_JUICE,
+    KING_CROWN_MAX_HEALTH,
     CLASSIC_PRODUCTION_RATE_PER_NODE,
     CLASSIC_MAX_TRANSFER_RATIO,
     CLASSIC_INTAKE_TRANSFER_RATIO,
@@ -619,6 +620,9 @@ class GameEngine:
                 if getattr(self.state, "win_condition", "dominate") == "king":
                     self.state.player_king_nodes[player_id] = node_id
                     setattr(node, "king_owner_id", player_id)
+                    crown_max = getattr(self.state, "king_crown_max_health", KING_CROWN_MAX_HEALTH)
+                    setattr(node, "king_crown_health", crown_max)
+                    setattr(node, "king_crown_max_health", crown_max)
                 self.state.players_who_picked[player_id] = True
                 if self.state.hidden_start_active:
                     self.state.hidden_start_picks[player_id] = node_id
@@ -760,10 +764,25 @@ class GameEngine:
             if destination_node_id not in reachable:
                 raise GameValidationError("Destination not reachable")
 
+            crown_max_default = getattr(self.state, "king_crown_max_health", KING_CROWN_MAX_HEALTH)
+            current_health = crown_max_default
+            current_max_health = crown_max_default
+
             current_node = self.state.nodes.get(current_node_id) if self.state else None
             if current_node:
+                current_health = float(getattr(current_node, "king_crown_health", current_health))
+                current_max_health = float(getattr(current_node, "king_crown_max_health", current_max_health))
                 setattr(current_node, "king_owner_id", None)
+                setattr(current_node, "king_crown_health", 0.0)
+                setattr(current_node, "king_crown_max_health", 0.0)
+
+            if current_max_health <= 0.0:
+                current_max_health = crown_max_default
+            current_health = max(0.0, min(current_health, current_max_health))
+
             setattr(destination_node, "king_owner_id", player_id)
+            setattr(destination_node, "king_crown_health", current_health)
+            setattr(destination_node, "king_crown_max_health", max(current_max_health, crown_max_default))
 
             if self.state:
                 self.state.player_king_nodes[player_id] = destination_node_id
@@ -772,6 +791,8 @@ class GameEngine:
                 "playerId": player_id,
                 "fromNodeId": current_node_id,
                 "toNodeId": destination_node_id,
+                "crownHealth": round(current_health, 3),
+                "crownMax": round(max(current_max_health, crown_max_default), 3),
             }
             return True, None, payload
 

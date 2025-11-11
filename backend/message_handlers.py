@@ -991,6 +991,16 @@ class MessageRouter:
             "fromNodeId": int(payload["fromNodeId"]),
             "toNodeId": int(payload["toNodeId"]),
         }
+        if "crownHealth" in payload:
+            try:
+                broadcast_payload["crownHealth"] = float(payload["crownHealth"])
+            except (TypeError, ValueError):
+                pass
+        if "crownMax" in payload:
+            try:
+                broadcast_payload["crownMax"] = float(payload["crownMax"])
+            except (TypeError, ValueError):
+                pass
         await self._broadcast_to_game(game_info, broadcast_payload)
 
         event_payload = {
@@ -998,6 +1008,16 @@ class MessageRouter:
             "fromNodeId": int(payload["fromNodeId"]),
             "toNodeId": int(payload["toNodeId"]),
         }
+        if "crownHealth" in payload:
+            try:
+                event_payload["crownHealth"] = float(payload["crownHealth"])
+            except (TypeError, ValueError):
+                pass
+        if "crownMax" in payload:
+            try:
+                event_payload["crownMax"] = float(payload["crownMax"])
+            except (TypeError, ValueError):
+                pass
         self._record_game_event(game_info, token, "moveKing", event_payload)
 
     async def handle_quit_game(
