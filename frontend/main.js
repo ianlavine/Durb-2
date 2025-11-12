@@ -176,6 +176,8 @@
   // UI background bars
   let topUiBar = null;
   let bottomUiBar = null;
+  let gemCountsDisplay = null;
+  const gemCountLabels = new Map();
 
   // Warp mode visuals & geometry (frontend prototype hooked to Warp mode)
   const WARP_MARGIN_RATIO_X = 0.06; // horizontal extra space relative to board width
@@ -368,6 +370,31 @@
       default: '💎',
     },
   };
+
+  const GEM_TYPE_ORDER = ['warp', 'brass', 'rage', 'reverse'];
+
+  function normalizeGemKey(value) {
+    if (typeof value !== 'string') return null;
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) return null;
+    return GEM_TYPE_ORDER.includes(normalized) ? normalized : null;
+  }
+
+  function createEmptyGemCounts() {
+    const counts = {};
+    GEM_TYPE_ORDER.forEach((key) => {
+      counts[key] = 0;
+    });
+    return counts;
+  }
+
+  function createDefaultPlayerStats() {
+    return {
+      nodes: 0,
+      gold: 0,
+      gems: createEmptyGemCounts(),
+    };
+  }
 
   function setModeSelectorVisibility(visible) {
     if (!modeSelectorContainer || !modeSelectorContainer.isConnected) {
@@ -3080,6 +3107,19 @@ function clearBridgeSelection() {
     // Initialize UI background bars
     topUiBar = document.getElementById('topUiBar');
     bottomUiBar = document.getElementById('bottomUiBar');
+    gemCountsDisplay = document.getElementById('gemCountsDisplay');
+    gemCountLabels.clear();
+    if (gemCountsDisplay) {
+      GEM_TYPE_ORDER.forEach((key) => {
+        const container = gemCountsDisplay.querySelector(`[data-gem="${key}"]`);
+        if (!container) return;
+        const numberEl = container.querySelector('.gem-number');
+        if (numberEl) {
+          gemCountLabels.set(key, numberEl);
+        }
+      });
+    }
+    updateGemCountsDisplay();
     
     // Initialize timer display
     timerDisplay = document.getElementById('timerDisplay');
@@ -3718,7 +3758,7 @@ function clearBridgeSelection() {
           secondaryColors,
           name: displayName,
         });
-        playerStats.set(id, { nodes: 0, gold: 0 });
+        playerStats.set(id, createDefaultPlayerStats());
         playerOrder.push(id);
       });
     }
@@ -3780,9 +3820,8 @@ function clearBridgeSelection() {
       msg.gold.forEach(([pid, value]) => {
         const id = Number(pid);
         if (!Number.isFinite(id)) return;
-        const stats = playerStats.get(id) || { nodes: 0, gold: 0 };
+        const stats = ensurePlayerStats(id);
         stats.gold = Math.max(0, Number(value) || 0);
-        playerStats.set(id, stats);
         if (id === myPlayerId) {
           goldValue = stats.gold;
         }
@@ -3798,11 +3837,13 @@ function clearBridgeSelection() {
       Object.entries(msg.counts).forEach(([pid, count]) => {
         const id = Number(pid);
         if (!Number.isFinite(id)) return;
-        const stats = playerStats.get(id) || { nodes: 0, gold: 0 };
+        const stats = ensurePlayerStats(id);
         stats.nodes = Math.max(0, Number(count) || 0);
-        playerStats.set(id, stats);
       });
     }
+
+    syncGemCountsFromPayload(msg.gemCounts);
+    updateGemCountsDisplay();
 
     myAutoExpand = persistentAutoExpand;
     if (Array.isArray(msg.autoExpand)) {
@@ -4345,6 +4386,9 @@ function clearBridgeSelection() {
         stats.nodes = Math.max(0, Number(count) || 0);
       });
     }
+
+    syncGemCountsFromPayload(msg.gemCounts);
+    updateGemCountsDisplay();
 
     if (typeof msg.winThreshold === 'number') winThreshold = msg.winThreshold;
     if (typeof msg.totalNodes === 'number') totalNodes = msg.totalNodes;
@@ -5952,7 +5996,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
     // Show UI bars when game is active
     if (topUiBar) topUiBar.style.display = 'block';
-      if (bottomUiBar) bottomUiBar.style.display = 'block';
+    if (bottomUiBar) bottomUiBar.style.display = 'flex';
     
     // Draw border box around play area (warp border handles inner toggle)
     drawPlayAreaBorder();
@@ -7751,6 +7795,96 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
 
 
+  function syncGemCountsFromPayload(payload) {
+    if (!Array.isArray(payload)) {
+      playerStats.forEach((stats) => {
+        if (stats) stats.gems = createEmptyGemCounts();
+      });
+      return;
+    }
+
+    const seen = new Set();
+    payload.forEach((entry) => {
+      let pid;
+      let rawCounts;
+      if (Array.isArray(entry)) {
+        [pid, rawCounts] = entry;
+      } else if (entry && typeof entry === 'object') {
+        pid = entry.playerId ?? entry.id ?? entry.pid ?? entry.player ?? entry[0];
+        rawCounts = entry.counts ?? entry.gems ?? entry.values ?? entry.data ?? entry[1];
+      } else {
+        return;
+      }
+      const id = Number(pid);
+      if (!Number.isFinite(id)) return;
+      seen.add(id);
+      const stats = ensurePlayerStats(id);
+      const nextCounts = createEmptyGemCounts();
+      if (rawCounts && typeof rawCounts === 'object') {
+        Object.entries(rawCounts).forEach(([key, value]) => {
+          const normalizedKey = normalizeGemKey(key);
+          if (!normalizedKey) return;
+          const numeric = Number(value);
+          nextCounts[normalizedKey] = Number.isFinite(numeric) && numeric > 0 ? Math.max(0, Math.floor(numeric)) : 0;
+        });
+      }
+      stats.gems = nextCounts;
+    });
+
+    playerStats.forEach((stats, id) => {
+      if (!stats) return;
+      if (seen.has(id)) return;
+      stats.gems = createEmptyGemCounts();
+    });
+  }
+
+  function updateGemCountsDisplay() {
+    if (!gemCountsDisplay || gemCountLabels.size === 0) {
+      gemCountsDisplay = document.getElementById('gemCountsDisplay');
+      gemCountLabels.clear();
+      if (gemCountsDisplay) {
+        GEM_TYPE_ORDER.forEach((key) => {
+          const container = gemCountsDisplay.querySelector(`[data-gem="${key}"]`);
+          if (!container) return;
+          const numberEl = container.querySelector('.gem-number');
+          if (numberEl) gemCountLabels.set(key, numberEl);
+        });
+      }
+    }
+
+    if (!gemCountsDisplay || gemCountLabels.size === 0) {
+      return;
+    }
+
+    let targetId = Number.isFinite(myPlayerId) ? myPlayerId : NaN;
+    if (!Number.isFinite(targetId)) {
+      const storedRaw = localStorage.getItem('myPlayerId');
+      if (storedRaw != null) {
+        const storedValue = Number(storedRaw);
+        if (Number.isFinite(storedValue)) {
+          targetId = storedValue;
+        }
+      }
+    }
+
+    let counts = createEmptyGemCounts();
+    if (Number.isFinite(targetId) && (playerStats.has(targetId) || players.has(targetId))) {
+      const stats = ensurePlayerStats(targetId);
+      const maybeCounts = stats && stats.gems;
+      if (maybeCounts && typeof maybeCounts === 'object') {
+        counts = maybeCounts;
+      }
+    }
+
+    GEM_TYPE_ORDER.forEach((key) => {
+      const label = gemCountLabels.get(key);
+      if (!label) return;
+      const numeric = Number(counts[key]) || 0;
+      label.textContent = String(Math.max(0, Math.floor(numeric)));
+    });
+  }
+
+
   function updateGoldBar() {
     const val = Math.max(0, goldValue || 0);
     if (goldDisplay) {
@@ -7842,9 +7976,22 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
   function ensurePlayerStats(id) {
     if (!playerStats.has(id)) {
-      playerStats.set(id, { nodes: 0, gold: 0 });
+      playerStats.set(id, createDefaultPlayerStats());
     }
-    return playerStats.get(id);
+    const stats = playerStats.get(id);
+    if (!stats.gems || typeof stats.gems !== 'object') {
+      stats.gems = createEmptyGemCounts();
+    } else {
+      GEM_TYPE_ORDER.forEach((key) => {
+        if (!Object.prototype.hasOwnProperty.call(stats.gems, key)) {
+          stats.gems[key] = 0;
+          return;
+        }
+        const value = Number(stats.gems[key]) || 0;
+        stats.gems[key] = value >= 0 ? Math.floor(value) : 0;
+      });
+    }
+    return stats;
   }
 
   function updateProgressBar() {
