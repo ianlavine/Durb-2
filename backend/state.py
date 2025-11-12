@@ -77,6 +77,8 @@ class GraphState:
         self.brass_double_cost: bool = False
         self.allow_pipe_start_anywhere: bool = False
         self.mode_settings: Dict[str, Any] = {}
+        self.resource_mode: str = "standard"
+        self.gem_nodes: Dict[int, str] = {}
 
         # Replay helpers
         self.tick_count: int = 0
@@ -262,6 +264,8 @@ class GraphState:
             "owner": node.owner,
             "juice": node.juice,
             "kingOwnerId": getattr(node, "king_owner_id", None),
+            "resourceType": getattr(node, "resource_type", "money"),
+            "resourceKey": getattr(node, "resource_key", None),
         }
 
         edges_to_remove = list(node.attached_edge_ids)
@@ -362,6 +366,8 @@ class GraphState:
                     ),
                     3,
                 ),
+                str(getattr(n, "resource_type", "money") or "money"),
+                getattr(n, "resource_key", None),
             ]
             for nid, n in self.nodes.items()
         ]
@@ -494,6 +500,8 @@ class GraphState:
                     ),
                     3,
                 ),
+                str(getattr(n, "resource_type", "money") or "money"),
+                getattr(n, "resource_key", None),
             ]
             for nid, n in self.nodes.items()
         ]
@@ -864,7 +872,10 @@ class GraphState:
                 # Determine reward based on the previous owner state
                 previous_owner = node.owner
                 reward = 0.0
-                if previous_owner is None:
+                resource_type = str(getattr(node, "resource_type", "money") or "money").lower()
+                if resource_type == "gem":
+                    reward = 0.0
+                elif previous_owner is None:
                     reward = getattr(
                         self,
                         "neutral_capture_reward",
@@ -1165,6 +1176,10 @@ def load_graph(graph_path: Path) -> Tuple[GraphState, Dict[str, int]]:
     for n in nodes_raw:
         node_type_val = n.get("nodeType") if isinstance(n, dict) else None
         node_type = "brass" if isinstance(node_type_val, str) and node_type_val.lower() == "brass" else "normal"
+        resource_type_val = n.get("resourceType") if isinstance(n, dict) else None
+        resource_key_val = n.get("resourceKey") if isinstance(n, dict) else None
+        resource_type = "gem" if isinstance(resource_type_val, str) and resource_type_val.lower() == "gem" else "money"
+        resource_key = resource_key_val if isinstance(resource_key_val, str) else None
         nodes.append(
             Node(
                 id=n["id"],
@@ -1173,6 +1188,8 @@ def load_graph(graph_path: Path) -> Tuple[GraphState, Dict[str, int]]:
                 juice=UNOWNED_NODE_BASE_JUICE,
                 cur_intake=0.0,
                 node_type=node_type,
+                resource_type=resource_type,
+                resource_key=resource_key,
             )
         )
     edges: List[Edge] = []
@@ -1208,6 +1225,10 @@ def build_state_from_dict(data: Dict) -> Tuple[GraphState, Dict[str, int]]:
     for n in nodes_raw:
         node_type_val = n.get("nodeType") if isinstance(n, dict) else None
         node_type = "brass" if isinstance(node_type_val, str) and node_type_val.lower() == "brass" else "normal"
+        resource_type_val = n.get("resourceType") if isinstance(n, dict) else None
+        resource_key_val = n.get("resourceKey") if isinstance(n, dict) else None
+        resource_type = "gem" if isinstance(resource_type_val, str) and resource_type_val.lower() == "gem" else "money"
+        resource_key = resource_key_val if isinstance(resource_key_val, str) else None
         nodes.append(
             Node(
                 id=n["id"],
@@ -1216,6 +1237,8 @@ def build_state_from_dict(data: Dict) -> Tuple[GraphState, Dict[str, int]]:
                 juice=UNOWNED_NODE_BASE_JUICE,
                 cur_intake=0.0,
                 node_type=node_type,
+                resource_type=resource_type,
+                resource_key=resource_key,
             )
         )
     edges: List[Edge] = []

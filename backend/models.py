@@ -23,6 +23,8 @@ class Node:
     cur_intake: float = 0.0  # amount of juice received from friendly nodes in last tick
     pending_gold: float = 0.0  # overflow progress towards gold payout
     node_type: str = "normal"  # 'normal' or 'brass'
+    resource_type: str = "money"  # 'money' or 'gem'
+    resource_key: Optional[str] = None  # gem subtype when resource_type == 'gem'
     king_owner_id: Optional[int] = None  # original owner when node is a king
     king_crown_health: float = 0.0  # remaining crown durability
     king_crown_max_health: float = 0.0  # maximum crown durability for this crown
