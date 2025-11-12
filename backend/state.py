@@ -40,6 +40,7 @@ class GraphState:
         self.players: Dict[int, Player] = {}
         # Economy and game flow
         self.player_gold: Dict[int, float] = {}
+        self.player_gem_counts: Dict[int, Dict[str, int]] = {}
         # Phase: 'picking' (each player picks starting node) or 'playing'
         self.phase: str = "picking"
         # Track which players have completed their starting pick
@@ -122,7 +123,53 @@ class GraphState:
         self.player_auto_expand[player.id] = False
         # Initialize auto-attack setting (default: off)
         self.player_auto_attack[player.id] = False
+        self.player_gem_counts[player.id] = {}
         self.eliminated_players.discard(player.id)
+
+    def reset_player_gem_counts(self) -> None:
+        """Reset accumulated gem capture counts for all players."""
+        self.player_gem_counts = {pid: {} for pid in self.players.keys()}
+
+    def record_gem_capture(self, player_id: int, gem_key: Any) -> None:
+        """Increment gem counts for a player when they capture a neutral gem node."""
+        if gem_key is None:
+            return
+        try:
+            normalized_key = str(gem_key).strip().lower()
+        except Exception:
+            return
+        if not normalized_key:
+            return
+        counts = self.player_gem_counts.setdefault(player_id, {})
+        current = counts.get(normalized_key, 0)
+        try:
+            current_int = int(current)
+        except (TypeError, ValueError):
+            current_int = 0
+        counts[normalized_key] = current_int + 1
+
+    def _serialize_gem_counts(self) -> List[List[Any]]:
+        """Return gem counts payload suitable for network messages."""
+        payload: List[List[Any]] = []
+        for pid in sorted(self.players.keys()):
+            counts = self.player_gem_counts.get(pid, {})
+            serialized: Dict[str, int] = {}
+            for key, value in counts.items():
+                try:
+                    normalized_key = str(key).strip().lower()
+                except Exception:
+                    continue
+                if not normalized_key:
+                    continue
+                try:
+                    count_value = int(value)
+                except (TypeError, ValueError):
+                    count_value = 0
+                if count_value <= 0:
+                    continue
+                serialized[normalized_key] = count_value
+            payload.append([int(pid), serialized])
+        return payload
 
     def get_player_node_counts(self) -> Dict[int, int]:
         """Return a mapping of player id to number of nodes they currently own."""
@@ -469,6 +516,7 @@ class GraphState:
             "edgeWarp": edge_warp,
             "winCondition": self.win_condition,
             "kingNodes": king_nodes_payload,
+            "gemCounts": self._serialize_gem_counts(),
         }
 
     def to_tick_message(self, current_time: float = 0.0) -> Dict:
@@ -554,6 +602,7 @@ class GraphState:
             "modeSettings": dict(self.mode_settings or {}),
             "winCondition": self.win_condition,
             "kingNodes": king_nodes_payload,
+            "gemCounts": self._serialize_gem_counts(),
         }
 
         if node_movements:
@@ -875,6 +924,8 @@ class GraphState:
                 resource_type = str(getattr(node, "resource_type", "money") or "money").lower()
                 if resource_type == "gem":
                     reward = 0.0
+                    if previous_owner is None and new_owner is not None:
+                        self.record_gem_capture(new_owner, getattr(node, "resource_key", None))
                 elif previous_owner is None:
                     reward = getattr(
                         self,

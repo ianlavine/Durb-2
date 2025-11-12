@@ -347,6 +347,7 @@ class GameEngine:
 
         self.state.resource_mode = normalized
         self.state.gem_nodes = {}
+        self.state.reset_player_gem_counts()
 
         for node in nodes:
             node.resource_type = "money"
