@@ -1,0 +1,42 @@
+[build]
+  publish = "frontend"
+  # Explicit command that does nothing but succeeds
+  command = "true"
+  # Only rebuild if frontend files changed
+  ignore = "git diff --quiet $CACHED_COMMIT_REF $COMMIT_REF frontend/"
+
+[build.environment]
+  # Explicitly disable dependency installation
+  NETLIFY_SKIP_DEPENDENCY_INSTALL = "true"
+  SKIP_DEPENDENCY_INSTALL = "true"
+  # Force static site behavior
+  NETLIFY_USE_YARN = "false"
+  NETLIFY_USE_NPM = "false"
+  # Disable language runtime detection
+  NODE_ENV = ""
+  PYTHON_VERSION = ""
+  RUBY_VERSION = ""
+  GO_VERSION = ""
+
+# Serve classic build directly when requesting /old
+[[redirects]]
+  from = "/old"
+  to = "/old.html"
+  status = 200
+
+# Redirect all routes to index.html for SPA behavior (if needed)
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# Optional: Set headers for better performance
+[[headers]]
+  for = "/*.js"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000"
+
+[[headers]]
+  for = "/*.css"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000"

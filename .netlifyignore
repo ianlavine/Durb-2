@@ -1,0 +1,10 @@
+# Ignore backend and deployment files not needed for frontend
+backend/
+Procfile
+railway.toml
+DEPLOYMENT.md
+.env
+.env.*
+
+# Only keep frontend files
+!frontend/
