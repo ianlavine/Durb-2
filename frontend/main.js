@@ -128,6 +128,49 @@
   let totalNodes = 60; // default, will be updated from backend
   let winCondition = 'dominate';
   const kingNodesByPlayer = new Map();
+  let kingSelectionActive = false;
+  let kingSelectedNodeId = null;
+  const kingMoveTargets = new Set();
+  let kingMoveTargetsList = [];
+  let kingMoveOptionsPending = false;
+  const kingMoveTargetRenderInfo = new Map();
+  let kingMoveTargetHoveredId = null;
+  let kingMovePendingDestinationId = null;
+
+  const KING_STANDARD_NODE_SIZE = 80;
+  const KING_STANDARD_RADIUS_BASE = 0.15 * Math.pow(KING_STANDARD_NODE_SIZE, 0.6);
+  const KING_CROWN_TO_NODE_RATIO = 0.6;
+  const KING_CROWN_MIN_SCREEN_RADIUS = 14;
+  const KING_OPTION_RADIUS_MULTIPLIER = 1.12;
+  const KING_OPTION_BOUNCE_SCALE = 0.18;
+  const KING_OPTION_VERTICAL_SCALE = 0.55;
+  const KING_OPTION_VERTICAL_EXTRA = 6;
+  const KING_CROWN_FILL_COLOR = 0xffd700;
+  const KING_CROWN_DEFAULT_HEALTH = 150;
+  let kingCrownDefaultMax = KING_CROWN_DEFAULT_HEALTH;
+
+  function computeStandardKingNodeRadius(baseScale = 1) {
+    const scale = Math.max(0.0001, Number(baseScale) || 1);
+    return Math.max(1, KING_STANDARD_RADIUS_BASE * scale);
+  }
+
+  function computeStandardKingCrownRadius(baseScale = 1, multiplier = 1) {
+    const nodeRadius = computeStandardKingNodeRadius(baseScale);
+    const baseCrownRadius = Math.max(10, nodeRadius * KING_CROWN_TO_NODE_RATIO);
+    const scale = Number.isFinite(multiplier) && multiplier > 0 ? multiplier : 1;
+    return Math.max(KING_CROWN_MIN_SCREEN_RADIUS, baseCrownRadius * scale);
+  }
+
+  function darkenColor(hexColor, multiplier = 1) {
+    const factor = Math.max(0, Math.min(1, Number(multiplier) || 0));
+    const r = (hexColor >> 16) & 0xff;
+    const g = (hexColor >> 8) & 0xff;
+    const b = hexColor & 0xff;
+    const dr = Math.round(r * factor);
+    const dg = Math.round(g * factor);
+    const db = Math.round(b * factor);
+    return (dr << 16) | (dg << 8) | db;
+  }
   
   // UI background bars
   let topUiBar = null;
@@ -203,30 +246,32 @@
     ? {
         screen: 'flat',
         brass: 'cross',
-        brassStart: 'anywhere',
+        brassStart: 'owned',
         bridgeCost: 0.9,
         gameStart: 'open',
-        startingNodeJuice: 150,
+        startingNodeJuice: 300,
         passiveIncome: 0,
         neutralCaptureGold: 10,
         ringJuiceToGoldRatio: 30,
         ringPayoutGold: 10,
         baseMode: LEGACY_DEFAULT_MODE || 'basic',
         derivedMode: LEGACY_DEFAULT_MODE || 'basic',
-        winCondition: 'dominate',
+        winCondition: 'king',
+        kingCrownHealth: KING_CROWN_DEFAULT_HEALTH,
       }
     : {
         screen: 'flat',
         brass: 'cross',
-        brassStart: 'anywhere',
+        brassStart: 'owned',
         bridgeCost: 0.9,
         gameStart: 'hidden-split',
-        startingNodeJuice: 150,
+        startingNodeJuice: 300,
         passiveIncome: 0,
         neutralCaptureGold: 10,
         ringJuiceToGoldRatio: 30,
         ringPayoutGold: 10,
-        winCondition: 'dominate',
+        winCondition: 'king',
+        kingCrownHealth: KING_CROWN_DEFAULT_HEALTH,
       };
 
   const INITIAL_MODE = LEGACY_DEFAULT_MODE || (IS_LEGACY_CLIENT ? 'basic' : 'flat');
@@ -252,6 +297,8 @@
   let ringPayoutValueLabel = null;
   let startingJuiceSlider = null;
   let startingJuiceValueLabel = null;
+  let crownHealthSlider = null;
+  let crownHealthValueLabel = null;
   const BRIDGE_COST_MIN = 0.5;
   const BRIDGE_COST_MAX = 1.0;
   const BRIDGE_COST_STEP = 0.1;
@@ -270,6 +317,9 @@
   const STARTING_JUICE_MIN = 50;
   const STARTING_JUICE_MAX = 300;
   const STARTING_JUICE_STEP = 10;
+  const CROWN_HEALTH_MIN = 1;
+  const CROWN_HEALTH_MAX = 300;
+  const CROWN_HEALTH_STEP = 1;
   const MODE_LABELS = {
     sparse: 'Sparse',
     basic: 'OG Durb',
@@ -378,6 +428,15 @@
     const clamped = Math.min(STARTING_JUICE_MAX, Math.max(STARTING_JUICE_MIN, numeric));
     const stepped = Math.round(clamped / STARTING_JUICE_STEP) * STARTING_JUICE_STEP;
     return Math.round(stepped);
+  }
+
+  function coerceKingCrownHealth(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+      return DEFAULT_MODE_SETTINGS.kingCrownHealth ?? KING_CROWN_DEFAULT_HEALTH;
+    }
+    const clamped = Math.min(CROWN_HEALTH_MAX, Math.max(CROWN_HEALTH_MIN, numeric));
+    return Math.round(clamped);
   }
 
   function normalizeWinCondition(value) {
@@ -542,6 +601,11 @@
     } else {
       next.startingNodeJuice = coerceStartingNodeJuice(next.startingNodeJuice);
     }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'kingCrownHealth')) {
+      next.kingCrownHealth = coerceKingCrownHealth(overrides.kingCrownHealth);
+    } else {
+      next.kingCrownHealth = coerceKingCrownHealth(next.kingCrownHealth);
+    }
     if (Object.prototype.hasOwnProperty.call(overrides, 'winCondition')) {
       next.winCondition = normalizeWinCondition(overrides.winCondition);
     } else {
@@ -553,6 +617,7 @@
     }
 
     selectedSettings = next;
+    kingCrownDefaultMax = coerceKingCrownHealth(selectedSettings.kingCrownHealth);
     selectedMode = deriveModeFromSettings(selectedSettings);
     updateModeOptionButtonStates();
     syncBridgeCostSlider();
@@ -561,6 +626,7 @@
     syncRingRatioSlider();
     syncRingPayoutSlider();
     syncStartingJuiceSlider();
+    syncCrownHealthSlider();
     updatePlayBotAvailability(true);
   }
 
@@ -576,6 +642,7 @@
       neutralCaptureGold: coerceNeutralCaptureReward(selectedSettings.neutralCaptureGold),
       ringJuiceToGoldRatio: coerceRingRatio(selectedSettings.ringJuiceToGoldRatio),
       ringPayoutGold: coerceRingPayout(selectedSettings.ringPayoutGold),
+      kingCrownHealth: coerceKingCrownHealth(selectedSettings.kingCrownHealth),
       baseMode: selectedMode,
       derivedMode: selectedMode,
       winCondition: selectedSettings.winCondition || 'dominate',
@@ -596,6 +663,7 @@
     if (Object.prototype.hasOwnProperty.call(payload, 'neutralCaptureGold')) overrides.neutralCaptureGold = payload.neutralCaptureGold;
     if (Object.prototype.hasOwnProperty.call(payload, 'ringJuiceToGoldRatio')) overrides.ringJuiceToGoldRatio = payload.ringJuiceToGoldRatio;
     if (Object.prototype.hasOwnProperty.call(payload, 'ringPayoutGold')) overrides.ringPayoutGold = payload.ringPayoutGold;
+    if (Object.prototype.hasOwnProperty.call(payload, 'kingCrownHealth')) overrides.kingCrownHealth = payload.kingCrownHealth;
     if (Object.prototype.hasOwnProperty.call(payload, 'winCondition')) overrides.winCondition = payload.winCondition;
     applySelectedSettings(overrides);
   }
@@ -643,6 +711,13 @@
     const value = coerceStartingNodeJuice(selectedSettings.startingNodeJuice);
     startingJuiceSlider.value = String(value);
     startingJuiceValueLabel.textContent = String(value);
+  }
+
+  function syncCrownHealthSlider() {
+    if (!crownHealthSlider || !crownHealthValueLabel) return;
+    const value = coerceKingCrownHealth(selectedSettings.kingCrownHealth);
+    crownHealthSlider.value = String(value);
+    crownHealthValueLabel.textContent = String(value);
   }
 
   function pipeStartRequiresOwnership() {
@@ -2321,6 +2396,8 @@ function clearBridgeSelection() {
     ringPayoutValueLabel = document.getElementById('ringPayoutValue');
     startingJuiceSlider = document.getElementById('startingJuiceSlider');
     startingJuiceValueLabel = document.getElementById('startingJuiceValue');
+    crownHealthSlider = document.getElementById('crownHealthSlider');
+    crownHealthValueLabel = document.getElementById('crownHealthValue');
 
     if (modeOptionButtons.length) {
       modeOptionButtons.forEach((btn) => {
@@ -2407,6 +2484,18 @@ function clearBridgeSelection() {
       };
       startingJuiceSlider.addEventListener('input', handler);
       startingJuiceSlider.addEventListener('change', handler);
+    }
+
+    if (crownHealthSlider) {
+      crownHealthSlider.min = String(CROWN_HEALTH_MIN);
+      crownHealthSlider.max = String(CROWN_HEALTH_MAX);
+      crownHealthSlider.step = String(CROWN_HEALTH_STEP);
+      const handler = (event) => {
+        const sliderValue = Number(event.target.value);
+        applySelectedSettings({ kingCrownHealth: sliderValue });
+      };
+      crownHealthSlider.addEventListener('input', handler);
+      crownHealthSlider.addEventListener('change', handler);
     }
 
     const closeModePanel = () => {
@@ -3204,7 +3293,9 @@ function clearBridgeSelection() {
     const removalAnimating = updateEdgeRemovalAnimations();
     const prePipesAnimating = prePipes.size > 0;
     
-    if (hasFlowingEdges || anySpinning || removalAnimating || moneyIndicators.length > 0 || (persistentTargeting && currentTargetNodeId !== null) || nodesAnimating || prePipesAnimating || prePipeStateChanged) {
+    const kingTargetsAnimating = kingSelectionActive && kingMoveTargetsList.length > 0;
+    const kingSelectionPending = kingSelectionActive && kingMoveOptionsPending;
+    if (hasFlowingEdges || anySpinning || removalAnimating || moneyIndicators.length > 0 || (persistentTargeting && currentTargetNodeId !== null) || nodesAnimating || prePipesAnimating || prePipeStateChanged || kingTargetsAnimating || kingSelectionPending) {
       redrawStatic();
     }
   }
@@ -3256,6 +3347,7 @@ function clearBridgeSelection() {
     ws.onclose = () => {
       console.log('WS disconnected, retrying in 2s');
       if (statusText) statusText.setText('Disconnected. Retrying...');
+      clearKingSelection({ skipRedraw: true });
       if (replayMode || replayStartPending || replaySessionActive) {
         replayMode = false;
         replayStartPending = false;
@@ -3294,6 +3386,9 @@ function clearBridgeSelection() {
       else if (msg.type === 'nukeError') handleNukeError(msg);
       else if (msg.type === 'nodeCaptured') handleNodeCaptured(msg);
       else if (msg.type === 'nodeOverflowPayout') handleNodeOverflowPayout(msg);
+      else if (msg.type === 'kingMoveOptions') handleKingMoveOptions(msg);
+      else if (msg.type === 'kingMoveError') handleKingMoveError(msg);
+      else if (msg.type === 'kingMoved') handleKingMoved(msg);
       else if (msg.type === 'lobbyTimeout') handleLobbyTimeout();
       else if (msg.type === 'postgame') handlePostgame(msg);
       else if (msg.type === 'postgameRematchUpdate') handlePostgameRematchUpdate(msg);
@@ -3376,6 +3471,8 @@ function clearBridgeSelection() {
     }
     nodes.clear();
     kingNodesByPlayer.clear();
+    kingCrownDefaultMax = coerceKingCrownHealth(selectedSettings.kingCrownHealth);
+    clearKingSelection({ skipRedraw: true });
     edges.clear();
     players.clear();
     playerStats.clear();
@@ -3436,10 +3533,45 @@ function clearBridgeSelection() {
 
     if (Array.isArray(msg.nodes)) {
       for (const arr of msg.nodes) {
-        const [id, x, y, size, owner, pendingGold = 0, brassFlag = 0, kingOwnerRaw = null] = arr;
+        const [
+          id,
+          x,
+          y,
+          size,
+          owner,
+          pendingGold = 0,
+          brassFlag = 0,
+          kingOwnerRaw = null,
+          crownHealthRaw = null,
+          crownMaxRaw = null,
+        ] = arr;
         const isBrass = Number(brassFlag) === 1;
         const parsedKingOwner = kingOwnerRaw == null ? null : Number(kingOwnerRaw);
         const kingOwnerId = Number.isFinite(parsedKingOwner) ? parsedKingOwner : null;
+        let crownHealth = Number(crownHealthRaw);
+        if (!Number.isFinite(crownHealth)) crownHealth = null;
+        let crownMax = Number(crownMaxRaw);
+        if (!Number.isFinite(crownMax)) crownMax = null;
+        if (kingOwnerId != null) {
+          if (Number.isFinite(crownMax) && crownMax > 0) {
+            kingCrownDefaultMax = Math.max(kingCrownDefaultMax, crownMax);
+          } else if (Number.isFinite(crownHealth) && crownHealth > 0) {
+            crownMax = crownHealth;
+          } else if (kingCrownDefaultMax > 0) {
+            crownMax = kingCrownDefaultMax;
+          }
+          if (!Number.isFinite(crownHealth) && Number.isFinite(crownMax)) {
+            crownHealth = crownMax;
+          }
+        } else {
+          crownHealth = 0;
+          crownMax = 0;
+        }
+        if (kingOwnerId != null && Number.isFinite(crownMax) && crownMax > 0) {
+          kingCrownDefaultMax = Math.max(kingCrownDefaultMax, crownMax);
+        }
+        const normalizedCrownMax = Number.isFinite(crownMax) ? Math.max(0, crownMax) : 0;
+        const normalizedCrownHealth = Number.isFinite(crownHealth) ? Math.max(0, crownHealth) : 0;
         nodes.set(id, {
           x,
           y,
@@ -3455,6 +3587,8 @@ function clearBridgeSelection() {
           isBrass,
           kingOwnerId,
           isKing: kingOwnerId != null,
+          kingCrownHealth: normalizedCrownHealth,
+          kingCrownMax: normalizedCrownMax,
         });
       }
     }
@@ -3656,6 +3790,7 @@ function clearBridgeSelection() {
 
   function handlePostgame(msg) {
     if (replayMode) return;
+    clearKingSelection({ skipRedraw: true });
     currentPostgameGroupId = msg.groupId || null;
     opponentHasLeft = false;
     iHaveRematched = false;
@@ -3869,6 +4004,7 @@ function clearBridgeSelection() {
   function handleGameOver(msg) {
     const myId = Number(localStorage.getItem('myPlayerId') || '0');
     const viewingReplay = replayMode;
+    clearKingSelection({ skipRedraw: true });
     if (overlayMsg) {
       if (viewingReplay) {
         overlayMsg.textContent = 'Replay finished';
@@ -3971,7 +4107,16 @@ function clearBridgeSelection() {
     }
     if (Array.isArray(msg.nodes)) {
       msg.nodes.forEach((entry) => {
-        const [id, size, owner, pendingGold = 0, brassFlag = 0, kingOwnerRaw = null] = entry;
+        const [
+          id,
+          size,
+          owner,
+          pendingGold = 0,
+          brassFlag = 0,
+          kingOwnerRaw = null,
+          crownHealthRaw = null,
+          crownMaxRaw = null,
+        ] = entry;
         const node = nodes.get(id);
         if (node) {
           const oldOwner = node.owner;
@@ -3979,10 +4124,36 @@ function clearBridgeSelection() {
           node.owner = owner;
           node.pendingGold = Number(pendingGold) || 0;
           node.isBrass = Number(brassFlag) === 1;
-        const parsedKingOwner = kingOwnerRaw == null ? null : Number(kingOwnerRaw);
+          const parsedKingOwner = kingOwnerRaw == null ? null : Number(kingOwnerRaw);
           const kingOwnerId = Number.isFinite(parsedKingOwner) ? parsedKingOwner : null;
           node.kingOwnerId = kingOwnerId;
           node.isKing = kingOwnerId != null;
+          let crownHealth = Number(crownHealthRaw);
+          if (!Number.isFinite(crownHealth)) crownHealth = null;
+          let crownMax = Number(crownMaxRaw);
+          if (!Number.isFinite(crownMax)) crownMax = null;
+          if (kingOwnerId != null) {
+            if (Number.isFinite(crownMax) && crownMax > 0) {
+              kingCrownDefaultMax = Math.max(kingCrownDefaultMax, crownMax);
+            } else if (Number.isFinite(crownHealth) && crownHealth > 0) {
+              crownMax = crownHealth;
+            } else if (Number.isFinite(node.kingCrownMax) && node.kingCrownMax > 0) {
+              crownMax = node.kingCrownMax;
+            } else if (kingCrownDefaultMax > 0) {
+              crownMax = kingCrownDefaultMax;
+            }
+            if (!Number.isFinite(crownHealth) && Number.isFinite(crownMax)) {
+              crownHealth = crownMax;
+            }
+          } else {
+            crownHealth = 0;
+            crownMax = 0;
+          }
+          if (kingOwnerId != null && Number.isFinite(crownMax) && crownMax > 0) {
+            kingCrownDefaultMax = Math.max(kingCrownDefaultMax, crownMax);
+          }
+          node.kingCrownMax = Number.isFinite(crownMax) ? Math.max(0, crownMax) : 0;
+          node.kingCrownHealth = Number.isFinite(crownHealth) ? Math.max(0, crownHealth) : (node.kingCrownMax || 0);
           if (oldOwner !== owner) {
             // Enemy capture sound: you captured from someone else
             if (owner === myPlayerId && oldOwner != null && oldOwner !== myPlayerId) {
@@ -3998,6 +4169,12 @@ function clearBridgeSelection() {
     }
 
     rebuildKingNodes();
+    if (kingSelectionActive) {
+      const currentKingNodeId = kingNodesByPlayer.get(myPlayerId);
+      if (!Number.isFinite(currentKingNodeId) || currentKingNodeId !== kingSelectedNodeId) {
+        clearKingSelection({ skipRedraw: true });
+      }
+    }
 
     if (Array.isArray(msg.edges)) {
       const seenEdgeIds = new Set();
@@ -4857,6 +5034,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     } else {
       winCondition = 'dominate';
     }
+    clearKingSelection({ skipRedraw: true });
     nodeJuiceTexts.forEach((text) => {
       if (text) text.destroy();
     });
@@ -4904,6 +5082,162 @@ function fallbackRemoveEdgesForNode(nodeId) {
   function handleSandboxError(msg) {
     const message = (msg && typeof msg.message === 'string') ? msg.message : 'Sandbox action failed';
     showErrorMessage(message);
+  }
+
+  function clearKingSelection(options = {}) {
+    const { skipRedraw = false } = options || {};
+    kingSelectionActive = false;
+    kingSelectedNodeId = null;
+    kingMoveTargets.clear();
+    kingMoveTargetsList = [];
+    kingMoveOptionsPending = false;
+    kingMoveTargetRenderInfo.clear();
+    kingMoveTargetHoveredId = null;
+    kingMovePendingDestinationId = null;
+    if (!skipRedraw) {
+      redrawStatic();
+    }
+  }
+
+  function startKingSelection(nodeId) {
+    if (!Number.isFinite(nodeId)) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const token = localStorage.getItem('token');
+    if (!token) return;
+
+    kingSelectionActive = true;
+    kingSelectedNodeId = nodeId;
+    kingMoveTargets.clear();
+    kingMoveTargetsList = [];
+    kingMoveOptionsPending = true;
+    kingMoveTargetRenderInfo.clear();
+    kingMoveTargetHoveredId = null;
+    kingMovePendingDestinationId = null;
+    redrawStatic();
+
+    ws.send(JSON.stringify({
+      type: 'kingRequestMoves',
+      originNodeId: nodeId,
+      token,
+    }));
+  }
+
+  function sendKingMoveRequest(nodeId) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    const token = localStorage.getItem('token');
+    if (!token) return false;
+
+    if (kingMovePendingDestinationId != null) return false;
+
+    kingMovePendingDestinationId = nodeId;
+    kingMoveOptionsPending = true;
+    redrawStatic();
+
+    ws.send(JSON.stringify({
+      type: 'kingMove',
+      destinationNodeId: nodeId,
+      token,
+    }));
+    return true;
+  }
+
+  function handleKingMoveOptions(msg) {
+    if (!kingSelectionActive) return;
+    const originId = Number(msg?.originNodeId);
+    if (!Number.isFinite(originId) || originId !== kingSelectedNodeId) {
+      return;
+    }
+
+    const rawTargets = Array.isArray(msg?.targets) ? msg.targets : [];
+    const targets = [];
+    rawTargets.forEach((value) => {
+      const id = Number(value);
+      if (Number.isFinite(id) && id !== kingSelectedNodeId) {
+        targets.push(id);
+      }
+    });
+
+    kingMoveTargets.clear();
+    kingMoveTargetsList = targets;
+    targets.forEach((id) => kingMoveTargets.add(id));
+    kingMoveOptionsPending = false;
+    kingMovePendingDestinationId = null;
+    kingMoveTargetHoveredId = null;
+    redrawStatic();
+  }
+
+  function handleKingMoveError(msg) {
+    const message = (msg && typeof msg.message === 'string') ? msg.message : 'Unable to move king';
+    showErrorMessage(message);
+    kingMovePendingDestinationId = null;
+    clearKingSelection();
+  }
+
+  function handleKingMoved(msg) {
+    const playerId = Number(msg?.playerId);
+    const fromNodeId = Number(msg?.fromNodeId);
+    const toNodeId = Number(msg?.toNodeId);
+    const crownHealthRaw = msg?.crownHealth;
+    const crownMaxRaw = msg?.crownMax;
+    let crownHealth = Number(crownHealthRaw);
+    let crownMax = Number(crownMaxRaw);
+    if (!Number.isFinite(crownHealth)) crownHealth = null;
+    if (!Number.isFinite(crownMax)) crownMax = null;
+    if (!Number.isFinite(playerId) || !Number.isFinite(toNodeId)) {
+      return;
+    }
+
+    if (Number.isFinite(fromNodeId)) {
+      const sourceNode = nodes.get(fromNodeId);
+      if (sourceNode) {
+        sourceNode.kingOwnerId = null;
+        sourceNode.isKing = false;
+        sourceNode.kingCrownHealth = 0;
+        sourceNode.kingCrownMax = 0;
+      }
+    }
+
+    const targetNode = nodes.get(toNodeId);
+    if (targetNode) {
+      targetNode.kingOwnerId = playerId;
+      targetNode.isKing = true;
+      let resolvedCrownMax = crownMax;
+      let resolvedCrownHealth = crownHealth;
+      if (!Number.isFinite(resolvedCrownMax) || resolvedCrownMax <= 0) {
+        if (Number.isFinite(targetNode.kingCrownMax) && targetNode.kingCrownMax > 0) {
+          resolvedCrownMax = targetNode.kingCrownMax;
+        } else if (kingCrownDefaultMax > 0) {
+          resolvedCrownMax = kingCrownDefaultMax;
+        } else if (Number.isFinite(resolvedCrownHealth) && resolvedCrownHealth > 0) {
+          resolvedCrownMax = resolvedCrownHealth;
+        }
+      }
+      if (!Number.isFinite(resolvedCrownHealth) || resolvedCrownHealth < 0) {
+        if (Number.isFinite(crownHealth)) {
+          resolvedCrownHealth = crownHealth;
+        } else if (Number.isFinite(resolvedCrownMax)) {
+          resolvedCrownHealth = resolvedCrownMax;
+        } else if (Number.isFinite(targetNode.kingCrownHealth)) {
+          resolvedCrownHealth = targetNode.kingCrownHealth;
+        } else {
+          resolvedCrownHealth = 0;
+        }
+      }
+      if (Number.isFinite(resolvedCrownMax) && resolvedCrownMax > 0) {
+        kingCrownDefaultMax = Math.max(kingCrownDefaultMax, resolvedCrownMax);
+      }
+      targetNode.kingCrownMax = Number.isFinite(resolvedCrownMax) ? Math.max(0, resolvedCrownMax) : 0;
+      targetNode.kingCrownHealth = Number.isFinite(resolvedCrownHealth) ? Math.max(0, resolvedCrownHealth) : targetNode.kingCrownMax;
+    }
+
+    kingMovePendingDestinationId = null;
+    kingNodesByPlayer.set(playerId, toNodeId);
+    if (playerId === myPlayerId) {
+      clearKingSelection({ skipRedraw: true });
+    }
+
+    rebuildKingNodes();
+    redrawStatic();
   }
 
   function handleNodeCaptured(msg) {
@@ -5022,45 +5356,397 @@ function fallbackRemoveEdgesForNode(nodeId) {
     return original || 'Error';
   }
 
-  function drawKingCrown(nx, ny, radius, ownerColor) {
+  function createKingCrownLayout(centerX, baseBottomY, radius) {
+    const crownRadius = Math.max(1, radius);
+    const bodyHeight = Math.max(38, crownRadius * 3.0);
+    const stemHeight = Math.max(12, bodyHeight * 0.36);
+    const bowlHeight = bodyHeight - stemHeight;
+    const bottomWidth = Math.max(10, crownRadius * 1.2);
+    const stemWidth = Math.max(bottomWidth + 8, crownRadius * 1.4);
+    const topWidth = Math.max(stemWidth + 22, crownRadius * 1.75);
+    const spikeHeight = Math.max(12, crownRadius * 0.75);
+    const topBandY = baseBottomY - bodyHeight;
+    const stemTopY = baseBottomY - stemHeight;
+    const topPeakY = topBandY - spikeHeight;
+    const paddingX = Math.max(12, crownRadius * 0.5);
+    const paddingY = Math.max(12, bodyHeight * 0.2);
+
+    const bottomLeft = { x: centerX - bottomWidth / 2, y: baseBottomY };
+    const bottomRight = { x: centerX + bottomWidth / 2, y: baseBottomY };
+    const stemRight = { x: centerX + stemWidth / 2, y: stemTopY };
+    const stemLeft = { x: centerX - stemWidth / 2, y: stemTopY };
+    const topRight = { x: centerX + topWidth / 2, y: topBandY };
+    const topLeft = { x: centerX - topWidth / 2, y: topBandY };
+
+    const outlinePoints = [bottomLeft, bottomRight, stemRight, topRight];
+    const bodyOutlinePoints = [
+      { x: bottomLeft.x, y: bottomLeft.y },
+      { x: bottomRight.x, y: bottomRight.y },
+      { x: stemRight.x, y: stemRight.y },
+      { x: topRight.x, y: topRight.y },
+      { x: topLeft.x, y: topLeft.y },
+      { x: stemLeft.x, y: stemLeft.y },
+    ];
+    const spikeTriangles = [];
+
+    const spikeCount = 3;
+    const segmentWidth = topWidth / spikeCount;
+    let currentRightX = topRight.x;
+    for (let i = 0; i < spikeCount; i += 1) {
+      const nextLeftX = currentRightX - segmentWidth;
+      const tip = { x: currentRightX - segmentWidth / 2, y: topPeakY };
+      const rightBase = { x: currentRightX, y: topBandY };
+      const leftBase = { x: nextLeftX, y: topBandY };
+      outlinePoints.push(tip, leftBase);
+      spikeTriangles.push({
+        tip,
+        rightBase,
+        leftBase,
+      });
+      currentRightX = nextLeftX;
+    }
+    outlinePoints.push(stemLeft);
+
+    const widthAt = (y) => {
+      if (y >= stemTopY) {
+        const progress = (baseBottomY - y) / Math.max(stemHeight, 1e-6);
+        return bottomWidth + (stemWidth - bottomWidth) * Math.max(0, Math.min(1, progress));
+      }
+      const progress = (stemTopY - y) / Math.max(bowlHeight, 1e-6);
+      return stemWidth + (topWidth - stemWidth) * Math.max(0, Math.min(1, progress));
+    };
+
+    const bounds = {
+      left: centerX - topWidth / 2 - paddingX,
+      right: centerX + topWidth / 2 + paddingX,
+      top: topPeakY - paddingY,
+      bottom: baseBottomY + paddingY,
+    };
+
+    return {
+      centerX,
+      centerY: (topPeakY + baseBottomY) / 2,
+      baseBottomY,
+      stemTopY,
+      topBandY,
+      topPeakY,
+      bottomWidth,
+      stemWidth,
+      topWidth,
+      spikeHeight,
+      outlinePoints,
+      bodyOutlinePoints,
+      spikes: spikeTriangles,
+      paddingX,
+      paddingY,
+      fillableHeight: baseBottomY - topBandY,
+      height: baseBottomY - topPeakY,
+      widthAt,
+      bounds,
+      hitRadius: Math.max(topWidth / 2 + paddingX, (baseBottomY - topPeakY) / 2 + paddingY),
+    };
+  }
+
+  function buildCrownFillPolygon(layout, ratio) {
+    if (!layout) return null;
+    const clamped = Math.max(0, Math.min(1, Number(ratio) || 0));
+    if (clamped <= 0) return null;
+    const {
+      centerX,
+      baseBottomY,
+      stemTopY,
+      topBandY,
+      bottomWidth,
+      stemWidth,
+      widthAt,
+      fillableHeight,
+    } = layout;
+    const effectiveHeight = Math.max(fillableHeight || (baseBottomY - topBandY), 1e-6);
+    let fillTopY = baseBottomY - effectiveHeight * clamped;
+    fillTopY = Math.min(baseBottomY, Math.max(topBandY, fillTopY));
+
+    const points = [];
+    points.push({ x: centerX - bottomWidth / 2, y: baseBottomY });
+    points.push({ x: centerX + bottomWidth / 2, y: baseBottomY });
+
+    if (fillTopY >= stemTopY) {
+      const half = (widthAt ? widthAt(fillTopY) : stemWidth) / 2;
+      points.push({ x: centerX + half, y: fillTopY });
+      points.push({ x: centerX - half, y: fillTopY });
+    } else {
+      const stemHalf = stemWidth / 2;
+      const upperHalf = (widthAt ? widthAt(fillTopY) : stemWidth) / 2;
+      points.push({ x: centerX + stemHalf, y: stemTopY });
+      points.push({ x: centerX + upperHalf, y: fillTopY });
+      points.push({ x: centerX - upperHalf, y: fillTopY });
+      points.push({ x: centerX - stemHalf, y: stemTopY });
+    }
+
+    points.push({ x: centerX - bottomWidth / 2, y: baseBottomY });
+    return points;
+  }
+
+  function fillCrownPolygon(points, color, alpha) {
+    if (!graphicsNodes || !points || points.length < 3) return;
+    const useAlpha = Number.isFinite(alpha) ? alpha : 1;
+    if (useAlpha <= 0) return;
+    graphicsNodes.fillStyle(color, useAlpha);
+    graphicsNodes.beginPath();
+    graphicsNodes.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i += 1) {
+      graphicsNodes.lineTo(points[i].x, points[i].y);
+    }
+    graphicsNodes.closePath();
+    graphicsNodes.fillPath();
+  }
+
+  function strokeCrownPolygon(points, width, color, alpha) {
+    if (!graphicsNodes || !points || points.length < 2) return;
+    const useAlpha = Number.isFinite(alpha) ? alpha : 1;
+    if (useAlpha <= 0) return;
+    graphicsNodes.lineStyle(width, color, useAlpha);
+    graphicsNodes.beginPath();
+    graphicsNodes.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i += 1) {
+      graphicsNodes.lineTo(points[i].x, points[i].y);
+    }
+    graphicsNodes.closePath();
+    graphicsNodes.strokePath();
+  }
+
+  function computePlacedKingCrownLayout(screenX, screenY, crownRadius) {
+    const radius = Math.max(1, crownRadius);
+    const nodeRadiusEquivalent = Math.max(1, radius / KING_CROWN_TO_NODE_RATIO);
+    const verticalOffset = Math.max(6, nodeRadiusEquivalent * 0.35);
+    const baseBottomY = screenY - nodeRadiusEquivalent - verticalOffset;
+    const layout = createKingCrownLayout(screenX, baseBottomY, radius);
+    layout.nodeRadius = nodeRadiusEquivalent;
+    return layout;
+  }
+
+  function isPointWithinRect(px, py, rect) {
+    if (!rect) return false;
+    return px >= rect.left && px <= rect.right && py >= rect.top && py <= rect.bottom;
+  }
+
+  function drawKingCrown(nx, ny, radius, ownerColor, options = {}) {
+    if (!graphicsNodes) return null;
+    const {
+      highlighted = false,
+      highlightColor: overrideHighlightColor,
+      crownHealth: crownHealthOpt = null,
+      crownMax: crownMaxOpt = null,
+    } = options;
+    const layout = computePlacedKingCrownLayout(nx, ny, radius);
+    if (!layout) return null;
+
+    const strokeColor = Number.isFinite(ownerColor) ? ownerColor : 0x000000;
+    const primaryColor = KING_CROWN_FILL_COLOR;
+    const highlightColor = Number.isFinite(overrideHighlightColor) ? overrideHighlightColor : primaryColor;
+    const fillColor = highlighted ? highlightColor : primaryColor;
+    const baseHex = `#${primaryColor.toString(16).padStart(6, '0')}`;
+    const emptyFillColor = hexToInt(lightenColor(baseHex, 0.35));
+    const outlineWidth = highlighted ? 3.0 : 2.4;
+    const outlineAlpha = highlighted ? 0.98 : 0.9;
+    const emptyFillAlpha = highlighted ? 0.3 : 0.18;
+    const liquidFillAlpha = highlighted ? 0.96 : 0.85;
+
+    let crownMaxValue = Number.isFinite(crownMaxOpt) ? Math.max(0, crownMaxOpt) : 0;
+    let crownHealthValue = Number.isFinite(crownHealthOpt) ? Math.max(0, crownHealthOpt) : NaN;
+    if ((crownMaxValue <= 0 || !Number.isFinite(crownMaxValue)) && Number.isFinite(crownHealthValue) && crownHealthValue > 0) {
+      crownMaxValue = crownHealthValue;
+    }
+    if (!Number.isFinite(crownHealthValue)) {
+      crownHealthValue = crownMaxValue;
+    }
+    const coreFillRatio = crownMaxValue > 0 ? Math.max(0, Math.min(1, crownHealthValue / crownMaxValue)) : 0;
+    const bodyHeight = Math.max(layout.fillableHeight || 0, 0);
+    const spikeHeight = Math.max(layout.spikeHeight || 0, 0);
+    const totalHeight = bodyHeight + spikeHeight;
+    let bodyFillRatio = 0;
+    let tipFillRatio = 0;
+    if (totalHeight > 0) {
+      const filledHeight = Math.max(0, Math.min(totalHeight, totalHeight * coreFillRatio));
+      if (bodyHeight > 0) {
+        bodyFillRatio = Math.min(1, filledHeight / bodyHeight);
+      }
+      if (filledHeight > bodyHeight && spikeHeight > 1e-6) {
+        tipFillRatio = Math.min(1, (filledHeight - bodyHeight) / spikeHeight);
+      }
+    }
+
+    const bodyOutline = layout.bodyOutlinePoints || layout.outlinePoints;
+    if (bodyOutline) {
+      fillCrownPolygon(bodyOutline, emptyFillColor, emptyFillAlpha);
+    }
+
+    if (bodyFillRatio > 0) {
+      const fillPoints = buildCrownFillPolygon(layout, Math.min(1, bodyFillRatio));
+      if (fillPoints) {
+        fillCrownPolygon(fillPoints, fillColor, liquidFillAlpha);
+      }
+    }
+
+    if (tipFillRatio > 0 && Array.isArray(layout.spikes)) {
+      const clampedTip = Math.min(1, tipFillRatio);
+      layout.spikes.forEach((spike) => {
+        if (!spike || !spike.tip || !spike.leftBase || !spike.rightBase) return;
+        const { tip, leftBase, rightBase } = spike;
+        if (clampedTip >= 0.999) {
+          fillCrownPolygon(
+            [
+              { x: leftBase.x, y: leftBase.y },
+              { x: rightBase.x, y: rightBase.y },
+              { x: tip.x, y: tip.y },
+            ],
+            fillColor,
+            liquidFillAlpha
+          );
+          return;
+        }
+        const rightInterp = {
+          x: rightBase.x + clampedTip * (tip.x - rightBase.x),
+          y: rightBase.y + clampedTip * (tip.y - rightBase.y),
+        };
+        const leftInterp = {
+          x: leftBase.x + clampedTip * (tip.x - leftBase.x),
+          y: leftBase.y + clampedTip * (tip.y - leftBase.y),
+        };
+        fillCrownPolygon(
+          [
+            { x: leftBase.x, y: leftBase.y },
+            { x: rightBase.x, y: rightBase.y },
+            rightInterp,
+            leftInterp,
+          ],
+          fillColor,
+          liquidFillAlpha
+        );
+      });
+    }
+
+    strokeCrownPolygon(layout.outlinePoints, outlineWidth, strokeColor, outlineAlpha);
+
+    if (highlighted && Number.isFinite(overrideHighlightColor)) {
+      strokeCrownPolygon(
+        layout.outlinePoints,
+        Math.max(1, outlineWidth - 1),
+        overrideHighlightColor,
+        0.5
+      );
+    }
+
+    return layout;
+  }
+
+  function drawKingMovePreviewCrown(nx, baseBottomY, radius, options = {}) {
+    if (!graphicsNodes) return null;
+    const {
+      highlighted = false,
+      strokeColor: overrideStrokeColor,
+      fillColor: overrideFillColor,
+    } = options;
+    const layout = createKingCrownLayout(nx, baseBottomY, radius);
+    if (!layout) return null;
+    const baseStrokeColor = Number.isFinite(overrideStrokeColor)
+      ? overrideStrokeColor
+      : 0x000000;
+    const strokeColor = highlighted ? baseStrokeColor : darkenColor(baseStrokeColor, 0.9);
+    const fillColor = Number.isFinite(overrideFillColor) ? overrideFillColor : KING_CROWN_FILL_COLOR;
+    const strokeAlpha = highlighted ? 0.88 : 0.65;
+    const strokeWidth = highlighted ? 2.4 : 2.0;
+    const fillAlpha = highlighted ? 0.35 : 0.24;
+
+    const bodyOutline = layout.bodyOutlinePoints || layout.outlinePoints;
+    if (bodyOutline) {
+      fillCrownPolygon(bodyOutline, fillColor, fillAlpha);
+    }
+    strokeCrownPolygon(layout.outlinePoints, strokeWidth, strokeColor, strokeAlpha);
+
+    return {
+      centerX: layout.centerX,
+      centerY: layout.centerY,
+      bounds: layout.bounds,
+      hitRadius: layout.hitRadius,
+    };
+  }
+
+  function drawKingMoveTargetsOverlay() {
     if (!graphicsNodes) return;
-    const baseWidth = Math.max(18, radius * 2.4);
-    const baseHeight = Math.max(3, radius * 0.3);
-    const baseY = ny - radius - 6;
-    const leftX = nx - baseWidth / 2;
-    const spikeHeight = Math.max(10, radius * 1.1);
-    const spikeHalfWidth = Math.max(4, baseWidth * 0.12);
-    const spikeOffsets = [-0.35, 0, 0.35];
-    const highlightColor = ownerColor || 0xffcc33;
+    kingMoveTargetRenderInfo.clear();
+    if (!kingSelectionActive || kingMoveTargetsList.length === 0) return;
+    if (!view) return;
 
-    graphicsNodes.fillStyle(0xffd700, 1);
-    graphicsNodes.fillRect(leftX, baseY, baseWidth, baseHeight);
-    graphicsNodes.lineStyle(2, highlightColor, 0.9);
-    graphicsNodes.strokeRect(leftX, baseY, baseWidth, baseHeight);
+    const baseScale = Math.min(view.scaleX, view.scaleY);
 
-    spikeOffsets.forEach((offset) => {
-      const centerX = nx + baseWidth * offset * 0.8;
-      const heightScale = offset === 0 ? 1 : 0.85;
-      const spikeTopY = baseY - spikeHeight * heightScale;
-      graphicsNodes.fillStyle(0xffd700, 1);
-      graphicsNodes.fillTriangle(
+    kingMoveTargetsList.forEach((nodeId, index) => {
+      const node = nodes.get(nodeId);
+      if (!node) return;
+
+      const [screenX, screenY] = worldToScreen(node.x, node.y);
+      if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return;
+
+      const nodeRadius = Math.max(1, calculateNodeRadius(node, baseScale));
+      const crownRadius = computeStandardKingCrownRadius(baseScale, KING_OPTION_RADIUS_MULTIPLIER);
+      const bounceMagnitude = Math.max(3, crownRadius * KING_OPTION_BOUNCE_SCALE);
+      const bounce = Math.sin(animationTime * 2.6 + index * 0.8) * bounceMagnitude;
+
+      const verticalGap = nodeRadius + crownRadius * KING_OPTION_VERTICAL_SCALE + KING_OPTION_VERTICAL_EXTRA;
+      const crownOffset = -(verticalGap) - bounce;
+      const crownAnchorY = screenY + crownOffset;
+      const defaultCenterY = crownAnchorY - crownRadius * 0.7;
+
+      const isHovered = kingMoveTargetHoveredId === nodeId;
+      const isPending = kingMovePendingDestinationId === nodeId;
+      const playerColor = ownerToColor(myPlayerId) || 0x000000;
+      const accentColor = ownerToSecondaryColor(myPlayerId) || playerColor;
+      const emphasized = isPending || isHovered;
+      const strokeColor = emphasized ? playerColor : 0x000000;
+      const fillColor = emphasized ? accentColor : 0xffd700;
+
+      const layout = drawKingMovePreviewCrown(screenX, crownAnchorY, crownRadius, {
+        highlighted: emphasized,
+        strokeColor,
+        fillColor,
+      }) || null;
+
+      const hitRadius = layout?.hitRadius ?? crownRadius + 10;
+      const centerX = layout?.centerX ?? screenX;
+      const centerY = layout?.centerY ?? defaultCenterY;
+
+      kingMoveTargetRenderInfo.set(nodeId, {
         centerX,
-        spikeTopY,
-        centerX - spikeHalfWidth,
-        baseY,
-        centerX + spikeHalfWidth,
-        baseY
-      );
-      graphicsNodes.lineStyle(2, highlightColor, 0.9);
-      graphicsNodes.strokeTriangle(
-        centerX,
-        spikeTopY,
-        centerX - spikeHalfWidth,
-        baseY,
-        centerX + spikeHalfWidth,
-        baseY
-      );
+        centerY,
+        hitRadius,
+        bounds: layout?.bounds ?? null,
+        radius: crownRadius,
+      });
     });
+  }
+
+  function pickKingMoveTargetFromScreen(screenX, screenY) {
+    if (!kingSelectionActive || kingMoveTargetRenderInfo.size === 0) return null;
+    let bestId = null;
+    let bestDistSq = Infinity;
+    kingMoveTargetRenderInfo.forEach((info, nodeId) => {
+      if (!info) return;
+      if (info.bounds && isPointWithinRect(screenX, screenY, info.bounds)) {
+        bestId = nodeId;
+        bestDistSq = 0;
+        return;
+      }
+      const centerX = Number.isFinite(info.centerX) ? info.centerX : 0;
+      const centerY = Number.isFinite(info.centerY) ? info.centerY : 0;
+      const radius = Number.isFinite(info.hitRadius) ? info.hitRadius : 18;
+      const dx = screenX - centerX;
+      const dy = screenY - centerY;
+      const distSq = dx * dx + dy * dy;
+      if (distSq <= radius * radius && distSq < bestDistSq) {
+        bestId = nodeId;
+        bestDistSq = distSq;
+      }
+    });
+    return bestId;
   }
 
   function redrawStatic() {
@@ -5249,7 +5935,15 @@ function fallbackRemoveEdgesForNode(nodeId) {
       const kingOwnerId = Number.isFinite(n.kingOwnerId) ? Number(n.kingOwnerId) : null;
       if (winCondition === 'king' && kingOwnerId != null) {
         const crownColor = ownerToColor(kingOwnerId);
-        drawKingCrown(nx, ny, r, crownColor);
+        const isSelectedKing = kingSelectionActive && kingSelectedNodeId === id;
+        const selectionColor = ownerToSecondaryColor(myPlayerId) || ownerToColor(myPlayerId) || crownColor || 0x000000;
+        const kingCrownRadius = computeStandardKingCrownRadius(baseScale);
+        drawKingCrown(nx, ny, kingCrownRadius, crownColor, {
+          highlighted: isSelectedKing,
+          highlightColor: selectionColor,
+          crownHealth: Number.isFinite(n.kingCrownHealth) ? n.kingCrownHealth : null,
+          crownMax: Number.isFinite(n.kingCrownMax) ? n.kingCrownMax : null,
+        });
       }
 
       // Hover effect: player's color border when eligible for starting node pick
@@ -5341,6 +6035,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
         }
       }
     }
+
+    drawKingMoveTargetsOverlay();
 
     // After drawing nodes / previews:
     if (!(activeAbility === 'bridge1way' && bridgeFirstNode !== null && hoveredNodeId !== null)) {
@@ -6419,6 +7115,36 @@ function fallbackRemoveEdgesForNode(nodeId) {
   function handleSingleClick(ev, wx, wy, baseScale) {
     if (isReplayActive()) return;
     if (myEliminated || gameEnded) return;
+
+    if (kingSelectionActive) {
+      if (kingMoveOptionsPending) {
+        return;
+      }
+      if (kingMovePendingDestinationId != null) {
+        return;
+      }
+      const [pointerScreenX, pointerScreenY] = worldToScreen(wx, wy);
+      const crownTargetId = pickKingMoveTargetFromScreen(pointerScreenX, pointerScreenY);
+      if (crownTargetId != null) {
+        sendKingMoveRequest(crownTargetId);
+        return;
+      }
+      const originNode = nodes.get(kingSelectedNodeId);
+      if (originNode) {
+        const [originScreenX, originScreenY] = worldToScreen(originNode.x, originNode.y);
+        const originCrownRadius = computeStandardKingCrownRadius(baseScale);
+        const originLayout = computePlacedKingCrownLayout(originScreenX, originScreenY, originCrownRadius);
+        const withinBounds = originLayout && isPointWithinRect(pointerScreenX, pointerScreenY, originLayout.bounds);
+        const dx = pointerScreenX - (originLayout?.centerX ?? originScreenX);
+        const dy = pointerScreenY - (originLayout?.centerY ?? originScreenY);
+        const withinRadius = originLayout ? (dx * dx + dy * dy <= originLayout.hitRadius * originLayout.hitRadius) : false;
+        if (withinBounds || withinRadius) {
+          return;
+        }
+      }
+      clearKingSelection();
+    }
+
     // Handle bridge building mode
     if (handleBridgeBuilding(wx, wy, baseScale, false)) {
       return; // Bridge building was handled
@@ -6574,6 +7300,10 @@ function fallbackRemoveEdgesForNode(nodeId) {
     const menuVisible = !document.getElementById('menu')?.classList.contains('hidden');
     if (menuVisible) return;
     if (ev.key.toLowerCase() === 'escape') {
+      if (kingSelectionActive) {
+        clearKingSelection();
+        return;
+      }
       if (activeAbility) {
         activeAbility = null;
         clearBridgeSelection();
@@ -6669,6 +7399,18 @@ function fallbackRemoveEdgesForNode(nodeId) {
       }
     }
 
+    if (kingSelectionActive && view) {
+      const [pointerScreenX, pointerScreenY] = worldToScreen(wx, wy);
+      const hoveredTargetId = pickKingMoveTargetFromScreen(pointerScreenX, pointerScreenY);
+      if (hoveredTargetId !== kingMoveTargetHoveredId) {
+        kingMoveTargetHoveredId = hoveredTargetId;
+        needsRedraw = true;
+      }
+    } else if (!kingSelectionActive && kingMoveTargetHoveredId !== null) {
+      kingMoveTargetHoveredId = null;
+      needsRedraw = true;
+    }
+
     const hoveredEdge = (hoveredEdgeId != null) ? edges.get(hoveredEdgeId) : null;
     // Show reverse cost only if edge can be reversed AND player doesn't already control it
     const shouldShowReverseCost = Boolean(hoveredEdge && canReverseEdge(hoveredEdge) && !playerControlsEdge(hoveredEdge));
@@ -6690,9 +7432,71 @@ function fallbackRemoveEdgesForNode(nodeId) {
     }
   });
 
+  // Mouse down: detect king crown clicks separately
+  window.addEventListener('mousedown', (ev) => {
+    if (!kingSelectionActive) {
+      const myKingNodeId = kingNodesByPlayer.get(myPlayerId);
+      if (
+        phase === 'playing' &&
+        myPicked &&
+        !kingSelectionActive &&
+        myKingNodeId != null &&
+        myKingNodeId !== undefined
+      ) {
+        const kingNode = nodes.get(myKingNodeId);
+        if (kingNode) {
+          const [screenX, screenY] = worldToScreen(kingNode.x, kingNode.y);
+          const [pointerX, pointerY] = getPointerScreenCoords(ev);
+          const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
+          const crownRadius = computeStandardKingCrownRadius(baseScale);
+          const layout = computePlacedKingCrownLayout(screenX, screenY, crownRadius);
+          const withinBounds = layout && isPointWithinRect(pointerX, pointerY, layout.bounds);
+          const dx = pointerX - (layout?.centerX ?? screenX);
+          const dy = pointerY - (layout?.centerY ?? screenY);
+          const withinRadius = layout ? (dx * dx + dy * dy <= layout.hitRadius * layout.hitRadius) : false;
+          if (withinBounds || withinRadius) {
+            startKingSelection(myKingNodeId);
+            ev.preventDefault();
+            ev.stopPropagation();
+            return;
+          }
+        }
+      }
+      return;
+    }
+
+    if (kingMovePendingDestinationId != null) {
+      return;
+    }
+
+    const [pointerScreenX, pointerScreenY] = getPointerScreenCoords(ev);
+    const crownTargetId = pickKingMoveTargetFromScreen(pointerScreenX, pointerScreenY);
+    if (crownTargetId != null) {
+      sendKingMoveRequest(crownTargetId);
+      ev.preventDefault();
+      ev.stopPropagation();
+    } else {
+      clearKingSelection();
+    }
+  });
+
   function screenToWorld(px, py) {
     if (!view) return [px, py];
     return [(px - view.offsetX) / view.scaleX, (py - view.offsetY) / view.scaleY];
+  }
+
+  function getPointerScreenCoords(ev) {
+    if (!ev) {
+      return [virtualCursorScreenX, virtualCursorScreenY];
+    }
+    if (typeof ev.clientX === 'number' && typeof ev.clientY === 'number') {
+      return [ev.clientX, ev.clientY];
+    }
+    const touch = ev.touches && ev.touches[0];
+    if (touch && typeof touch.clientX === 'number' && typeof touch.clientY === 'number') {
+      return [touch.clientX, touch.clientY];
+    }
+    return [virtualCursorScreenX, virtualCursorScreenY];
   }
 
   function handleAbilityClick(abilityName) {

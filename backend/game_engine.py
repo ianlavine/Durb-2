@@ -4,7 +4,8 @@ Handles game state management, validation, and game rules.
 """
 import math
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from collections import deque
+from typing import Any, Dict, List, Optional, Set, Tuple
 from .constants import (
     BRIDGE_BASE_COST,
     BRIDGE_COST_PER_UNIT_DISTANCE,
@@ -16,6 +17,7 @@ from .constants import (
     INTAKE_TRANSFER_RATIO,
     RESERVE_TRANSFER_RATIO,
     STARTING_NODE_JUICE,
+    KING_CROWN_MAX_HEALTH,
     CLASSIC_PRODUCTION_RATE_PER_NODE,
     CLASSIC_MAX_TRANSFER_RATIO,
     CLASSIC_INTAKE_TRANSFER_RATIO,
@@ -139,6 +141,7 @@ class GameEngine:
         self.state.intake_transfer_ratio = INTAKE_TRANSFER_RATIO
         self.state.reserve_transfer_ratio = RESERVE_TRANSFER_RATIO
         self.state.starting_node_juice = STARTING_NODE_JUICE
+        self.state.king_crown_max_health = KING_CROWN_MAX_HEALTH
 
         if normalized_mode in {"warp-old", "warp", "i-warp"}:
             screen_variant = "warp"
@@ -159,6 +162,7 @@ class GameEngine:
         starting_node_juice_value = STARTING_NODE_JUICE
         starting_node_juice_overridden = False
         win_condition = "dominate"
+        crown_health_value = KING_CROWN_MAX_HEALTH
 
         if isinstance(options, dict):
             screen_option = str(options.get("screen", "")).strip().lower()
@@ -245,6 +249,16 @@ class GameEngine:
                 starting_node_juice_value = round(clamped_start, 2)
                 starting_node_juice_overridden = True
 
+            crown_health_raw = options.get("kingCrownHealth")
+            if isinstance(crown_health_raw, str):
+                crown_health_raw = crown_health_raw.strip()
+            try:
+                parsed_crown = float(crown_health_raw)
+            except (TypeError, ValueError):
+                parsed_crown = None
+            if parsed_crown is not None and parsed_crown > 0:
+                crown_health_value = max(1.0, min(300.0, round(parsed_crown, 3)))
+
             win_condition_option = options.get("winCondition")
             if isinstance(win_condition_option, str) and win_condition_option.strip().lower() == "king":
                 win_condition = "king"
@@ -282,6 +296,7 @@ class GameEngine:
             "ringJuiceToGoldRatio": overflow_ratio,
             "ringPayoutGold": overflow_payout,
             "winCondition": win_condition,
+            "kingCrownHealth": crown_health_value,
         }
         sanitized_options["pipeStart"] = sanitized_options["brassStart"]
         if isinstance(options, dict):
@@ -300,6 +315,7 @@ class GameEngine:
         self.state.overflow_juice_to_gold_ratio = overflow_ratio
         self.state.overflow_pending_gold_payout = overflow_payout
         self.state.win_condition = win_condition
+        self.state.king_crown_max_health = crown_health_value
         if win_condition != "king":
             self.state.player_king_nodes.clear()
 
@@ -618,6 +634,9 @@ class GameEngine:
                 if getattr(self.state, "win_condition", "dominate") == "king":
                     self.state.player_king_nodes[player_id] = node_id
                     setattr(node, "king_owner_id", player_id)
+                    crown_max = getattr(self.state, "king_crown_max_health", KING_CROWN_MAX_HEALTH)
+                    setattr(node, "king_crown_health", crown_max)
+                    setattr(node, "king_crown_max_health", crown_max)
                 self.state.players_who_picked[player_id] = True
                 if self.state.hidden_start_active:
                     self.state.hidden_start_picks[player_id] = node_id
@@ -649,6 +668,151 @@ class GameEngine:
         except GameValidationError:
             return False
     
+    def _validate_king_context(self, player_id: int) -> int:
+        """Ensure king movement is available and return the current king node id."""
+        if not self.state:
+            raise GameValidationError("No game state")
+        if getattr(self.state, "win_condition", "dominate") != "king":
+            raise GameValidationError("King moves are disabled")
+        if player_id in self.state.eliminated_players:
+            raise GameValidationError("Player eliminated")
+        king_node_id = self.state.player_king_nodes.get(player_id)
+        if king_node_id is None:
+            raise GameValidationError("No king to move")
+        king_node = self.state.nodes.get(king_node_id)
+        if king_node is None or king_node.owner != player_id:
+            raise GameValidationError("King node not controlled")
+        return king_node_id
+
+    def _compute_king_reachable_nodes(self, *, player_id: int, origin_node_id: int) -> Set[int]:
+        """Return the set of nodes the king can reach via owned nodes and forward pipes."""
+        if not self.state:
+            return set()
+
+        visited: Set[int] = {origin_node_id}
+        reachable: Set[int] = set()
+        queue = deque([origin_node_id])
+
+        while queue:
+            current_id = queue.popleft()
+            current_node = self.state.nodes.get(current_id)
+            if not current_node or current_node.owner != player_id:
+                continue
+
+            for edge_id in list(current_node.attached_edge_ids):
+                edge = self.state.edges.get(edge_id)
+                if not edge:
+                    continue
+                if getattr(edge, "building", False):
+                    continue
+                if edge.source_node_id != current_id:
+                    continue
+
+                target_id = edge.target_node_id
+                if target_id in visited:
+                    continue
+                target_node = self.state.nodes.get(target_id)
+                if not target_node or target_node.owner != player_id:
+                    continue
+
+                visited.add(target_id)
+                queue.append(target_id)
+                if target_id != origin_node_id:
+                    reachable.add(target_id)
+
+        return reachable
+
+    def get_king_move_options(
+        self,
+        token: str,
+        origin_node_id: Optional[int] = None,
+    ) -> Tuple[bool, List[int], Optional[str], Optional[int]]:
+        """Return reachable nodes for the requesting player's king."""
+        try:
+            self.validate_game_active()
+            player_id = self.validate_player(token)
+            self.validate_player_can_act(player_id)
+
+            current_node_id = self._validate_king_context(player_id)
+            if origin_node_id is not None:
+                try:
+                    origin_int = int(origin_node_id)
+                except (TypeError, ValueError):
+                    raise GameValidationError("Invalid king node")
+                if origin_int != current_node_id:
+                    raise GameValidationError("King location has changed")
+
+            reachable = sorted(
+                self._compute_king_reachable_nodes(
+                    player_id=player_id,
+                    origin_node_id=current_node_id,
+                )
+            )
+            return True, reachable, None, current_node_id
+
+        except GameValidationError as exc:
+            return False, [], str(exc), None
+
+    def handle_move_king(
+        self,
+        token: str,
+        destination_node_id: int,
+    ) -> Tuple[bool, Optional[str], Optional[Dict[str, int]]]:
+        """Attempt to move the player's king to a new node."""
+        try:
+            self.validate_game_active()
+            player_id = self.validate_player(token)
+            self.validate_player_can_act(player_id)
+            current_node_id = self._validate_king_context(player_id)
+
+            destination_node = self.validate_node_exists(destination_node_id)
+            if destination_node.owner != player_id:
+                raise GameValidationError("Must move to a controlled node")
+            if current_node_id == destination_node_id:
+                raise GameValidationError("King already occupies this node")
+
+            reachable = self._compute_king_reachable_nodes(
+                player_id=player_id,
+                origin_node_id=current_node_id,
+            )
+            if destination_node_id not in reachable:
+                raise GameValidationError("Destination not reachable")
+
+            crown_max_default = getattr(self.state, "king_crown_max_health", KING_CROWN_MAX_HEALTH)
+            current_health = crown_max_default
+            current_max_health = crown_max_default
+
+            current_node = self.state.nodes.get(current_node_id) if self.state else None
+            if current_node:
+                current_health = float(getattr(current_node, "king_crown_health", current_health))
+                current_max_health = float(getattr(current_node, "king_crown_max_health", current_max_health))
+                setattr(current_node, "king_owner_id", None)
+                setattr(current_node, "king_crown_health", 0.0)
+                setattr(current_node, "king_crown_max_health", 0.0)
+
+            if current_max_health <= 0.0:
+                current_max_health = crown_max_default
+            current_health = max(0.0, min(current_health, current_max_health))
+
+            setattr(destination_node, "king_owner_id", player_id)
+            setattr(destination_node, "king_crown_health", current_health)
+            setattr(destination_node, "king_crown_max_health", max(current_max_health, crown_max_default))
+
+            if self.state:
+                self.state.player_king_nodes[player_id] = destination_node_id
+
+            payload = {
+                "playerId": player_id,
+                "fromNodeId": current_node_id,
+                "toNodeId": destination_node_id,
+                "crownHealth": round(current_health, 3),
+                "crownMax": round(max(current_max_health, crown_max_default), 3),
+            }
+            return True, None, payload
+
+        except GameValidationError as exc:
+            return False, str(exc), None
+
     def handle_edge_click(self, token: str, edge_id: int) -> bool:
         """
         Handle an edge click to toggle flow.

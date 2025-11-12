@@ -780,8 +780,8 @@
           <div class="mode-option-group" data-setting-group="brassStart">
             <span class="selector-label">Pipe Start</span>
             <div class="mode-option-buttons">
-              <button class="mode-option-button" data-setting="brassStart" data-value="owned">Owned</button>
-              <button class="mode-option-button active" data-setting="brassStart" data-value="anywhere">Anywhere</button>
+              <button class="mode-option-button active" data-setting="brassStart" data-value="owned">Owned</button>
+              <button class="mode-option-button" data-setting="brassStart" data-value="anywhere">Anywhere</button>
             </div>
           </div>
           <div class="mode-option-group" data-setting-group="gameStart">
@@ -794,15 +794,22 @@
           <div class="mode-option-group" data-setting-group="winCondition">
             <span class="selector-label">Win-Con</span>
             <div class="mode-option-buttons">
-              <button class="mode-option-button active" data-setting="winCondition" data-value="dominate">Dominate</button>
-              <button class="mode-option-button" data-setting="winCondition" data-value="king">King</button>
+              <button class="mode-option-button" data-setting="winCondition" data-value="dominate">Dominate</button>
+              <button class="mode-option-button active" data-setting="winCondition" data-value="king">King</button>
             </div>
           </div>
           <div class="mode-option-group" data-setting-group="startingJuice">
             <span class="selector-label">Starting Juice</span>
             <div class="mode-slider">
-              <input type="range" id="startingJuiceSlider" min="50" max="300" step="10" value="150" aria-label="Starting node juice" />
-              <span id="startingJuiceValue">150</span>
+              <input type="range" id="startingJuiceSlider" min="50" max="300" step="10" value="300" aria-label="Starting node juice" />
+              <span id="startingJuiceValue">300</span>
+            </div>
+          </div>
+          <div class="mode-option-group" data-setting-group="kingCrownHealth">
+            <span class="selector-label">Crown Health</span>
+            <div class="mode-slider">
+              <input type="range" id="crownHealthSlider" min="1" max="300" step="1" value="150" aria-label="Crown health buffer" />
+              <span id="crownHealthValue">150</span>
             </div>
           </div>
           <div class="mode-option-group bridge-cost-group" data-setting-group="bridgeCost">

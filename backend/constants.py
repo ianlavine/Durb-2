@@ -64,6 +64,9 @@ STARTING_GOLD: float = 0.0
 UNOWNED_NODE_BASE_JUICE: float = 50.0
 STARTING_NODE_JUICE: float = 150.0
 
+# King mode
+KING_CROWN_MAX_HEALTH: float = 150.0  # extra damage buffer before the king node itself is vulnerable
+
 # Classic (OG Durb) tuning
 CLASSIC_STARTING_NODE_JUICE: float = 50.0
 CLASSIC_PRODUCTION_RATE_PER_NODE: float = 0.7
