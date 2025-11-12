@@ -83,6 +83,7 @@
   let bridgeCostDisplay = null; // current bridge cost display text object
   let reverseCostDisplay = null; // current reverse edge cost display text object
   let lastReverseCostPosition = null; // last position where reverse cost was displayed
+  let crownHealthDisplays = new Map(); // crown health text displays for king mode, keyed by node ID
 
   const DOUBLE_CLICK_DELAY_MS = 220;
   const EDGE_REMOVAL_STEP_DURATION = 0.2; // seconds per triangle removal step
@@ -3490,6 +3491,12 @@ function clearBridgeSelection() {
       if (text) text.destroy();
     });
     nodeJuiceTexts.clear();
+    
+    // Clear crown health displays
+    crownHealthDisplays.forEach(display => {
+      if (display) display.destroy();
+    });
+    crownHealthDisplays.clear();
 
     gameMode = normalizeMode(msg.mode || 'basic');
     const initWinCon = msg.winCondition ?? (msg.modeSettings && msg.modeSettings.winCondition);
@@ -5536,6 +5543,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
       highlightColor: overrideHighlightColor,
       crownHealth: crownHealthOpt = null,
       crownMax: crownMaxOpt = null,
+      nodeId = null,
     } = options;
     const layout = computePlacedKingCrownLayout(nx, ny, radius);
     if (!layout) return null;
@@ -5634,6 +5642,83 @@ function fallbackRemoveEdgesForNode(nodeId) {
         overrideHighlightColor,
         0.5
       );
+    }
+
+    // Display crown health text inside the crown near the top
+    if (sceneRef && nodeId != null && Number.isFinite(crownHealthValue)) {
+      const textX = layout.centerX || nx;
+      const textY = (layout.bounds?.top || ny) + 28; // Position inside the crown near the top
+      
+      let crownHealthDisplay = crownHealthDisplays.get(nodeId);
+      
+      if (crownHealthValue > 0) {
+        // Display health number
+        const healthText = Math.ceil(crownHealthValue).toString();
+        
+        if (!crownHealthDisplay) {
+          crownHealthDisplay = sceneRef.add.text(textX, textY, healthText, {
+            fontFamily: 'monospace',
+            fontSize: '14px',
+            fontStyle: 'bold',
+            color: '#000000',
+          })
+          .setOrigin(0.5, 0) // center horizontally, anchor at top
+          .setDepth(1001);
+          crownHealthDisplays.set(nodeId, crownHealthDisplay);
+        } else {
+          crownHealthDisplay.setText(healthText);
+          crownHealthDisplay.setPosition(textX, textY);
+          crownHealthDisplay.setVisible(true);
+          crownHealthDisplay.setAlpha(1); // Reset alpha in case it was flickering
+          // Stop any existing tween
+          if (crownHealthDisplay.flickerTween) {
+            crownHealthDisplay.flickerTween.remove();
+            crownHealthDisplay.flickerTween = null;
+          }
+        }
+      } else if (crownHealthValue === 0) {
+        // Display flickering skull emoji when health is 0
+        const skullText = '💀';
+        
+        if (!crownHealthDisplay) {
+          crownHealthDisplay = sceneRef.add.text(textX, textY, skullText, {
+            fontFamily: 'monospace',
+            fontSize: '20px',
+            fontStyle: 'bold',
+            color: '#FF0000',
+          })
+          .setOrigin(0.5, 0) // center horizontally, anchor at top
+          .setDepth(1001);
+          crownHealthDisplays.set(nodeId, crownHealthDisplay);
+        } else {
+          crownHealthDisplay.setText(skullText);
+          crownHealthDisplay.setPosition(textX, textY);
+          crownHealthDisplay.setStyle({ fontSize: '20px', color: '#FF0000' });
+          crownHealthDisplay.setVisible(true);
+        }
+        
+        // Add flickering effect if not already present
+        if (!crownHealthDisplay.flickerTween) {
+          crownHealthDisplay.flickerTween = sceneRef.tweens.add({
+            targets: crownHealthDisplay,
+            alpha: 0.3,
+            duration: 400,
+            yoyo: true,
+            repeat: -1,
+            ease: 'Sine.easeInOut'
+          });
+        }
+      }
+    } else if (nodeId != null && crownHealthDisplays.has(nodeId)) {
+      const crownHealthDisplay = crownHealthDisplays.get(nodeId);
+      if (crownHealthDisplay) {
+        crownHealthDisplay.setVisible(false);
+        // Stop any flickering tween
+        if (crownHealthDisplay.flickerTween) {
+          crownHealthDisplay.flickerTween.remove();
+          crownHealthDisplay.flickerTween = null;
+        }
+      }
     }
 
     return layout;
@@ -5943,6 +6028,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
           highlightColor: selectionColor,
           crownHealth: Number.isFinite(n.kingCrownHealth) ? n.kingCrownHealth : null,
           crownMax: Number.isFinite(n.kingCrownMax) ? n.kingCrownMax : null,
+          nodeId: id,
         });
       }
 
@@ -7486,6 +7572,10 @@ function fallbackRemoveEdgesForNode(nodeId) {
   }
 
   function getPointerScreenCoords(ev) {
+    // When pointer lock is active (warp mode), always use virtual cursor position
+    if (pointerLockActive) {
+      return [virtualCursorScreenX, virtualCursorScreenY];
+    }
     if (!ev) {
       return [virtualCursorScreenX, virtualCursorScreenY];
     }
