@@ -920,31 +920,48 @@ class GraphState:
             if node.juice <= NODE_MIN_JUICE:
                 # Determine reward based on the previous owner state
                 previous_owner = node.owner
-                reward = 0.0
                 resource_type = str(getattr(node, "resource_type", "money") or "money").lower()
-                if resource_type == "gem":
-                    reward = 0.0
-                    if previous_owner is None and new_owner is not None:
-                        self.record_gem_capture(new_owner, getattr(node, "resource_key", None))
-                elif previous_owner is None:
-                    reward = getattr(
-                        self,
-                        "neutral_capture_reward",
-                        get_neutral_capture_reward(self.mode),
-                    )
-                    self.neutral_capture_reward = reward
-                elif previous_owner != new_owner:
-                    reward = GOLD_REWARD_FOR_ENEMY_CAPTURE
+                reward_amount = 0.0
+                reward_type = "money"
+                reward_key: Optional[str] = None
+                should_emit_capture = False
 
-                if reward > 0.0:
-                    # Award gold for capturing the node
-                    self.player_gold[new_owner] = self.player_gold.get(new_owner, 0.0) + reward
+                if resource_type == "gem":
+                    reward_type = "gem"
+                    raw_key = getattr(node, "resource_key", None)
+                    if raw_key is not None:
+                        try:
+                            reward_key = str(raw_key).strip().lower() or None
+                        except Exception:
+                            reward_key = None
+                    if previous_owner is None and new_owner is not None:
+                        self.record_gem_capture(new_owner, reward_key)
+                        should_emit_capture = True
+                else:
+                    if previous_owner is None:
+                        reward_amount = getattr(
+                            self,
+                            "neutral_capture_reward",
+                            get_neutral_capture_reward(self.mode),
+                        )
+                        self.neutral_capture_reward = reward_amount
+                    elif previous_owner != new_owner:
+                        reward_amount = GOLD_REWARD_FOR_ENEMY_CAPTURE
+
+                    if reward_amount > 0.0 and new_owner is not None:
+                        # Award gold for capturing the node
+                        self.player_gold[new_owner] = self.player_gold.get(new_owner, 0.0) + reward_amount
+                        should_emit_capture = True
+
+                if should_emit_capture and new_owner is not None:
                     # Store the capture event for frontend notification
                     if not hasattr(self, 'pending_node_captures'):
                         self.pending_node_captures = []
                     self.pending_node_captures.append({
                         'nodeId': nid,
-                        'reward': reward,
+                        'reward': reward_amount,
+                        'rewardType': reward_type,
+                        'rewardKey': reward_key,
                         'player_id': new_owner
                     })
 

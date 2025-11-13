@@ -686,16 +686,30 @@ class GameEngine:
 
             # Check if this is for picking a starting node (node is unowned and player hasn't picked yet)
             if node.owner is None and not self.state.players_who_picked.get(player_id):
-                # This is a starting node pick - grant the configured neutral capture reward
-                reward = getattr(
-                    self.state,
-                    "neutral_capture_reward",
-                    get_neutral_capture_reward(self.state.mode),
-                )
-                self.state.neutral_capture_reward = reward
+                resource_type = str(getattr(node, "resource_type", "money") or "money").lower()
+                reward_amount = 0.0
+                reward_type = "money"
+                reward_key: Optional[str] = None
+
+                if resource_type == "gem":
+                    reward_type = "gem"
+                    raw_key = getattr(node, "resource_key", None)
+                    if raw_key is not None:
+                        try:
+                            reward_key = str(raw_key).strip().lower() or None
+                        except Exception:
+                            reward_key = None
+                    self.state.record_gem_capture(player_id, reward_key)
+                else:
+                    reward_amount = getattr(
+                        self.state,
+                        "neutral_capture_reward",
+                        get_neutral_capture_reward(self.state.mode),
+                    )
+                    self.state.neutral_capture_reward = reward_amount
+                    self.state.player_gold[player_id] = self.state.player_gold.get(player_id, 0.0) + reward_amount
                 if self.state.hidden_start_active and not self.state.hidden_start_revealed:
                     self.state.hidden_start_original_sizes[node_id] = node.juice
-                self.state.player_gold[player_id] = self.state.player_gold.get(player_id, 0.0) + reward
                 node.juice = getattr(self.state, "starting_node_juice", STARTING_NODE_JUICE)
                 node.owner = player_id
                 if getattr(self.state, "win_condition", "dominate") == "king":
@@ -719,7 +733,9 @@ class GameEngine:
                     self.state.pending_node_captures = []
                 self.state.pending_node_captures.append({
                     'nodeId': node_id,
-                    'reward': reward,
+                    'reward': reward_amount,
+                    'rewardType': reward_type,
+                    'rewardKey': reward_key,
                     'player_id': player_id
                 })
 

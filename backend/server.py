@@ -175,6 +175,8 @@ class WebSocketServer:
                                         "type": "nodeCaptured",
                                         "nodeId": capture_data["nodeId"],
                                         "reward": capture_data["reward"],
+                                        "rewardType": capture_data.get("rewardType"),
+                                        "rewardKey": capture_data.get("rewardKey"),
                                     }
                                     await self.message_router._send_safe(capturing_websocket, json.dumps(capture_msg))
                     state.pending_node_captures = []
@@ -238,6 +240,8 @@ class WebSocketServer:
                                             "type": "nodeCaptured",
                                             "nodeId": capture_data["nodeId"],
                                             "reward": capture_data["reward"],
+                                            "rewardType": capture_data.get("rewardType"),
+                                            "rewardKey": capture_data.get("rewardKey"),
                                         }
                                     )
                                     await self._broadcast_to_specific([capturing_websocket], capture_msg)

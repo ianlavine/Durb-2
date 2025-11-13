@@ -85,6 +85,28 @@
   let lastReverseCostPosition = null; // last position where reverse cost was displayed
   let crownHealthDisplays = new Map(); // crown health text displays for king mode, keyed by node ID
 
+  function destroyCrownHealthDisplay(nodeId) {
+    if (nodeId == null) return;
+    const display = crownHealthDisplays.get(nodeId);
+    if (!display) return;
+    if (display.flickerTween) {
+      display.flickerTween.remove();
+      display.flickerTween = null;
+    }
+    try {
+      if (typeof display.destroy === 'function') {
+        display.destroy();
+      } else if (typeof display.setVisible === 'function') {
+        display.setVisible(false);
+      }
+    } catch (err) {
+      if (typeof display.setVisible === 'function') {
+        display.setVisible(false);
+      }
+    }
+    crownHealthDisplays.delete(nodeId);
+  }
+
   const DOUBLE_CLICK_DELAY_MS = 220;
   const EDGE_REMOVAL_STEP_DURATION = 0.2; // seconds per triangle removal step
   const EDGE_REMOVAL_ANIMATION_MODE = 'explosion'; // 'explosion' keeps triangles, 'classic' restores the legacy fade
@@ -5377,33 +5399,52 @@ function fallbackRemoveEdgesForNode(nodeId) {
   }
 
   function handleNodeCaptured(msg) {
-    // Show reward indicator when a node is captured
-    if (msg.nodeId && msg.reward) {
-      const node = nodes.get(msg.nodeId);
-      if (node) {
-        // Position the indicator much closer to the node - just slightly above and to the right
-        const offsetX = 2; // much smaller offset to the right
-        const offsetY = -2; // much smaller offset upward
-        createMoneyIndicator(
-          node.x + offsetX, 
-          node.y + offsetY, 
-          `+$${formatCost(msg.reward)}`,
-          MONEY_GAIN_COLOR,
-          2000 // 2 seconds
-        );
-        // This is sent only to the capturer; differentiate neutral vs enemy capture by reward amount
-        if (Number(msg.reward) > 0) {
-          if (Number(msg.reward) >= 10) {
-            // neutral capture reward currently 10
-            playCaptureDing();
-          } else {
-            // enemy capture reward (if any) gets a slightly different cue
-            playEnemyCaptureDing();
-          }
-        } else {
-          playCaptureDing();
-        }
-      }
+    if (!msg || msg.nodeId == null) return;
+    const node = nodes.get(msg.nodeId);
+    if (!node) return;
+
+    const offsetX = 2;
+    const offsetY = -2;
+    const rewardTypeRaw = typeof msg.rewardType === 'string' ? msg.rewardType.trim().toLowerCase() : null;
+    const rewardKeyRaw = typeof msg.rewardKey === 'string' ? msg.rewardKey : null;
+    const normalizedRewardType = normalizeNodeResourceType(rewardTypeRaw === 'gem' ? 'gem' : 'money');
+
+    if (normalizedRewardType === 'gem') {
+      const normalizedKey = normalizeNodeResourceKey(rewardKeyRaw);
+      const emoji = getResourceEmoji('gem', normalizedKey);
+      const keyLabel = normalizedKey
+        ? normalizedKey.charAt(0).toUpperCase() + normalizedKey.slice(1)
+        : 'Gem';
+      const indicatorText = emoji ? `+${emoji} ${keyLabel}` : `+${keyLabel}`;
+      createMoneyIndicator(
+        node.x + offsetX,
+        node.y + offsetY,
+        indicatorText,
+        MONEY_GAIN_COLOR,
+        2200,
+        { strokeColor: '#264a2a' }
+      );
+      playCaptureDing();
+      return;
+    }
+
+    const rewardValue = Number(msg.reward);
+    if (!Number.isFinite(rewardValue) || rewardValue <= 0) {
+      return;
+    }
+
+    createMoneyIndicator(
+      node.x + offsetX,
+      node.y + offsetY,
+      `+$${formatCost(rewardValue)}`,
+      MONEY_GAIN_COLOR,
+      2000
+    );
+
+    if (rewardValue >= 10) {
+      playCaptureDing();
+    } else {
+      playEnemyCaptureDing();
     }
   }
 
@@ -5838,16 +5879,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
           });
         }
       }
-    } else if (nodeId != null && crownHealthDisplays.has(nodeId)) {
-      const crownHealthDisplay = crownHealthDisplays.get(nodeId);
-      if (crownHealthDisplay) {
-        crownHealthDisplay.setVisible(false);
-        // Stop any flickering tween
-        if (crownHealthDisplay.flickerTween) {
-          crownHealthDisplay.flickerTween.remove();
-          crownHealthDisplay.flickerTween = null;
-        }
-      }
+    } else if (nodeId != null) {
+      destroyCrownHealthDisplay(nodeId);
     }
 
     return layout;
@@ -6188,18 +6221,24 @@ function fallbackRemoveEdgesForNode(nodeId) {
       }
 
       const kingOwnerId = Number.isFinite(n.kingOwnerId) ? Number(n.kingOwnerId) : null;
-      if (winCondition === 'king' && kingOwnerId != null) {
-        const crownColor = ownerToColor(kingOwnerId);
-        const isSelectedKing = kingSelectionActive && kingSelectedNodeId === id;
-        const selectionColor = ownerToSecondaryColor(myPlayerId) || ownerToColor(myPlayerId) || crownColor || 0x000000;
-        const kingCrownRadius = computeStandardKingCrownRadius(baseScale);
-        drawKingCrown(nx, ny, kingCrownRadius, crownColor, {
-          highlighted: isSelectedKing,
-          highlightColor: selectionColor,
-          crownHealth: Number.isFinite(n.kingCrownHealth) ? n.kingCrownHealth : null,
-          crownMax: Number.isFinite(n.kingCrownMax) ? n.kingCrownMax : null,
-          nodeId: id,
-        });
+      if (winCondition === 'king') {
+        if (kingOwnerId != null) {
+          const crownColor = ownerToColor(kingOwnerId);
+          const isSelectedKing = kingSelectionActive && kingSelectedNodeId === id;
+          const selectionColor = ownerToSecondaryColor(myPlayerId) || ownerToColor(myPlayerId) || crownColor || 0x000000;
+          const kingCrownRadius = computeStandardKingCrownRadius(baseScale);
+          drawKingCrown(nx, ny, kingCrownRadius, crownColor, {
+            highlighted: isSelectedKing,
+            highlightColor: selectionColor,
+            crownHealth: Number.isFinite(n.kingCrownHealth) ? n.kingCrownHealth : null,
+            crownMax: Number.isFinite(n.kingCrownMax) ? n.kingCrownMax : null,
+            nodeId: id,
+          });
+        } else if (crownHealthDisplays.has(id)) {
+          destroyCrownHealthDisplay(id);
+        }
+      } else if (crownHealthDisplays.has(id)) {
+        destroyCrownHealthDisplay(id);
       }
 
       // Hover effect: player's color border when eligible for starting node pick

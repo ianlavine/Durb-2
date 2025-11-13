@@ -607,6 +607,8 @@ class ReplaySession:
                 "type": "nodeCaptured",
                 "nodeId": capture.get("nodeId"),
                 "reward": capture.get("reward"),
+                "rewardType": capture.get("rewardType"),
+                "rewardKey": capture.get("rewardKey"),
                 "playerId": capture.get("player_id"),
                 "replay": True,
             }
