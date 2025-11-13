@@ -497,6 +497,8 @@ class MessageRouter:
                         "type": "nodeCaptured",
                         "nodeId": capture_data["nodeId"],
                         "reward": capture_data["reward"],
+                        "rewardType": capture_data.get("rewardType"),
+                        "rewardKey": capture_data.get("rewardKey"),
                     }
                     await self._send_safe(websocket, json.dumps(capture_msg))
             engine.state.pending_node_captures = []
@@ -1316,6 +1318,8 @@ class MessageRouter:
                                 "type": "nodeCaptured",
                                 "nodeId": capture_data["nodeId"],
                                 "reward": capture_data["reward"],
+                                "rewardType": capture_data.get("rewardType"),
+                                "rewardKey": capture_data.get("rewardKey"),
                             }
                             await self._send_safe(websocket, json.dumps(capture_msg))
                     bot_game_engine.state.pending_node_captures = []
