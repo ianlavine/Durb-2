@@ -154,7 +154,10 @@ class GameEngine:
             screen_variant = "flat"
         auto_brass_on_cross = normalized_mode in {"warp", "semi", "flat"}
         manual_brass_selection = normalized_mode in {"i-warp", "i-semi", "i-flat", "cross"}
-        brass_double_cost = manual_brass_selection or normalized_mode == "cross"
+        if resource_mode == "gems":
+            brass_double_cost = False
+        else:
+            brass_double_cost = manual_brass_selection or normalized_mode == "cross"
         allow_pipe_start_anywhere = False
         bridge_cost_override: Optional[float] = None
         game_start_mode = "open"
@@ -176,6 +179,9 @@ class GameEngine:
             if brass_option in {"cross", "right-click", "rightclick", "right_click"}:
                 manual_brass_selection = brass_option in {"right-click", "rightclick", "right_click"}
                 auto_brass_on_cross = brass_option == "cross"
+            elif brass_option == "gem":
+                manual_brass_selection = True
+                auto_brass_on_cross = False
 
             pipe_start_raw = options.get("pipeStart", options.get("brassStart", ""))
             pipe_start_option = str(pipe_start_raw).strip().lower()
@@ -275,6 +281,7 @@ class GameEngine:
         if resource_mode == "gems":
             auto_brass_on_cross = False
             manual_brass_selection = True
+            brass_double_cost = False
 
         if normalized_mode == "basic":
             auto_brass_on_cross = False
@@ -294,7 +301,10 @@ class GameEngine:
 
         self.state.starting_node_juice = starting_node_juice_value
 
-        brass_double_cost = manual_brass_selection or normalized_mode == "cross"
+        if resource_mode == "gems":
+            brass_double_cost = False
+        else:
+            brass_double_cost = manual_brass_selection or normalized_mode == "cross"
 
         self._apply_resource_distribution(resource_mode)
 
@@ -314,6 +324,9 @@ class GameEngine:
             "kingCrownHealth": crown_health_value,
             "resources": resource_mode,
         }
+        if resource_mode == "gems":
+            sanitized_options["brass"] = "gem"
+            sanitized_options["brassStart"] = "owned"
         sanitized_options["pipeStart"] = sanitized_options["brassStart"]
         if isinstance(options, dict):
             base_mode = options.get("baseMode")

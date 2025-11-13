@@ -522,6 +522,7 @@
 
   function setCurrentResourceMode(mode) {
     currentResourceMode = normalizeResources(mode);
+    bridgePreviewWillBeBrass = computeInitialBrassPreviewState();
     if (!isMagicResourceModeActive()) {
       pendingBrassGemSpend = false;
       setBrassGemModeActive(false);
@@ -532,13 +533,13 @@
         const nextPreference = determineBridgeBrassPreference(node, bridgeIsBrass);
         if (bridgeIsBrass !== nextPreference) {
           bridgeIsBrass = nextPreference;
-          const xbMode = isXbModeActive();
-          bridgePreviewWillBeBrass = bridgeIsBrass && !xbMode;
-          updateBrassPreviewIntersections();
-          redrawStatic();
         }
+        bridgePreviewWillBeBrass = computeInitialBrassPreviewState();
+        updateBrassPreviewIntersections();
+        redrawStatic();
       }
     }
+    updateModeOptionButtonStates();
   }
 
   function getMyGemCount(gemKey = 'brass') {
@@ -568,14 +569,7 @@
 
   function determineBridgeBrassPreference(startNode, useBrassHint = false) {
     if (isMagicResourceModeActive()) {
-      if (!canActivateBrassGemMode()) {
-        if (brassGemModeActive) {
-          brassGemModeActive = false;
-          updateBrassGemUi();
-        }
-        return false;
-      }
-      return brassGemModeActive;
+      return brassGemModeActive && canActivateBrassGemMode();
     }
     if (isBrassModeActive()) {
       return !!(startNode && startNode.isBrass);
@@ -584,6 +578,13 @@
       return !!useBrassHint;
     }
     return false;
+  }
+
+  function computeInitialBrassPreviewState() {
+    if (!bridgeIsBrass) return false;
+    if (isXbModeActive()) return false;
+    if (isMagicResourceModeActive()) return true;
+    return isCrossLikeModeActive();
   }
 
   function setBrassGemModeActive(enabled, options = {}) {
@@ -598,16 +599,18 @@
       pendingBrassGemSpend = false;
     }
     updateBrassGemUi();
+    if (isMagicResourceModeActive()) {
+      bridgeIsBrass = brassGemModeActive && canActivateBrassGemMode();
+    }
     if (activeAbility === 'bridge1way' && bridgeFirstNode != null) {
       const node = nodes.get(bridgeFirstNode);
       const nextPreference = determineBridgeBrassPreference(node, bridgeIsBrass);
       if (bridgeIsBrass !== nextPreference) {
         bridgeIsBrass = nextPreference;
-        const xbMode = isXbModeActive();
-        bridgePreviewWillBeBrass = bridgeIsBrass && !xbMode;
-        updateBrassPreviewIntersections();
-        redrawStatic();
       }
+      bridgePreviewWillBeBrass = computeInitialBrassPreviewState();
+      updateBrassPreviewIntersections();
+      redrawStatic();
     }
   }
 
@@ -673,6 +676,11 @@
     if (!settings || typeof settings !== 'object') return 'flat';
     const screen = typeof settings.screen === 'string' ? settings.screen.toLowerCase() : 'flat';
     const brass = typeof settings.brass === 'string' ? settings.brass.toLowerCase() : 'cross';
+    if (brass === 'gem') {
+      if (screen === 'warp') return 'warp';
+      if (screen === 'semi') return 'semi';
+      return 'flat';
+    }
     if (screen === 'warp') {
       return brass.startsWith('right') ? 'i-warp' : 'warp';
     }
@@ -685,7 +693,10 @@
   function formatModeSettingsSummary(settings = selectedSettings) {
     const screenValue = typeof settings.screen === 'string' ? settings.screen.toLowerCase() : 'flat';
     const screenLabel = screenValue === 'warp' ? 'Warp' : (screenValue === 'semi' ? 'Semi' : 'Flat');
-    const brassLabel = (settings.brass === 'right-click') ? 'Right-Click' : 'Cross';
+    const brassValue = typeof settings.brass === 'string' ? settings.brass.toLowerCase() : 'cross';
+    const brassLabel = brassValue === 'gem'
+      ? 'Gem'
+      : (brassValue === 'right-click' ? 'Right-Click' : 'Cross');
     const startLabel = (settings.brassStart === 'anywhere') ? 'Anywhere' : 'Owned';
     const startModeLabel = (settings.gameStart === 'hidden-split') ? 'Hidden' : 'Open';
     const costLabel = coerceBridgeCost(settings.bridgeCost).toFixed(1);
@@ -708,6 +719,10 @@
     const currentGameStart = (selectedSettings.gameStart || DEFAULT_MODE_SETTINGS.gameStart).toLowerCase();
     const currentResources = normalizeResources(selectedSettings.resources);
     const hiddenAllowed = isHiddenStartAllowed();
+    const brassGroup = document.querySelector('.mode-option-group[data-setting-group="brass"]');
+    if (brassGroup) {
+      brassGroup.classList.toggle('gem-mode', currentResources === 'gems');
+    }
     modeOptionButtons.forEach((btn) => {
       const setting = btn?.dataset?.setting;
       const value = btn?.dataset?.value;
@@ -717,17 +732,33 @@
       }
       btn.disabled = false;
       btn.classList.remove('disabled');
+      btn.title = '';
       let isActive = false;
       if (setting === 'screen') {
         isActive = value.toLowerCase() === currentScreen;
       } else if (setting === 'brass') {
         const normalized = value.toLowerCase();
-        const target = currentBrass === 'right-click' ? 'right-click' : 'cross';
-        isActive = normalized === target;
+        if (currentResources === 'gems') {
+          btn.disabled = true;
+          btn.classList.add('disabled');
+          btn.classList.remove('active');
+          btn.title = 'Brass selection handled by gems';
+          isActive = false;
+        } else {
+          const target = currentBrass === 'right-click' ? 'right-click' : 'cross';
+          isActive = normalized === target;
+        }
       } else if (setting === 'brassStart') {
         const normalized = value.toLowerCase();
-        const target = currentStart === 'anywhere' ? 'anywhere' : 'owned';
-        isActive = normalized === target;
+        if (currentResources === 'gems') {
+          btn.disabled = true;
+          btn.classList.add('disabled');
+          btn.title = 'Gem mode requires starting from owned nodes';
+          isActive = normalized === 'owned';
+        } else {
+          const target = currentStart === 'anywhere' ? 'anywhere' : 'owned';
+          isActive = normalized === target;
+        }
       } else if (setting === 'gameStart') {
         const normalized = value.toLowerCase();
         const target = normalized.startsWith('hidden') ? 'hidden-split' : 'open';
@@ -785,7 +816,11 @@
     }
     if (Object.prototype.hasOwnProperty.call(overrides, 'brass')) {
       const brass = typeof overrides.brass === 'string' ? overrides.brass.toLowerCase() : '';
-      next.brass = brass.startsWith('right') ? 'right-click' : 'cross';
+      if (brass === 'gem') {
+        next.brass = 'gem';
+      } else {
+        next.brass = brass.startsWith('right') ? 'right-click' : 'cross';
+      }
     }
     if (Object.prototype.hasOwnProperty.call(overrides, 'brassStart')) {
       const start = typeof overrides.brassStart === 'string' ? overrides.brassStart.toLowerCase() : '';
@@ -841,6 +876,16 @@
       next.resources = normalizeResources(overrides.resources);
     } else {
       next.resources = normalizeResources(next.resources);
+    }
+
+    if (next.resources === 'gems') {
+      next.brass = 'gem';
+      next.brassStart = 'owned';
+    } else if (next.brass === 'gem') {
+      next.brass = 'cross';
+    } else {
+      const currentBrass = typeof next.brass === 'string' ? next.brass.toLowerCase() : 'cross';
+      next.brass = currentBrass.startsWith('right') ? 'right-click' : 'cross';
     }
 
     if (next.gameStart === 'hidden-split' && !isHiddenStartAllowed()) {
@@ -2280,6 +2325,7 @@
   }
 
   function brassPipesDoubleCost() {
+    if (isMagicResourceModeActive()) return false;
     if (isIntentionalBrassMode(gameMode)) return true;
     return isIntentionalBrassMode(selectedMode);
   }
@@ -7361,11 +7407,14 @@ function fallbackRemoveEdgesForNode(nodeId) {
     brassActivationDenied = false;
 
     const magicBrassMode = isMagicResourceModeActive();
-    const xbMode = isXbModeActive();
 
     let wantBrass = determineBridgeBrassPreference(node, useBrass);
-    if (magicBrassMode && wantBrass && !canActivateBrassGemMode()) {
-      wantBrass = false;
+    if (magicBrassMode) {
+      if (brassGemModeActive && canActivateBrassGemMode()) {
+        wantBrass = true;
+      } else if (!canActivateBrassGemMode()) {
+        wantBrass = false;
+      }
     }
 
     const ownershipRequired = pipeStartRequiresOwnership();
@@ -7378,7 +7427,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     activeAbility = 'bridge1way';
     bridgeFirstNode = nodeId;
     bridgeIsBrass = wantBrass;
-    bridgePreviewWillBeBrass = wantBrass && !xbMode;
+    bridgePreviewWillBeBrass = computeInitialBrassPreviewState();
     xbPreviewBlockedByBrass = false;
     brassPreviewIntersections.clear();
     warpWrapUsed = false;
@@ -7387,6 +7436,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     lastWarpDirection = null;
     hideReverseCostDisplay();
     hideBridgeCostDisplay();
+    updateBrassPreviewIntersections();
     return true;
   }
 
@@ -7430,7 +7480,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
           const ownershipRequired = pipeStartRequiresOwnership();
           const firstOwner = firstNode.owner;
           const lacksOwnership = ownershipRequired && firstOwner !== myPlayerId;
-          const useBrassPipe = bridgePreviewWillBeBrass && isCrossLikeModeActive();
+          const useBrassPipe = bridgePreviewWillBeBrass && (isMagicResourceModeActive() || isCrossLikeModeActive());
           const warpPreference = getActiveWarpPreference();
           const cost = calculateBridgeCost(firstNode, node, applyBrassCost, warpPreference);
           const hasFunds = sandboxModeEnabled() || goldValue >= cost;
@@ -9052,9 +9102,15 @@ function updateBrassPreviewIntersections() {
   brassPreviewIntersections.clear();
   xbPreviewBlockedByBrass = false;
 
+  const gemMode = isMagicResourceModeActive();
+  const modeIsXb = isXbModeActive();
+  if (gemMode) {
+    bridgePreviewWillBeBrass = bridgeIsBrass;
+    return;
+  }
+
   const modeIsCrossLike = isCrossLikeModeActive();
   const modeIsCross = isTrueCrossModeActive();
-  const modeIsXb = isXbModeActive();
 
   if (activeAbility !== 'bridge1way' || bridgeFirstNode == null) {
     bridgePreviewWillBeBrass = bridgeIsBrass && modeIsCrossLike;
