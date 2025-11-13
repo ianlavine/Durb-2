@@ -62,8 +62,13 @@
   let currentResourceMode = 'standard';
   let brassGemModeActive = false;
   let pendingBrassGemSpend = false;
+  let rageGemModeActive = false;
+  let pendingRageGemSpend = false;
+  let reverseGemModeActive = false;
+  let pendingReverseGemSpend = false;
   let warpGemModeActive = false;
   let pendingWarpGemSpend = false;
+  let activePipeGemKey = null;
   let lastWarpGemErrorTime = 0;
   let myPicked = false;
   let hiddenStartActive = false;
@@ -87,9 +92,9 @@
   let mouseWorldX = 0; // current mouse position in world coordinates
   let mouseWorldY = 0;
   let bridgeCostDisplay = null; // current bridge cost display text object
-  let reverseCostDisplay = null; // current reverse edge cost display text object
-  let lastReverseCostPosition = null; // last position where reverse cost was displayed
   let crownHealthDisplays = new Map(); // crown health text displays for king mode, keyed by node ID
+  let reversePipeButtons = new Map();
+  const REVERSE_BUTTON_OFFSET_PX = 24;
 
   function destroyCrownHealthDisplay(nodeId) {
     if (nodeId == null) return;
@@ -378,6 +383,10 @@
   const BRASS_PIPE_COLOR = 0x8b6f14;
   const BRASS_PIPE_DIM_COLOR = 0x46320a;
   const BRASS_PIPE_OUTLINE_COLOR = 0x6f5410;
+  const RAGE_PIPE_COLOR = 0xff5a36;
+  const RAGE_PIPE_DIM_COLOR = 0x7a2518;
+  const REVERSE_PIPE_COLOR = 0x4c6ef5;
+  const REVERSE_PIPE_DIM_COLOR = 0x34487c;
   const PIPE_TRIANGLE_HEIGHT = 16;
   const PIPE_TRIANGLE_WIDTH = 12;
   const BRASS_TRIANGLE_OUTER_SCALE = 1.12; // tweak (>1) to adjust how much farther brass extends outward
@@ -407,6 +416,17 @@
     const normalized = value.trim().toLowerCase();
     if (!normalized) return null;
     return GEM_TYPE_ORDER.includes(normalized) ? normalized : null;
+  }
+
+  function normalizePipeType(value) {
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      if (normalized && ['normal', 'gold', 'rage', 'reverse'].includes(normalized)) {
+        return normalized;
+      }
+    }
+    if (value === 'gold') return 'gold';
+    return 'normal';
   }
 
   function createEmptyGemCounts() {
@@ -577,6 +597,16 @@
     return getMyGemCount('warp') > 0;
   }
 
+  function canActivateRageGemMode() {
+    if (!isMagicResourceModeActive()) return false;
+    return getMyGemCount('rage') > 0;
+  }
+
+  function canActivateReverseGemMode() {
+    if (!isMagicResourceModeActive()) return false;
+    return getMyGemCount('reverse') > 0;
+  }
+
   function isWarpWrapUnlocked() {
     if (!isMagicResourceModeActive()) return true;
     return warpGemModeActive && canActivateWarpGemMode();
@@ -602,16 +632,44 @@
     return isCrossLikeModeActive();
   }
 
+  function determinePipeTypeForBridge(useBrassPipe = false) {
+    if (isMagicResourceModeActive()) {
+      if (rageGemModeActive && canActivateRageGemMode()) return 'rage';
+      if (reverseGemModeActive && canActivateReverseGemMode()) return 'reverse';
+      if (brassGemModeActive && canActivateBrassGemMode()) return 'gold';
+    }
+    return useBrassPipe ? 'gold' : 'normal';
+  }
+
   function setBrassGemModeActive(enabled, options = {}) {
     const desired = Boolean(enabled) && isMagicResourceModeActive() && canActivateBrassGemMode();
+    if (desired) {
+      activePipeGemKey = 'brass';
+      if (rageGemModeActive) {
+        rageGemModeActive = false;
+        pendingRageGemSpend = false;
+      }
+      if (reverseGemModeActive) {
+        reverseGemModeActive = false;
+        pendingReverseGemSpend = false;
+      }
+    } else if (activePipeGemKey === 'brass') {
+      activePipeGemKey = null;
+    }
     if (brassGemModeActive === desired) {
-    updateGemModeUi();
+      if (isMagicResourceModeActive()) {
+        bridgeIsBrass = brassGemModeActive && canActivateBrassGemMode();
+      }
+      updateGemModeUi();
       return;
     }
     brassGemModeActive = desired;
     const shouldClearPending = options.clearPending !== false;
     if (!desired && shouldClearPending) {
       pendingBrassGemSpend = false;
+    }
+    if (!desired && activePipeGemKey === 'brass') {
+      activePipeGemKey = null;
     }
     updateGemModeUi();
     if (isMagicResourceModeActive()) {
@@ -651,6 +709,90 @@
     }
   }
 
+  function setRageGemModeActive(enabled, options = {}) {
+    const desired = Boolean(enabled) && isMagicResourceModeActive() && canActivateRageGemMode();
+    if (desired) {
+      activePipeGemKey = 'rage';
+      if (brassGemModeActive) {
+        brassGemModeActive = false;
+        pendingBrassGemSpend = false;
+      }
+      if (reverseGemModeActive) {
+        reverseGemModeActive = false;
+        pendingReverseGemSpend = false;
+      }
+    } else if (activePipeGemKey === 'rage') {
+      activePipeGemKey = null;
+    }
+    if (rageGemModeActive === desired) {
+      if (desired) {
+        bridgeIsBrass = false;
+      } else if (isMagicResourceModeActive()) {
+        bridgeIsBrass = brassGemModeActive && canActivateBrassGemMode();
+      }
+      updateGemModeUi();
+      return;
+    }
+    rageGemModeActive = desired;
+    const shouldClearPending = options.clearPending !== false;
+    if (!desired && shouldClearPending) {
+      pendingRageGemSpend = false;
+    }
+    if (desired) {
+      bridgeIsBrass = false;
+    } else if (activePipeGemKey !== 'brass') {
+      bridgeIsBrass = brassGemModeActive && canActivateBrassGemMode();
+    }
+    updateGemModeUi();
+    if (activeAbility === 'bridge1way') {
+      bridgePreviewWillBeBrass = computeInitialBrassPreviewState();
+      updateBrassPreviewIntersections();
+      redrawStatic();
+    }
+  }
+
+  function setReverseGemModeActive(enabled, options = {}) {
+    const desired = Boolean(enabled) && isMagicResourceModeActive() && canActivateReverseGemMode();
+    if (desired) {
+      activePipeGemKey = 'reverse';
+      if (brassGemModeActive) {
+        brassGemModeActive = false;
+        pendingBrassGemSpend = false;
+      }
+      if (rageGemModeActive) {
+        rageGemModeActive = false;
+        pendingRageGemSpend = false;
+      }
+    } else if (activePipeGemKey === 'reverse') {
+      activePipeGemKey = null;
+    }
+    if (reverseGemModeActive === desired) {
+      if (desired) {
+        bridgeIsBrass = false;
+      } else if (isMagicResourceModeActive()) {
+        bridgeIsBrass = brassGemModeActive && canActivateBrassGemMode();
+      }
+      updateGemModeUi();
+      return;
+    }
+    reverseGemModeActive = desired;
+    const shouldClearPending = options.clearPending !== false;
+    if (!desired && shouldClearPending) {
+      pendingReverseGemSpend = false;
+    }
+    if (desired) {
+      bridgeIsBrass = false;
+    } else if (activePipeGemKey !== 'brass') {
+      bridgeIsBrass = brassGemModeActive && canActivateBrassGemMode();
+    }
+    updateGemModeUi();
+    if (activeAbility === 'bridge1way') {
+      bridgePreviewWillBeBrass = computeInitialBrassPreviewState();
+      updateBrassPreviewIntersections();
+      redrawStatic();
+    }
+  }
+
   function updateGemModeUi() {
     if (!gemCountsDisplay || !gemCountsDisplay.isConnected) return;
     const interactive = isMagicResourceModeActive();
@@ -662,6 +804,22 @@
       brassContainer.classList.toggle('disabled', !canUseBrass);
       brassContainer.classList.toggle('active', canUseBrass && brassGemModeActive);
       brassContainer.setAttribute('aria-disabled', canUseBrass ? 'false' : 'true');
+    }
+
+    const rageContainer = gemCountsDisplay.querySelector('[data-gem="rage"]');
+    if (rageContainer) {
+      const canUseRage = canActivateRageGemMode();
+      rageContainer.classList.toggle('disabled', !canUseRage);
+      rageContainer.classList.toggle('active', canUseRage && rageGemModeActive);
+      rageContainer.setAttribute('aria-disabled', canUseRage ? 'false' : 'true');
+    }
+
+    const reverseContainer = gemCountsDisplay.querySelector('[data-gem="reverse"]');
+    if (reverseContainer) {
+      const canUseReverse = canActivateReverseGemMode();
+      reverseContainer.classList.toggle('disabled', !canUseReverse);
+      reverseContainer.classList.toggle('active', canUseReverse && reverseGemModeActive);
+      reverseContainer.setAttribute('aria-disabled', canUseReverse ? 'false' : 'true');
     }
 
     const warpContainer = gemCountsDisplay.querySelector('[data-gem="warp"]');
@@ -690,6 +848,26 @@
         return;
       }
       setBrassGemModeActive(!brassGemModeActive);
+      return;
+    }
+    if (gemKey === 'rage') {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (!canActivateRageGemMode()) {
+        showErrorMessage('No rage gems available', 'error');
+        return;
+      }
+      setRageGemModeActive(!rageGemModeActive);
+      return;
+    }
+    if (gemKey === 'reverse') {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (!canActivateReverseGemMode()) {
+        showErrorMessage('No reverse gems available', 'error');
+        return;
+      }
+      setReverseGemModeActive(!reverseGemModeActive);
       return;
     }
     if (gemKey === 'warp') {
@@ -2495,57 +2673,6 @@ function hideBridgeCostDisplay() {
   }
 }
 
-function updateReverseCostDisplay(edge) {
-  if (!sceneRef || !edge) return;
-
-  const sourceNode = nodes.get(edge.source);
-  const targetNode = nodes.get(edge.target);
-  if (!sourceNode || !targetNode) return;
-
-  const midPoint = getEdgeMidpointWorld(edge);
-  const midX = midPoint ? midPoint.x : (sourceNode.x + targetNode.x) / 2;
-  const midY = midPoint ? midPoint.y : (sourceNode.y + targetNode.y) / 2;
-  const [sx, sy] = worldToScreen(midX, midY);
-  
-  // Store the position for later use in cost indicator animation
-  lastReverseCostPosition = { x: midX, y: midY };
-
-  const cost = calculateBridgeCost(sourceNode, targetNode);
-  const canAfford = goldValue >= cost;
-  const text = `$${formatCost(cost)}`;
-
-  if (!reverseCostDisplay) {
-    reverseCostDisplay = sceneRef.add.text(sx, sy - 20, text, {
-      fontFamily: 'monospace',
-      fontSize: '20px',
-      fontStyle: 'normal',
-      color: canAfford ? MONEY_SPEND_COLOR : '#222222',
-      stroke: canAfford ? MONEY_SPEND_STROKE : 'rgba(255,255,255,0.85)',
-      strokeThickness: canAfford ? 1 : 0,
-    })
-    .setOrigin(0.5, 0.5)
-    .setDepth(1000);
-  } else {
-    reverseCostDisplay.setText(text);
-    reverseCostDisplay.setPosition(sx, sy - 20);
-    reverseCostDisplay.setVisible(true);
-  }
-
-  if (reverseCostDisplay) {
-    reverseCostDisplay.setColor(canAfford ? MONEY_SPEND_COLOR : '#222222');
-    reverseCostDisplay.setStroke(canAfford ? MONEY_SPEND_STROKE : 'rgba(255,255,255,0.85)', canAfford ? 1 : 0);
-  }
-}
-
-function hideReverseCostDisplay() {
-  if (reverseCostDisplay) {
-    reverseCostDisplay.destroy();
-    reverseCostDisplay = null;
-  }
-  // Clear stored position when hiding display
-  lastReverseCostPosition = null;
-}
-
 
 function clearBridgeSelection() {
   bridgeFirstNode = null;
@@ -2625,6 +2752,160 @@ function clearBridgeSelection() {
       }
       return true;
     });
+  }
+
+  function removeReverseButton(edgeId) {
+    const entry = reversePipeButtons.get(edgeId);
+    if (!entry) return;
+    const { text } = entry;
+    if (text) {
+      try {
+        text.removeAllListeners?.();
+        text.destroy();
+      } catch (err) {
+        text.setVisible(false);
+      }
+    }
+    reversePipeButtons.delete(edgeId);
+  }
+
+  function getReverseButtonScreenPosition(edgeRecord, midpointScreenX, midpointScreenY) {
+    if (!edgeRecord) {
+      return { x: midpointScreenX, y: midpointScreenY };
+    }
+
+    const normal = getEdgeScreenNormalAtMidpoint(edgeRecord);
+    if (!normal) {
+      return { x: midpointScreenX, y: midpointScreenY };
+    }
+
+    const offset = Number.isFinite(REVERSE_BUTTON_OFFSET_PX) ? REVERSE_BUTTON_OFFSET_PX : 0;
+    if (offset <= 0) {
+      return { x: midpointScreenX, y: midpointScreenY };
+    }
+
+    return {
+      x: midpointScreenX + normal.x * offset,
+      y: midpointScreenY + normal.y * offset,
+    };
+  }
+
+  function getEdgeScreenNormalAtMidpoint(edgeRecord) {
+    if (!edgeRecord) return null;
+
+    let segments = getEdgeWarpSegments(edgeRecord);
+    if (!segments || !segments.length) {
+      const sourceNode = nodes.get(edgeRecord.source);
+      const targetNode = nodes.get(edgeRecord.target);
+      if (!sourceNode || !targetNode) return null;
+      segments = [{
+        sx: Number(sourceNode.x),
+        sy: Number(sourceNode.y),
+        ex: Number(targetNode.x),
+        ey: Number(targetNode.y),
+      }];
+    }
+
+    const validSegments = segments
+      .map((seg) => {
+        const sx = Number(seg.sx);
+        const sy = Number(seg.sy);
+        const ex = Number(seg.ex);
+        const ey = Number(seg.ey);
+        const length = Math.hypot(ex - sx, ey - sy);
+        return Number.isFinite(length) && length > 0.0001 ? { sx, sy, ex, ey, length } : null;
+      })
+      .filter(Boolean);
+
+    if (!validSegments.length) return null;
+
+    const totalLength = validSegments.reduce((sum, seg) => sum + seg.length, 0);
+    if (!Number.isFinite(totalLength) || totalLength <= 0) return null;
+
+    const targetDistance = totalLength / 2;
+    let traversed = 0;
+    let chosenSegment = validSegments[validSegments.length - 1];
+
+    for (const seg of validSegments) {
+      if (traversed + seg.length >= targetDistance) {
+        chosenSegment = seg;
+        break;
+      }
+      traversed += seg.length;
+    }
+
+    const [screenSx, screenSy] = worldToScreen(chosenSegment.sx, chosenSegment.sy);
+    const [screenEx, screenEy] = worldToScreen(chosenSegment.ex, chosenSegment.ey);
+    const dx = screenEx - screenSx;
+    const dy = screenEy - screenSy;
+    const screenLength = Math.hypot(dx, dy);
+    if (!Number.isFinite(screenLength) || screenLength <= 0.0001) return null;
+
+    let nx = -dy / screenLength;
+    let ny = dx / screenLength;
+
+    if (ny > 0) {
+      nx = -nx;
+      ny = -ny;
+    }
+
+    return { x: nx, y: ny };
+  }
+
+  function updateReverseButton(edgeId, edgeRecord, screenX, screenY) {
+    if (!sceneRef) return;
+    if (!edgeRecord || edgeRecord.pipeType !== 'reverse') {
+      removeReverseButton(edgeId);
+      return;
+    }
+
+    const targetPosition = getReverseButtonScreenPosition(edgeRecord, screenX, screenY);
+    const symbolX = Number.isFinite(targetPosition.x) ? targetPosition.x : screenX;
+    const symbolY = Number.isFinite(targetPosition.y) ? targetPosition.y : screenY;
+
+    let entry = reversePipeButtons.get(edgeId);
+    if (!entry) {
+      const text = sceneRef.add.text(symbolX, symbolY, '⟳', {
+        fontFamily: 'sans-serif',
+        fontSize: '20px',
+        color: '#f4f4f4',
+        stroke: '#000000',
+        strokeThickness: 3,
+      });
+      text.setOrigin(0.5, 0.5);
+      text.setDepth(6);
+      text.setAlpha(0.9);
+      text.setData('edgeId', edgeId);
+      text.on('pointerdown', (pointer) => {
+        if (pointer?.event) {
+          pointer.event.preventDefault();
+          pointer.event.stopPropagation();
+        }
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        const token = localStorage.getItem('token');
+        if (!token) return;
+        const currentEdge = edges.get(edgeId);
+        if (!currentEdge || !canReverseEdge(currentEdge)) return;
+        ws.send(JSON.stringify({ type: 'reverseEdge', edgeId, token }));
+      });
+      entry = { text };
+      reversePipeButtons.set(edgeId, entry);
+    }
+
+    const { text } = entry;
+    const canControl = canReverseEdge(edgeRecord) && !edgeRecord.building;
+    const color = canControl ? '#f3f3f3' : '#6a6a6a';
+
+    text.setPosition(symbolX, symbolY);
+    text.setColor(color);
+    text.setAlpha(canControl ? 0.95 : 0.45);
+    text.setVisible(true);
+
+    if (canControl) {
+      text.setInteractive({ useHandCursor: true });
+    } else if (text.input && text.input.enabled) {
+      text.disableInteractive();
+    }
   }
 
   // Called from redrawStatic(); now just toggles visibility if menu is open
@@ -3845,6 +4126,10 @@ function clearBridgeSelection() {
     kingCrownDefaultMax = coerceKingCrownHealth(selectedSettings.kingCrownHealth);
     clearKingSelection({ skipRedraw: true });
     edges.clear();
+    reversePipeButtons.forEach((entry, edgeId) => {
+      removeReverseButton(edgeId);
+    });
+    reversePipeButtons.clear();
     players.clear();
     playerStats.clear();
     eliminatedPlayers.clear();
@@ -3912,7 +4197,6 @@ function clearBridgeSelection() {
     activeAbility = null;
     clearBridgeSelection();
     hideBridgeCostDisplay();
-    hideReverseCostDisplay();
 
     if (Array.isArray(msg.nodes)) {
       for (const arr of msg.nodes) {
@@ -3987,10 +4271,10 @@ function clearBridgeSelection() {
     const edgeWarpMap = msg.edgeWarp || {};
     if (Array.isArray(msg.edges)) {
       for (const arr of msg.edges) {
-        const [rawId, s, t, _forward, _always1, buildReq = 0, buildElap = 0, building = 0, goldFlag = 0] = arr;
+        const [rawId, s, t, _forward, _always1, buildReq = 0, buildElap = 0, building = 0, goldFlag = 0, pipeTypeRaw = 'normal'] = arr;
         const edgeId = toEdgeId(rawId);
         if (edgeId == null) continue;
-        const isGoldEdge = Number(goldFlag) === 1;
+        const normalizedPipeType = normalizePipeType(typeof pipeTypeRaw === 'string' ? pipeTypeRaw : (Number(goldFlag) === 1 ? 'gold' : 'normal'));
         const record = {
           source: s,
           target: t,
@@ -4006,7 +4290,7 @@ function clearBridgeSelection() {
           hammerHitIndex: 0,
           warpAxis: 'none',
           warpSegments: [],
-          pipeType: isGoldEdge ? 'gold' : 'normal',
+          pipeType: normalizedPipeType,
         };
         const warpPayload = edgeWarpMap[edgeId] ?? edgeWarpMap[rawId] ?? edgeWarpMap[String(rawId)];
         applyEdgeWarpData(record, warpPayload, nodes.get(s), nodes.get(t));
@@ -4576,7 +4860,7 @@ function clearBridgeSelection() {
     if (Array.isArray(msg.edges)) {
       const seenEdgeIds = new Set();
       msg.edges.forEach((entry) => {
-        const [rawId, on, flowing, _forward, lastTransfer, buildReq = 0, buildElap = 0, building = 0, goldFlag = 0] = entry;
+        const [rawId, on, flowing, _forward, lastTransfer, buildReq = 0, buildElap = 0, building = 0, goldFlag = 0, pipeTypeRaw = 'normal'] = entry;
         const edgeId = toEdgeId(rawId);
         if (edgeId == null) return;
         seenEdgeIds.add(edgeId);
@@ -4590,7 +4874,8 @@ function clearBridgeSelection() {
         edge.buildTicksRequired = Number(buildReq || 0);
         const prevElapsed = Number(edge.buildTicksElapsed || 0);
         edge.buildTicksElapsed = Number(buildElap || 0);
-        edge.pipeType = Number(goldFlag) === 1 ? 'gold' : (edge.pipeType || 'normal');
+        const normalizedPipeType = normalizePipeType(typeof pipeTypeRaw === 'string' ? pipeTypeRaw : (Number(goldFlag) === 1 ? 'gold' : edge.pipeType));
+        edge.pipeType = normalizedPipeType;
         // Fixed-interval metronome: accumulate real time and play hits when threshold crossed
         edge.hammerAccumSec = edge.hammerAccumSec || 0;
         if (edge.building) {
@@ -4778,7 +5063,7 @@ function clearBridgeSelection() {
         builtByMe,
         warpAxis: 'none',
         warpSegments: [],
-        pipeType: edge.pipeType === 'gold' ? 'gold' : 'normal',
+        pipeType: normalizePipeType(edge.pipeType),
       };
       applyEdgeWarpData(record, edge.warp ?? edge, nodes.get(edge.source), nodes.get(edge.target));
       edges.set(edgeId, record);
@@ -4820,6 +5105,10 @@ function clearBridgeSelection() {
       setBrassGemModeActive(false);
       pendingWarpGemSpend = false;
       setWarpGemModeActive(false);
+      pendingRageGemSpend = false;
+      setRageGemModeActive(false);
+      pendingReverseGemSpend = false;
+      setReverseGemModeActive(false);
     }
   }
 
@@ -4829,7 +5118,6 @@ function clearBridgeSelection() {
       const edge = msg.edge;
       const edgeId = toEdgeId(edge.id);
       if (edgeId == null) {
-        hideReverseCostDisplay();
         return;
       }
       const existingEdge = edges.get(edgeId);
@@ -4840,6 +5128,12 @@ function clearBridgeSelection() {
         const wasFlowing = existingEdge.flowing;
         existingEdge.on = edge.on;
         existingEdge.flowing = edge.flowing;
+        if (edge.pipeType) {
+          existingEdge.pipeType = normalizePipeType(edge.pipeType);
+        }
+        if (edge.pipeType) {
+          existingEdge.pipeType = normalizePipeType(edge.pipeType);
+        }
         applyEdgeWarpData(existingEdge, edge.warp ?? edge, nodes.get(existingEdge.source), nodes.get(existingEdge.target));
         
         // Track flow start time for initialization animation
@@ -4849,43 +5143,12 @@ function clearBridgeSelection() {
           existingEdge.flowStartTime = null;
         }
         
-        // Show cost indicator at the position where it was displayed during hover
-        if (msg.cost) {
-          let indicatorX, indicatorY;
-          
-          if (lastReverseCostPosition) {
-            // Use the position where the cost was shown during hover
-            indicatorX = lastReverseCostPosition.x;
-            indicatorY = lastReverseCostPosition.y;
-            lastReverseCostPosition = null; // Clear after use
-          } else {
-            // Fallback to mouse position if no hover position was stored
-            const offsetX = 5; // much smaller offset to the right of mouse
-            const offsetY = -5; // much smaller offset upward from mouse
-            indicatorX = mouseWorldX + offsetX;
-            indicatorY = mouseWorldY + offsetY;
-          }
-          
-          createMoneyIndicator(
-            indicatorX, 
-            indicatorY, 
-            `-$${msg.cost}`, 
-            MONEY_SPEND_COLOR,
-            2000 // 2 seconds
-          );
-        }
-        
         // Trigger reverse animation and sound (only if this action was mine)
         startEdgeReverseSpin(existingEdge);
-        if (msg.cost) {
-          playReverseShuffle();
-        }
+        playReverseShuffle();
         redrawStatic();
       }
     }
-    
-    // Hide reverse cost indicator after server updates
-    hideReverseCostDisplay();
   }
 
   function handleEdgeUpdated(msg) {
@@ -4932,6 +5195,22 @@ function clearBridgeSelection() {
         setBrassGemModeActive(false);
       }
     }
+    if (pendingRageGemSpend) {
+      pendingRageGemSpend = false;
+      if (isMagicResourceModeActive()) {
+        setRageGemModeActive(true);
+      } else {
+        setRageGemModeActive(false);
+      }
+    }
+    if (pendingReverseGemSpend) {
+      pendingReverseGemSpend = false;
+      if (isMagicResourceModeActive()) {
+        setReverseGemModeActive(true);
+      } else {
+        setReverseGemModeActive(false);
+      }
+    }
   }
 
   function handleReverseEdgeError(msg) {
@@ -4966,11 +5245,11 @@ function forceRemoveEdge(edgeId) {
     label.destroy();
     edgeFlowTexts.delete(id);
   }
+  removeReverseButton(id);
   edges.delete(id);
   edgeRemovalAnimations.delete(id);
   if (hoveredEdgeId === id) {
     hoveredEdgeId = null;
-    hideReverseCostDisplay();
   }
 }
 
@@ -5225,7 +5504,6 @@ function beginEdgeRemoval(edgeId) {
 
   if (hoveredEdgeId === id) {
     hoveredEdgeId = null;
-    hideReverseCostDisplay();
   }
 
   edgeRemovalAnimations.set(id, removal);
@@ -5491,7 +5769,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
     activeAbility = null;
     clearBridgeSelection();
     hideBridgeCostDisplay();
-    hideReverseCostDisplay();
     edgeRemovalAnimations.clear();
     brassPreviewIntersections.clear();
     clearAllPrePipes('sandbox', { skipRedraw: true });
@@ -6303,6 +6580,9 @@ function fallbackRemoveEdgesForNode(nodeId) {
       nodeResourceTexts.forEach((text) => {
         if (text) text.setVisible(false);
       });
+      reversePipeButtons.forEach((entry) => {
+        if (entry?.text) entry.text.setVisible(false);
+      });
       return; // Do not draw game under menu
     }
 
@@ -6345,12 +6625,14 @@ function fallbackRemoveEdgesForNode(nodeId) {
       const midX = midPoint ? midPoint.x : (s.x + t.x) / 2;
       const midY = midPoint ? midPoint.y : (s.y + t.y) / 2;
       const [sx, sy] = worldToScreen(midX, midY);
+      updateReverseButton(id, e, sx, sy);
       let textObj = edgeFlowTexts.get(id);
       if (persistentEdgeFlow && (e.lastTransfer || 0) > 0) {
         const perSecond = (e.lastTransfer || 0) / Math.max(1e-6, tickIntervalSec);
         const label = Math.round(perSecond).toString();
+        const flowOffsetY = e.pipeType === 'reverse' ? -18 : 0;
         if (!textObj) {
-          textObj = sceneRef.add.text(sx, sy, label, {
+          textObj = sceneRef.add.text(sx, sy + flowOffsetY, label, {
             font: '14px monospace',
             color: '#000000',
             align: 'center',
@@ -6361,7 +6643,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
           edgeFlowTexts.set(id, textObj);
         } else {
           if (textObj.text !== label) textObj.setText(label);
-          textObj.setPosition(sx, sy);
+          const flowOffsetY = e.pipeType === 'reverse' ? -18 : 0;
+          textObj.setPosition(sx, sy + flowOffsetY);
           if (textObj.style && textObj.style.fontSize !== '14px') textObj.setFontSize(14);
           textObj.setStroke('#ffffff', 3);
           if (!textObj.visible) textObj.setVisible(true);
@@ -6370,6 +6653,12 @@ function fallbackRemoveEdgesForNode(nodeId) {
         if (textObj) textObj.setVisible(false);
       }
     }
+
+    reversePipeButtons.forEach((entry, edgeId) => {
+      if (!edges.has(edgeId)) {
+        removeReverseButton(edgeId);
+      }
+    });
 
     drawPrePipes();
 
@@ -6952,19 +7241,13 @@ function fallbackRemoveEdgesForNode(nodeId) {
   function canReverseEdge(edge) {
     if (!edge) return false;
 
+    if (edge.pipeType !== 'reverse') return false;
     if (isNukeLikeModeActive()) return false;
     
     const sourceNode = nodes.get(edge.source);
     if (!sourceNode) return false;
     
-    const sourceOwner = sourceNode.owner;
-    
-    // Updated rule: the giving node must be neutral or owned by the player
-    if (sourceOwner != null && sourceOwner !== myPlayerId) {
-      return false;
-    }
-
-    return true;
+    return sourceNode.owner === myPlayerId;
   }
 
   function playerControlsEdge(edge) {
@@ -7137,6 +7420,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
         if (!canReverseEdge(edge)) {
           if (isNukeLikeModeActive()) {
             showErrorMessage('Edge reversal disabled in this mode');
+          } else if (edge.pipeType !== 'reverse') {
+            showErrorMessage('Edge is not reversible');
           } else {
             const sourceNode = nodes.get(edge.source);
             if (sourceNode && sourceNode.owner != null && sourceNode.owner !== myPlayerId) {
@@ -7144,17 +7429,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
             }
           }
         } else {
-          const sourceNode = nodes.get(edge.source);
-          const targetNode = nodes.get(edge.target);
-          if (sourceNode && targetNode) {
-            const cost = calculateBridgeCost(sourceNode, targetNode);
-            if (goldValue >= cost) {
-              const token = localStorage.getItem('token');
-              ws.send(JSON.stringify({ type: 'reverseEdge', edgeId, cost, token }));
-            } else {
-              showErrorMessage('Not enough money', 'money');
-            }
-          }
+          const token = localStorage.getItem('token');
+          ws.send(JSON.stringify({ type: 'reverseEdge', edgeId, token }));
         }
       }
     }
@@ -7511,7 +7787,11 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
     let wantBrass = determineBridgeBrassPreference(node, useBrass);
     if (magicBrassMode) {
-      if (brassGemModeActive && canActivateBrassGemMode()) {
+      if (rageGemModeActive && canActivateRageGemMode()) {
+        wantBrass = false;
+      } else if (reverseGemModeActive && canActivateReverseGemMode()) {
+        wantBrass = false;
+      } else if (brassGemModeActive && canActivateBrassGemMode()) {
         wantBrass = true;
       } else if (!canActivateBrassGemMode()) {
         wantBrass = false;
@@ -7535,7 +7815,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
     lastDoubleWarpWarningTime = 0;
     lastWarpAxis = null;
     lastWarpDirection = null;
-    hideReverseCostDisplay();
     hideBridgeCostDisplay();
     updateBrassPreviewIntersections();
     return true;
@@ -7573,7 +7852,9 @@ function fallbackRemoveEdgesForNode(nodeId) {
             return true;
           }
           const modeIsXb = isXbModeActive();
-          const applyBrassCost = bridgePreviewWillBeBrass && brassPipesDoubleCost();
+          const useBrassPipe = bridgePreviewWillBeBrass && (isMagicResourceModeActive() || isCrossLikeModeActive());
+          const pipeType = determinePipeTypeForBridge(useBrassPipe);
+          const applyBrassCost = pipeType === 'gold' && brassPipesDoubleCost();
           if (modeIsXb && xbPreviewBlockedByBrass) {
             showErrorMessage('Cannot cross brass pipe');
             return true;
@@ -7581,7 +7862,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
           const ownershipRequired = pipeStartRequiresOwnership();
           const firstOwner = firstNode.owner;
           const lacksOwnership = ownershipRequired && firstOwner !== myPlayerId;
-          const useBrassPipe = bridgePreviewWillBeBrass && (isMagicResourceModeActive() || isCrossLikeModeActive());
           const warpPreference = getActiveWarpPreference();
           const cost = calculateBridgeCost(firstNode, node, applyBrassCost, warpPreference);
           const hasFunds = sandboxModeEnabled() || goldValue >= cost;
@@ -7601,8 +7881,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
                   ])
                 : []
             } : null;
-
-            const pipeType = useBrassPipe ? 'gold' : 'normal';
 
             const buildBridgePayload = {
               type: 'buildBridge',
@@ -7626,6 +7904,12 @@ function fallbackRemoveEdgesForNode(nodeId) {
             if (isMagicResourceModeActive() && useBrassPipe) {
               setBrassGemModeActive(false, { clearPending: false });
               pendingBrassGemSpend = true;
+            } else if (isMagicResourceModeActive() && pipeType === 'rage' && rageGemModeActive) {
+              setRageGemModeActive(false, { clearPending: false });
+              pendingRageGemSpend = true;
+            } else if (isMagicResourceModeActive() && pipeType === 'reverse' && reverseGemModeActive) {
+              setReverseGemModeActive(false, { clearPending: false });
+              pendingReverseGemSpend = true;
             }
             ws.send(JSON.stringify(buildBridgePayload));
             // Don't reset bridge building state here - wait for server response
@@ -7635,7 +7919,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
           if (shouldQueuePrePipe) {
             queuePrePipe(bridgeFirstNode, nodeId, {
               warpPreference,
-              pipeType: useBrassPipe ? 'gold' : 'normal',
+              pipeType,
               waitingForOwnership: lacksOwnership,
               waitingForGold: !sandboxModeEnabled() && !hasFunds,
               estimatedCost: cost,
@@ -7643,7 +7927,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
             activeAbility = null;
             clearBridgeSelection();
             hideBridgeCostDisplay();
-            hideReverseCostDisplay();
             return true;
           }
 
@@ -7669,7 +7952,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
     activeAbility = null;
     clearBridgeSelection();
     hideBridgeCostDisplay();
-    hideReverseCostDisplay();
     return true; // Handled
   }
 
@@ -7915,7 +8197,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
         activeAbility = null;
         clearBridgeSelection();
         hideBridgeCostDisplay();
-        hideReverseCostDisplay();
       }
       if (pointerLockActive) {
         releaseVirtualCursor();
@@ -7953,7 +8234,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
       if (hoveredNodeId !== null || hoveredEdgeId !== null) {
         hoveredNodeId = null;
         hoveredEdgeId = null;
-        hideReverseCostDisplay();
         redrawStatic();
       }
       return;
@@ -8016,16 +8296,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
     } else if (!kingSelectionActive && kingMoveTargetHoveredId !== null) {
       kingMoveTargetHoveredId = null;
       needsRedraw = true;
-    }
-
-    const hoveredEdge = (hoveredEdgeId != null) ? edges.get(hoveredEdgeId) : null;
-    // Show reverse cost only if edge can be reversed AND player doesn't already control it
-    const shouldShowReverseCost = Boolean(hoveredEdge && canReverseEdge(hoveredEdge) && !playerControlsEdge(hoveredEdge));
-
-    if (shouldShowReverseCost) {
-      updateReverseCostDisplay(hoveredEdge);
-    } else {
-      hideReverseCostDisplay();
     }
 
     // Avoid excessive redraws when numbers & targeting overlays are off and nothing changed
@@ -8128,18 +8398,15 @@ function fallbackRemoveEdgesForNode(nodeId) {
       activeAbility = null;
       clearBridgeSelection();
       hideBridgeCostDisplay();
-      hideReverseCostDisplay();
     } else if (abilityName === 'bridge1way') {
       // Activate bridge building
       activeAbility = abilityName;
       clearBridgeSelection();
-      hideReverseCostDisplay();
     } else if (abilityName === 'destroy') {
       // Activate destroy mode
       activeAbility = abilityName;
       clearBridgeSelection(); // reuse for destroy node selection
       hideBridgeCostDisplay();
-      hideReverseCostDisplay();
     }
     // Placeholder abilities do nothing for now
   }
@@ -8237,12 +8504,24 @@ function fallbackRemoveEdgesForNode(nodeId) {
       const numeric = Number(counts[key]) || 0;
       label.textContent = String(Math.max(0, Math.floor(numeric)));
     });
+    let uiUpdated = false;
     if (brassGemModeActive && !canActivateBrassGemMode()) {
       setBrassGemModeActive(false);
+      uiUpdated = true;
+    }
+    if (rageGemModeActive && !canActivateRageGemMode()) {
+      setRageGemModeActive(false);
+      uiUpdated = true;
+    }
+    if (reverseGemModeActive && !canActivateReverseGemMode()) {
+      setReverseGemModeActive(false);
+      uiUpdated = true;
     }
     if (warpGemModeActive && !canActivateWarpGemMode()) {
       setWarpGemModeActive(false);
-    } else {
+      uiUpdated = true;
+    }
+    if (!uiUpdated) {
       updateGemModeUi();
     }
   }
@@ -8591,7 +8870,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
     activeAbility = null;
     clearBridgeSelection();
     hideBridgeCostDisplay();
-    hideReverseCostDisplay();
     clearMoneyIndicators();
 
     gameEnded = false;
@@ -8810,7 +9088,10 @@ function fallbackRemoveEdgesForNode(nodeId) {
       : null;
     const waitingForOwnership = !!options.waitingForOwnership;
     const waitingForGold = !!options.waitingForGold;
-    const pipeType = options.pipeType === 'gold' ? 'gold' : 'normal';
+    const normalizedPipeType = typeof options.pipeType === 'string'
+      ? options.pipeType.trim().toLowerCase()
+      : 'normal';
+    const pipeType = ['gold', 'rage', 'reverse'].includes(normalizedPipeType) ? normalizedPipeType : 'normal';
     const basePlayerColor = ownerToColor(myPlayerId) || 0xffffff;
     const baseColorCss = toCssColor(basePlayerColor);
     const outlineCss = lightenColor(baseColorCss, 0.75);
@@ -9152,17 +9433,22 @@ function fallbackRemoveEdgesForNode(nodeId) {
     }
 
     const useBrassPipe = bridgePreviewWillBeBrass;
-    const cost = calculateBridgeCost(sNode, tNode, bridgePreviewWillBeBrass && brassPipesDoubleCost(), warpPreference);
+    const pipeType = determinePipeTypeForBridge(useBrassPipe);
+    const cost = calculateBridgeCost(sNode, tNode, pipeType === 'gold' && brassPipesDoubleCost(), warpPreference);
     const canAfford = goldValue >= cost;
     let previewColor;
-    if (useBrassPipe) {
+    if (pipeType === 'gold') {
       previewColor = canAfford ? BRASS_PIPE_COLOR : BRASS_PIPE_DIM_COLOR;
+    } else if (pipeType === 'rage') {
+      previewColor = canAfford ? RAGE_PIPE_COLOR : RAGE_PIPE_DIM_COLOR;
+    } else if (pipeType === 'reverse') {
+      previewColor = canAfford ? REVERSE_PIPE_COLOR : REVERSE_PIPE_DIM_COLOR;
     } else {
       previewColor = canAfford ? ownerToSecondaryColor(myPlayerId) : 0x000000;
     }
 
     for (const segment of path.segments) {
-      drawBridgePreviewSegment(segment, previewColor, baseScale, useBrassPipe);
+      drawBridgePreviewSegment(segment, previewColor, baseScale, pipeType);
     }
   }
 
@@ -9171,7 +9457,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     return Math.max(1, calculateNodeRadius(endpoint.node, baseScale)) + 1;
   }
 
-function drawBridgePreviewSegment(segment, color, baseScale, useBrass = false) {
+function drawBridgePreviewSegment(segment, color, baseScale, pipeType = 'normal') {
   if (!segment) return;
   const start = segment.start;
   const end = segment.end;
@@ -9211,6 +9497,7 @@ function drawBridgePreviewSegment(segment, color, baseScale, useBrass = false) {
     for (let i = 0; i < packedCount; i++) {
       const cx = sx + (i + 0.5) * actualSpacing * ux;
       const cy = sy + (i + 0.5) * actualSpacing * uy;
+    const useBrass = pipeType === 'gold';
     drawPreviewTriangle(cx, cy, triW, triH, angle, color, useBrass);
   }
 }
@@ -9538,7 +9825,11 @@ function drawRemovalExplosion(edge, removal, fromNode) {
 function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, isHovered, triangleIndex, totalTriangles, removalOutline = false, scaleOverride = 1) {
     const pipeType = e?.pipeType || 'normal';
     const isBrass = pipeType === 'gold';
-    const inactiveColor = isBrass ? BRASS_PIPE_DIM_COLOR : 0x999999;
+    const isRage = pipeType === 'rage';
+    const isReverse = pipeType === 'reverse';
+    const inactiveColor = isBrass
+      ? BRASS_PIPE_DIM_COLOR
+      : (isRage ? RAGE_PIPE_DIM_COLOR : (isReverse ? REVERSE_PIPE_DIM_COLOR : 0x999999));
     const isRemovalOutline = !!removalOutline;
     const color = (overrideColor != null) ? overrideColor : edgeColor(e, fromNode);
 
@@ -9576,6 +9867,10 @@ function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, 
       brassFilled = true;
     };
 
+    let primaryFillColor = null;
+    let primaryFillAlpha = 1;
+    let triangleFilled = false;
+
     if (e.flowing) {
       // Animated juice flow effect - filled triangles
       const animatedColor = getAnimatedJuiceColor(color, triangleIndex || 0, totalTriangles || 1, e.flowStartTime);
@@ -9593,6 +9888,9 @@ function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, 
         }
         graphicsEdges.fillStyle(animatedColor.color, animatedColor.alpha);
         graphicsEdges.fillTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
+        primaryFillColor = animatedColor.color;
+        primaryFillAlpha = animatedColor.alpha;
+        triangleFilled = true;
       }
     } else if (e.on && ENABLE_IDLE_EDGE_ANIMATION) {
       // Edge is on but not flowing - show hollow triangles with same animation pattern
@@ -9615,6 +9913,12 @@ function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, 
         graphicsEdges.lineStyle(2, inactiveColor, 1);
         graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
       }
+    }
+
+    if (pipeType === 'rage' && !isRemovalOutline) {
+      const overlayColor = (triangleFilled && primaryFillColor != null) ? primaryFillColor : RAGE_PIPE_COLOR;
+      const overlayAlpha = triangleFilled ? primaryFillAlpha : 0.45;
+      drawRageOverlays(p1, p2, p3, overlayColor, overlayAlpha);
     }
 
     if (isRemovalOutline) {
@@ -9682,6 +9986,44 @@ function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, 
     const g = Math.round(aG + (bG - aG) * clamped);
     const b = Math.round(aB + (bB - aB) * clamped);
     return (r << 16) | (g << 8) | b;
+  }
+
+  function lerpPoint(a, b, t) {
+    return [
+      a[0] + (b[0] - a[0]) * t,
+      a[1] + (b[1] - a[1]) * t,
+    ];
+  }
+
+  function drawRageOverlays(pTip, pBaseLeft, pBaseRight, color, alpha) {
+    const spikeCount = 3;
+    const highlightColor = lerpColor(color, 0xffffff, 0.35);
+
+    for (let i = 0; i < spikeCount; i++) {
+      const t0 = i / spikeCount;
+      const t1 = (i + 1) / spikeCount;
+      const start = lerpPoint(pBaseLeft, pBaseRight, t0);
+      const end = lerpPoint(pBaseLeft, pBaseRight, t1);
+      const mid = lerpPoint(start, end, 0.5);
+      const stretch = 1.05 - 0.08 * Math.abs(i - (spikeCount - 1) / 2);
+      const spikeTip = [
+        mid[0] + (pTip[0] - mid[0]) * stretch,
+        mid[1] + (pTip[1] - mid[1]) * stretch,
+      ];
+      graphicsEdges.fillStyle(highlightColor, Math.min(1, alpha * 0.95));
+      graphicsEdges.fillTriangle(
+        spikeTip[0], spikeTip[1],
+        start[0], start[1],
+        end[0], end[1],
+      );
+    }
+
+    const baseCenter = lerpPoint(pBaseLeft, pBaseRight, 0.5);
+    const baseRadius = Math.hypot(pBaseRight[0] - pBaseLeft[0], pBaseRight[1] - pBaseLeft[1]) / 2;
+    graphicsEdges.fillStyle(color, Math.min(1, alpha * 0.35));
+    graphicsEdges.fillCircle(baseCenter[0], baseCenter[1], baseRadius * 0.7);
+    graphicsEdges.lineStyle(1.4, lerpColor(color, 0x000000, 0.35), Math.min(1, alpha * 0.75));
+    graphicsEdges.strokeCircle(baseCenter[0], baseCenter[1], baseRadius * 0.72);
   }
 
   function edgeColor(e, fromNodeOrNull) {

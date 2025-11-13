@@ -950,7 +950,7 @@ class GameEngine:
         except GameValidationError:
             return False
     
-    def handle_reverse_edge(self, token: str, edge_id: int, cost: float = 1.0) -> bool:
+    def handle_reverse_edge(self, token: str, edge_id: int) -> bool:
         """
         Handle reversing an edge direction.
         Returns True if the action was successful.
@@ -967,22 +967,17 @@ class GameEngine:
                 raise GameValidationError("Edge reversal disabled in this mode")
 
             edge = self.validate_edge_exists(edge_id)
+            if getattr(edge, "pipe_type", "normal") != "reverse":
+                raise GameValidationError("Edge is not reversible")
             
             # Get both nodes
             source_node = self.validate_node_exists(edge.source_node_id)
             target_node = self.validate_node_exists(edge.target_node_id)
 
-            # Updated eligibility rules: source node must be neutral or owned by the player
+            # Only the player who controls the source node may reverse the pipe
             source_owner = source_node.owner
-            if source_owner is not None and source_owner != player_id:
+            if source_owner != player_id:
                 raise GameValidationError("Pipe controlled by opponent")
-            
-            
-            # Calculate the actual reversal cost based on edge length
-            actual_cost = self.calculate_bridge_cost(source_node, target_node)
-
-            # Validate gold using the server-side calculation
-            self.validate_sufficient_gold(player_id, actual_cost)
             
             # Reverse the edge by swapping source and target
             edge.source_node_id, edge.target_node_id = edge.target_node_id, edge.source_node_id
@@ -996,15 +991,6 @@ class GameEngine:
                 edge.on = False
 
             self._apply_edge_warp_geometry(edge)
-
-            # Deduct gold using verified cost
-            self.state.player_gold[player_id] = max(0.0, self.state.player_gold[player_id] - actual_cost)
-
-            # Store the edge reversal event for frontend notification
-            self.state.pending_edge_reversal = {
-                'edgeId': edge_id,
-                'cost': actual_cost
-            }
 
             return True
 
@@ -1392,19 +1378,27 @@ class GameEngine:
 
             resource_mode = str(getattr(self.state, "resource_mode", "standard") or "standard").strip().lower()
 
-            if is_brass_mode:
+            allowed_pipe_types = {"normal", "gold", "rage", "reverse"}
+            requested_pipe_type = (pipe_type or "").strip().lower()
+            if resource_mode != "gems" and requested_pipe_type in {"rage", "reverse"}:
+                requested_pipe_type = "normal"
+            if requested_pipe_type not in allowed_pipe_types:
+                requested_pipe_type = "normal"
+
+            if requested_pipe_type in {"rage", "reverse"}:
+                normalized_pipe_type = requested_pipe_type
+            elif is_brass_mode:
                 normalized_pipe_type = "gold" if getattr(from_node, "node_type", "normal") == "brass" else "normal"
             elif is_cross_mode or manual_brass_selection:
-                normalized_pipe_type = "gold" if (pipe_type or "").lower() == "gold" else "normal"
+                normalized_pipe_type = "gold" if requested_pipe_type == "gold" else "normal"
             else:
                 normalized_pipe_type = "normal"
 
             requires_brass_gem = resource_mode == "gems" and normalized_pipe_type == "gold"
+            requires_rage_gem = resource_mode == "gems" and normalized_pipe_type == "rage"
+            requires_reverse_gem = resource_mode == "gems" and normalized_pipe_type == "reverse"
             requires_warp_gem = False
-            if requires_brass_gem:
-                available_gems = self.state.get_player_gem_count(player_id, "brass") if self.state else 0
-                if available_gems <= 0:
-                    raise GameValidationError("No brass gems available")
+
 
             allow_pipe_anywhere = bool(getattr(self.state, "allow_pipe_start_anywhere", False))
 
@@ -1546,6 +1540,23 @@ class GameEngine:
                         # Should not happen because blocking_edges would have triggered, but guard anyway
                         raise GameValidationError("Only golden pipes can cross others")
 
+            requires_brass_gem = resource_mode == "gems" and normalized_pipe_type == "gold"
+            requires_rage_gem = resource_mode == "gems" and normalized_pipe_type == "rage"
+            requires_reverse_gem = resource_mode == "gems" and normalized_pipe_type == "reverse"
+
+            if requires_rage_gem:
+                available_rage = self.state.get_player_gem_count(player_id, "rage") if self.state else 0
+                if available_rage <= 0:
+                    raise GameValidationError("No rage gems available")
+            if requires_reverse_gem:
+                available_reverse = self.state.get_player_gem_count(player_id, "reverse") if self.state else 0
+                if available_reverse <= 0:
+                    raise GameValidationError("No reverse gems available")
+            if requires_brass_gem:
+                available_brass = self.state.get_player_gem_count(player_id, "brass") if self.state else 0
+                if available_brass <= 0:
+                    raise GameValidationError("No brass gems available")
+
             if (
                 from_node.owner != player_id
                 and not allow_pipe_anywhere
@@ -1620,6 +1631,14 @@ class GameEngine:
                 gem_consumed = self.state.consume_player_gem(player_id, "brass")
                 if not gem_consumed:
                     raise GameValidationError("No brass gems available")
+            if requires_rage_gem and self.state:
+                gem_consumed = self.state.consume_player_gem(player_id, "rage")
+                if not gem_consumed:
+                    raise GameValidationError("No rage gems available")
+            if requires_reverse_gem and self.state:
+                gem_consumed = self.state.consume_player_gem(player_id, "reverse")
+                if not gem_consumed:
+                    raise GameValidationError("No reverse gems available")
 
             # Deduct gold using verified cost
             self.state.player_gold[player_id] = max(0.0, self.state.player_gold[player_id] - actual_cost)
@@ -2123,8 +2142,6 @@ class GameEngine:
             self.state.pending_auto_attack_nodes = {}
             if hasattr(self.state, "pending_node_captures"):
                 self.state.pending_node_captures = []
-            if hasattr(self.state, "pending_edge_reversal"):
-                self.state.pending_edge_reversal = None
             self.state.player_king_nodes.clear()
             self.state.gem_nodes = {}
 

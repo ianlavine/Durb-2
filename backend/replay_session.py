@@ -412,6 +412,7 @@ class ReplaySession:
                                 "forward": True,
                                 "on": edge.on,
                                 "flowing": edge.flowing,
+                                "pipeType": getattr(edge, "pipe_type", "normal"),
                                 "warp": warp_payload,
                                 "warpAxis": warp_payload["axis"],
                                 "warpSegments": warp_payload["segments"],
@@ -419,8 +420,6 @@ class ReplaySession:
                             "replay": True,
                         }
                         await self._send_json(message)
-                    if hasattr(state, "pending_edge_reversal"):
-                        state.pending_edge_reversal = None
         elif event_type == "buildBridge":
             from_node = _coerce_int(payload.get("fromNodeId"), -1)
             to_node = _coerce_int(payload.get("toNodeId"), -1)

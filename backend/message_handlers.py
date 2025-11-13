@@ -536,7 +536,6 @@ class MessageRouter:
     ) -> None:
         token = msg.get("token")
         edge_id = msg.get("edgeId")
-        cost = float(msg.get("cost", 1.0))
         if token is None or edge_id is None:
             return
 
@@ -545,43 +544,31 @@ class MessageRouter:
             return
 
         engine = game_info["engine"]
-        success = engine.handle_reverse_edge(token, int(edge_id), cost)
+        success = engine.handle_reverse_edge(token, int(edge_id))
         if not success:
-            # Derive a more specific error message
             error_message = "Can't reverse this pipe!"
             try:
                 if engine.state:
                     player_id = engine.get_player_id(token)
                     edge = engine.state.edges.get(int(edge_id)) if player_id is not None else None
                     if edge:
-                        source_node = engine.state.nodes.get(edge.source_node_id)
-                        target_node = engine.state.nodes.get(edge.target_node_id)
-                        # Check opponent control first
-                        if source_node and source_node.owner is not None and source_node.owner != player_id:
-                            error_message = "Pipe controlled by opponent"
+                        if getattr(edge, "pipe_type", "normal") != "reverse":
+                            error_message = "Pipe is not reversible"
                         else:
-                            # Compare required cost vs available gold
-                            if source_node and target_node:
-                                actual_cost = engine.calculate_bridge_cost(source_node, target_node)
-                                player_gold = engine.state.player_gold.get(player_id, 0.0)
-                                if player_gold < actual_cost:
-                                    error_message = "Not enough gold"
+                            source_node = engine.state.nodes.get(edge.source_node_id)
+                            if source_node and source_node.owner is not None and source_node.owner != player_id:
+                                error_message = "Pipe controlled by opponent"
             except Exception:
                 pass
 
             await self._send_safe(websocket, json.dumps({"type": "reverseEdgeError", "message": error_message}))
             return
 
-        actual_cost = cost
-        if engine.state and getattr(engine.state, "pending_edge_reversal", None):
-            actual_cost = engine.state.pending_edge_reversal.get("cost", cost)
-
         edge_after = None
         if engine.state:
             edge = engine.state.edges.get(int(edge_id))
             if edge:
                 edge_after = edge
-                # Send edge state update to all players (without cost indicator for others)
                 edge_update_message = {
                     "type": "edgeReversed",
                     "edge": {
@@ -592,6 +579,7 @@ class MessageRouter:
                         "forward": True,
                         "on": edge.on,
                         "flowing": edge.flowing,
+                        "pipeType": getattr(edge, "pipe_type", "normal"),
                         "warp": {
                             "axis": edge.warp_axis,
                             "segments": [[sx, sy, ex, ey] for sx, sy, ex, ey in (edge.warp_segments or [])],
@@ -600,23 +588,13 @@ class MessageRouter:
                         "warpSegments": [[sx, sy, ex, ey] for sx, sy, ex, ey in (edge.warp_segments or [])],
                     }
                 }
-                
-                # Send to all players, but include cost only for the acting player
+
                 for token_key, client_websocket in game_info.get("clients", {}).items():
                     if not client_websocket:
                         continue
-                    
-                    message_to_send = edge_update_message.copy()
-                    # Only include cost for the player who performed the action
-                    if token_key == token:
-                        message_to_send["cost"] = actual_cost
-                    
-                    await self._send_safe(client_websocket, json.dumps(message_to_send))
+                    await self._send_safe(client_websocket, json.dumps(edge_update_message))
 
-            if hasattr(engine.state, "pending_edge_reversal"):
-                engine.state.pending_edge_reversal = None
-
-        payload = {"edgeId": int(edge_id), "cost": actual_cost}
+        payload = {"edgeId": int(edge_id)}
         if edge_after:
             payload["source"] = edge_after.source_node_id
             payload["target"] = edge_after.target_node_id
@@ -625,6 +603,7 @@ class MessageRouter:
                 [sx, sy, ex, ey]
                 for sx, sy, ex, ey in (edge_after.warp_segments or [])
             ]
+            payload["pipeType"] = getattr(edge_after, "pipe_type", "normal")
         self._record_game_event(game_info, token, "reverseEdge", payload)
 
     async def handle_build_bridge(
@@ -1341,9 +1320,8 @@ class MessageRouter:
 
         elif msg_type == "reverseEdge":
             edge_id = msg.get("edgeId")
-            cost = float(msg.get("cost", 1.0))
             if edge_id is not None:
-                success = bot_game_engine.handle_reverse_edge(token, int(edge_id), cost)
+                success = bot_game_engine.handle_reverse_edge(token, int(edge_id))
                 if not success:
                     # Derive a more specific error message for bot game
                     error_message = "Can't reverse this pipe!"
@@ -1352,17 +1330,12 @@ class MessageRouter:
                             player_id = bot_game_engine.get_player_id(token)
                             edge = bot_game_engine.state.edges.get(int(edge_id)) if player_id is not None else None
                             if edge:
-                                source_node = bot_game_engine.state.nodes.get(edge.source_node_id)
-                                target_node = bot_game_engine.state.nodes.get(edge.target_node_id)
-                                # Opponent control check
-                                if source_node and source_node.owner is not None and source_node.owner != player_id:
-                                    error_message = "Pipe controlled by opponent"
+                                if getattr(edge, "pipe_type", "normal") != "reverse":
+                                    error_message = "Pipe is not reversible"
                                 else:
-                                    if source_node and target_node:
-                                        actual_cost = bot_game_engine.calculate_bridge_cost(source_node, target_node)
-                                        player_gold = bot_game_engine.state.player_gold.get(player_id, 0.0)
-                                        if player_gold < actual_cost:
-                                            error_message = "Not enough gold"
+                                    source_node = bot_game_engine.state.nodes.get(edge.source_node_id)
+                                    if source_node and source_node.owner is not None and source_node.owner != player_id:
+                                        error_message = "Pipe controlled by opponent"
                     except Exception:
                         pass
 
@@ -1372,9 +1345,6 @@ class MessageRouter:
                     if not bot_game_manager.bot_player or token != bot_game_manager.bot_player.bot_token:
                         edge = bot_game_engine.state.edges.get(int(edge_id)) if bot_game_engine.state else None
                         if edge:
-                            actual_cost = cost
-                            if bot_game_engine.state and getattr(bot_game_engine.state, "pending_edge_reversal", None):
-                                actual_cost = bot_game_engine.state.pending_edge_reversal.get("cost", cost)
                             warp_segments = [
                                 [sx, sy, ex, ey]
                                 for sx, sy, ex, ey in (edge.warp_segments or [])
@@ -1393,16 +1363,13 @@ class MessageRouter:
                                     "forward": True,
                                     "on": edge.on,
                                     "flowing": edge.flowing,
+                                    "pipeType": getattr(edge, "pipe_type", "normal"),
                                     "warp": warp_payload,
                                     "warpAxis": warp_payload["axis"],
                                     "warpSegments": warp_segments,
                                 },
-                                "cost": actual_cost,
                             }
                             await self._send_safe(websocket, json.dumps(message))
-
-                        if bot_game_engine.state and hasattr(bot_game_engine.state, "pending_edge_reversal"):
-                            bot_game_engine.state.pending_edge_reversal = None
 
         elif msg_type == "buildBridge":
             from_node_id = msg.get("fromNodeId")
