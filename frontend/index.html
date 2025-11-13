@@ -167,6 +167,36 @@
         background: #000000;
         z-index: 9;
         display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 0 clamp(16px, 4vw, 48px);
+        box-sizing: border-box;
+        font-family: "Fira Code", "Source Code Pro", monospace;
+      }
+      .gem-counts {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: clamp(18px, 4vw, 32px);
+        pointer-events: none;
+      }
+      .gem-count {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: #ffffff;
+        font-size: clamp(16px, 2.2vh, 22px);
+        font-weight: bold;
+        text-shadow: 0 2px 6px rgba(0,0,0,0.75);
+        opacity: 0.95;
+      }
+      .gem-count .gem-icon {
+        font-size: clamp(22px, 3vh, 30px);
+        line-height: 1;
+      }
+      .gem-count .gem-number {
+        min-width: 22px;
+        text-align: center;
       }
 
       /* Timer display */
@@ -798,6 +828,13 @@
               <button class="mode-option-button active" data-setting="winCondition" data-value="king">King</button>
             </div>
           </div>
+          <div class="mode-option-group" data-setting-group="resources">
+            <span class="selector-label">Resources</span>
+            <div class="mode-option-buttons">
+              <button class="mode-option-button active" data-setting="resources" data-value="standard">Standard</button>
+              <button class="mode-option-button" data-setting="resources" data-value="gems">Gems</button>
+            </div>
+          </div>
           <div class="mode-option-group" data-setting-group="startingJuice">
             <span class="selector-label">Starting Juice</span>
             <div class="mode-slider">
@@ -854,7 +891,26 @@
     
     <!-- UI Background Bars -->
     <div class="top-ui-bar" id="topUiBar"></div>
-    <div class="bottom-ui-bar" id="bottomUiBar"></div>
+    <div class="bottom-ui-bar" id="bottomUiBar">
+      <div class="gem-counts" id="gemCountsDisplay">
+        <div class="gem-count" data-gem="warp">
+          <span class="gem-icon">⭐</span>
+          <span class="gem-number">0</span>
+        </div>
+        <div class="gem-count" data-gem="brass">
+          <span class="gem-icon">🟫</span>
+          <span class="gem-number">0</span>
+        </div>
+        <div class="gem-count" data-gem="rage">
+          <span class="gem-icon">🔥</span>
+          <span class="gem-number">0</span>
+        </div>
+        <div class="gem-count" data-gem="reverse">
+          <span class="gem-icon">🔄</span>
+          <span class="gem-number">0</span>
+        </div>
+      </div>
+    </div>
     
     <!-- Progress bar for node count victory -->
     <div id="progressBar">

@@ -176,6 +176,8 @@
   // UI background bars
   let topUiBar = null;
   let bottomUiBar = null;
+  let gemCountsDisplay = null;
+  const gemCountLabels = new Map();
 
   // Warp mode visuals & geometry (frontend prototype hooked to Warp mode)
   const WARP_MARGIN_RATIO_X = 0.06; // horizontal extra space relative to board width
@@ -239,6 +241,7 @@
   
   // Node juice display system
   let nodeJuiceTexts = new Map(); // nodeId -> text object
+  let nodeResourceTexts = new Map(); // nodeId -> emoji text object
   // Targeting visual indicator system
   let currentTargetNodeId = null; // The node currently being targeted (for visual indicator)
   let currentTargetSetTime = null; // Animation time when target was last set
@@ -259,6 +262,7 @@
         derivedMode: LEGACY_DEFAULT_MODE || 'basic',
         winCondition: 'king',
         kingCrownHealth: KING_CROWN_DEFAULT_HEALTH,
+        resources: 'standard',
       }
     : {
         screen: 'flat',
@@ -273,6 +277,7 @@
         ringPayoutGold: 10,
         winCondition: 'king',
         kingCrownHealth: KING_CROWN_DEFAULT_HEALTH,
+        resources: 'standard',
       };
 
   const INITIAL_MODE = LEGACY_DEFAULT_MODE || (IS_LEGACY_CLIENT ? 'basic' : 'flat');
@@ -355,6 +360,41 @@
   const MONEY_SPEND_COLOR = '#b87333';
   const MONEY_SPEND_STROKE = '#4e2a10';
   const MONEY_GAIN_COLOR = '#ffd700';
+  const RESOURCE_EMOJIS = {
+    money: '$',
+    gem: {
+      warp: '⭐',
+      brass: '🟫',
+      rage: '🔥',
+      reverse: '🔄',
+      default: '💎',
+    },
+  };
+
+  const GEM_TYPE_ORDER = ['warp', 'brass', 'rage', 'reverse'];
+
+  function normalizeGemKey(value) {
+    if (typeof value !== 'string') return null;
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) return null;
+    return GEM_TYPE_ORDER.includes(normalized) ? normalized : null;
+  }
+
+  function createEmptyGemCounts() {
+    const counts = {};
+    GEM_TYPE_ORDER.forEach((key) => {
+      counts[key] = 0;
+    });
+    return counts;
+  }
+
+  function createDefaultPlayerStats() {
+    return {
+      nodes: 0,
+      gold: 0,
+      gems: createEmptyGemCounts(),
+    };
+  }
 
   function setModeSelectorVisibility(visible) {
     if (!modeSelectorContainer || !modeSelectorContainer.isConnected) {
@@ -445,6 +485,34 @@
     return value.trim().toLowerCase() === 'king' ? 'king' : 'dominate';
   }
 
+  function normalizeResources(value) {
+    if (typeof value !== 'string') return 'standard';
+    return value.trim().toLowerCase() === 'gems' ? 'gems' : 'standard';
+  }
+
+  function normalizeNodeResourceType(value) {
+    if (typeof value !== 'string') return 'money';
+    return value.trim().toLowerCase() === 'gem' ? 'gem' : 'money';
+  }
+
+  function normalizeNodeResourceKey(value) {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim().toLowerCase();
+    return trimmed ? trimmed : null;
+  }
+
+  function getResourceEmoji(resourceType, resourceKey) {
+    const normalizedType = normalizeNodeResourceType(resourceType);
+    if (normalizedType === 'gem') {
+      const normalizedKey = normalizeNodeResourceKey(resourceKey);
+      if (normalizedKey && Object.prototype.hasOwnProperty.call(RESOURCE_EMOJIS.gem, normalizedKey)) {
+        return RESOURCE_EMOJIS.gem[normalizedKey];
+      }
+      return RESOURCE_EMOJIS.gem.default;
+    }
+    return RESOURCE_EMOJIS.money;
+  }
+
   function deriveModeFromSettings(settings = selectedSettings) {
     if (IS_LEGACY_CLIENT) {
       return LEGACY_DEFAULT_MODE || 'basic';
@@ -474,7 +542,8 @@
     const ringPayoutLabel = coerceRingPayout(settings.ringPayoutGold);
     const startJuiceLabel = coerceStartingNodeJuice(settings.startingNodeJuice);
     const winConLabel = normalizeWinCondition(settings.winCondition) === 'king' ? 'King' : 'Dominate';
-    return `Win-Con ${winConLabel} · ${screenLabel} · ${brassLabel} · ${startLabel} · ${startModeLabel} · ${costLabel} · Passive ${passiveLabel} · Neutral ${neutralLabel} · Ring ${ringRatioLabel}:${ringPayoutLabel} · Start ${startJuiceLabel}`;
+    const resourcesLabel = normalizeResources(settings.resources) === 'gems' ? 'Gems' : 'Standard';
+    return `Resources ${resourcesLabel} · Win-Con ${winConLabel} · ${screenLabel} · ${brassLabel} · ${startLabel} · ${startModeLabel} · ${costLabel} · Passive ${passiveLabel} · Neutral ${neutralLabel} · Ring ${ringRatioLabel}:${ringPayoutLabel} · Start ${startJuiceLabel}`;
   }
 
   function updateModeOptionButtonStates() {
@@ -484,6 +553,7 @@
     const currentStart = (selectedSettings.brassStart || DEFAULT_MODE_SETTINGS.brassStart).toLowerCase();
     const currentCost = Number(coerceBridgeCost(selectedSettings.bridgeCost));
     const currentGameStart = (selectedSettings.gameStart || DEFAULT_MODE_SETTINGS.gameStart).toLowerCase();
+    const currentResources = normalizeResources(selectedSettings.resources);
     const hiddenAllowed = isHiddenStartAllowed();
     modeOptionButtons.forEach((btn) => {
       const setting = btn?.dataset?.setting;
@@ -522,6 +592,8 @@
       } else if (setting === 'winCondition') {
         const normalized = normalizeWinCondition(value);
         isActive = normalized === normalizeWinCondition(selectedSettings.winCondition);
+      } else if (setting === 'resources') {
+        isActive = normalizeResources(value) === currentResources;
       }
       btn.classList.toggle('active', isActive);
     });
@@ -612,6 +684,11 @@
     } else {
       next.winCondition = normalizeWinCondition(next.winCondition);
     }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'resources')) {
+      next.resources = normalizeResources(overrides.resources);
+    } else {
+      next.resources = normalizeResources(next.resources);
+    }
 
     if (next.gameStart === 'hidden-split' && !isHiddenStartAllowed()) {
       next.gameStart = 'open';
@@ -647,6 +724,7 @@
       baseMode: selectedMode,
       derivedMode: selectedMode,
       winCondition: selectedSettings.winCondition || 'dominate',
+      resources: normalizeResources(selectedSettings.resources),
     };
   }
 
@@ -666,6 +744,7 @@
     if (Object.prototype.hasOwnProperty.call(payload, 'ringPayoutGold')) overrides.ringPayoutGold = payload.ringPayoutGold;
     if (Object.prototype.hasOwnProperty.call(payload, 'kingCrownHealth')) overrides.kingCrownHealth = payload.kingCrownHealth;
     if (Object.prototype.hasOwnProperty.call(payload, 'winCondition')) overrides.winCondition = payload.winCondition;
+    if (Object.prototype.hasOwnProperty.call(payload, 'resources')) overrides.resources = payload.resources;
     applySelectedSettings(overrides);
   }
 
@@ -3028,6 +3107,19 @@ function clearBridgeSelection() {
     // Initialize UI background bars
     topUiBar = document.getElementById('topUiBar');
     bottomUiBar = document.getElementById('bottomUiBar');
+    gemCountsDisplay = document.getElementById('gemCountsDisplay');
+    gemCountLabels.clear();
+    if (gemCountsDisplay) {
+      GEM_TYPE_ORDER.forEach((key) => {
+        const container = gemCountsDisplay.querySelector(`[data-gem="${key}"]`);
+        if (!container) return;
+        const numberEl = container.querySelector('.gem-number');
+        if (numberEl) {
+          gemCountLabels.set(key, numberEl);
+        }
+      });
+    }
+    updateGemCountsDisplay();
     
     // Initialize timer display
     timerDisplay = document.getElementById('timerDisplay');
@@ -3491,6 +3583,10 @@ function clearBridgeSelection() {
       if (text) text.destroy();
     });
     nodeJuiceTexts.clear();
+    nodeResourceTexts.forEach(text => {
+      if (text) text.destroy();
+    });
+    nodeResourceTexts.clear();
     
     // Clear crown health displays
     crownHealthDisplays.forEach(display => {
@@ -3551,6 +3647,8 @@ function clearBridgeSelection() {
           kingOwnerRaw = null,
           crownHealthRaw = null,
           crownMaxRaw = null,
+          resourceTypeRaw = null,
+          resourceKeyRaw = null,
         ] = arr;
         const isBrass = Number(brassFlag) === 1;
         const parsedKingOwner = kingOwnerRaw == null ? null : Number(kingOwnerRaw);
@@ -3579,6 +3677,8 @@ function clearBridgeSelection() {
         }
         const normalizedCrownMax = Number.isFinite(crownMax) ? Math.max(0, crownMax) : 0;
         const normalizedCrownHealth = Number.isFinite(crownHealth) ? Math.max(0, crownHealth) : 0;
+        const resourceType = normalizeNodeResourceType(resourceTypeRaw);
+        const resourceKey = resourceType === 'gem' ? normalizeNodeResourceKey(resourceKeyRaw) : null;
         nodes.set(id, {
           x,
           y,
@@ -3596,6 +3696,8 @@ function clearBridgeSelection() {
           isKing: kingOwnerId != null,
           kingCrownHealth: normalizedCrownHealth,
           kingCrownMax: normalizedCrownMax,
+          resourceType,
+          resourceKey,
         });
       }
     }
@@ -3656,7 +3758,7 @@ function clearBridgeSelection() {
           secondaryColors,
           name: displayName,
         });
-        playerStats.set(id, { nodes: 0, gold: 0 });
+        playerStats.set(id, createDefaultPlayerStats());
         playerOrder.push(id);
       });
     }
@@ -3718,9 +3820,8 @@ function clearBridgeSelection() {
       msg.gold.forEach(([pid, value]) => {
         const id = Number(pid);
         if (!Number.isFinite(id)) return;
-        const stats = playerStats.get(id) || { nodes: 0, gold: 0 };
+        const stats = ensurePlayerStats(id);
         stats.gold = Math.max(0, Number(value) || 0);
-        playerStats.set(id, stats);
         if (id === myPlayerId) {
           goldValue = stats.gold;
         }
@@ -3736,11 +3837,13 @@ function clearBridgeSelection() {
       Object.entries(msg.counts).forEach(([pid, count]) => {
         const id = Number(pid);
         if (!Number.isFinite(id)) return;
-        const stats = playerStats.get(id) || { nodes: 0, gold: 0 };
+        const stats = ensurePlayerStats(id);
         stats.nodes = Math.max(0, Number(count) || 0);
-        playerStats.set(id, stats);
       });
     }
+
+    syncGemCountsFromPayload(msg.gemCounts);
+    updateGemCountsDisplay();
 
     myAutoExpand = persistentAutoExpand;
     if (Array.isArray(msg.autoExpand)) {
@@ -4123,6 +4226,8 @@ function clearBridgeSelection() {
           kingOwnerRaw = null,
           crownHealthRaw = null,
           crownMaxRaw = null,
+          resourceTypeRaw = null,
+          resourceKeyRaw = null,
         ] = entry;
         const node = nodes.get(id);
         if (node) {
@@ -4131,6 +4236,9 @@ function clearBridgeSelection() {
           node.owner = owner;
           node.pendingGold = Number(pendingGold) || 0;
           node.isBrass = Number(brassFlag) === 1;
+          const resourceType = normalizeNodeResourceType(resourceTypeRaw);
+          node.resourceType = resourceType;
+          node.resourceKey = resourceType === 'gem' ? normalizeNodeResourceKey(resourceKeyRaw) : null;
           const parsedKingOwner = kingOwnerRaw == null ? null : Number(kingOwnerRaw);
           const kingOwnerId = Number.isFinite(parsedKingOwner) ? parsedKingOwner : null;
           node.kingOwnerId = kingOwnerId;
@@ -4278,6 +4386,9 @@ function clearBridgeSelection() {
         stats.nodes = Math.max(0, Number(count) || 0);
       });
     }
+
+    syncGemCountsFromPayload(msg.gemCounts);
+    updateGemCountsDisplay();
 
     if (typeof msg.winThreshold === 'number') winThreshold = msg.winThreshold;
     if (typeof msg.totalNodes === 'number') totalNodes = msg.totalNodes;
@@ -4533,6 +4644,11 @@ function clearBridgeSelection() {
     if (juiceText) {
       juiceText.destroy();
       nodeJuiceTexts.delete(nodeId);
+    }
+    const emojiText = nodeResourceTexts.get(nodeId);
+    if (emojiText) {
+      emojiText.destroy();
+      nodeResourceTexts.delete(nodeId);
     }
   }
 
@@ -4998,11 +5114,18 @@ function fallbackRemoveEdgesForNode(nodeId) {
     const pendingGold = Number(data.pendingGold) || 0;
     const owner = (data.owner == null) ? null : Number(data.owner);
     const isBrass = data.isBrass === true || Number(data.isBrass) === 1;
+    const resourceType = normalizeNodeResourceType(data.resourceType);
+    const resourceKey = resourceType === 'gem' ? normalizeNodeResourceKey(data.resourceKey) : null;
 
     const existingText = nodeJuiceTexts.get(id);
     if (existingText) {
       existingText.destroy();
       nodeJuiceTexts.delete(id);
+    }
+    const existingEmoji = nodeResourceTexts.get(id);
+    if (existingEmoji) {
+      existingEmoji.destroy();
+      nodeResourceTexts.delete(id);
     }
 
     nodes.set(id, {
@@ -5020,6 +5143,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
       isBrass,
       kingOwnerId: null,
       isKing: false,
+      resourceType,
+      resourceKey,
     });
 
     if (typeof msg.totalNodes === 'number') {
@@ -5046,6 +5171,10 @@ function fallbackRemoveEdgesForNode(nodeId) {
       if (text) text.destroy();
     });
     nodeJuiceTexts.clear();
+    nodeResourceTexts.forEach((text) => {
+      if (text) text.destroy();
+    });
+    nodeResourceTexts.clear();
     edgeFlowTexts.forEach((text) => {
       if (text) text.destroy();
     });
@@ -5854,6 +5983,12 @@ function fallbackRemoveEdgesForNode(nodeId) {
       // Hide UI bars when menu is visible
       if (topUiBar) topUiBar.style.display = 'none';
       if (bottomUiBar) bottomUiBar.style.display = 'none';
+      nodeJuiceTexts.forEach((text) => {
+        if (text) text.setVisible(false);
+      });
+      nodeResourceTexts.forEach((text) => {
+        if (text) text.setVisible(false);
+      });
       return; // Do not draw game under menu
     }
 
@@ -5861,7 +5996,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
     // Show UI bars when game is active
     if (topUiBar) topUiBar.style.display = 'block';
-      if (bottomUiBar) bottomUiBar.style.display = 'block';
+    if (bottomUiBar) bottomUiBar.style.display = 'flex';
     
     // Draw border box around play area (warp border handles inner toggle)
     drawPlayAreaBorder();
@@ -5938,7 +6073,42 @@ function fallbackRemoveEdgesForNode(nodeId) {
       const radius = calculateNodeRadius(n, baseScale);
       const r = Math.max(1, radius);
       graphicsNodes.fillCircle(nx, ny, r);
-      
+
+      const resourceType = normalizeNodeResourceType(n.resourceType);
+      const resourceKey = resourceType === 'gem' ? normalizeNodeResourceKey(n.resourceKey) : null;
+      const resourceEmoji = getResourceEmoji(resourceType, resourceKey);
+      const shouldShowEmoji = Boolean(resourceEmoji) && n.owner == null;
+      let emojiText = nodeResourceTexts.get(id);
+      const canShowEmoji = shouldShowEmoji && sceneRef;
+      if (canShowEmoji) {
+        const desiredFont = Math.round(Math.max(14, r * 1.25));
+        if (!emojiText) {
+          emojiText = sceneRef.add.text(nx, ny, resourceEmoji, {
+            fontFamily: 'sans-serif',
+            fontSize: `${desiredFont}px`,
+            color: '#ffffff',
+            align: 'center',
+          });
+          emojiText.setOrigin(0.5, 0.5);
+          emojiText.setDepth(4);
+          nodeResourceTexts.set(id, emojiText);
+        }
+        if (emojiText) {
+          if (emojiText.text !== resourceEmoji) {
+            emojiText.setText(resourceEmoji);
+          }
+          if (emojiText.style && emojiText.style.fontSize !== `${desiredFont}px`) {
+            emojiText.setFontSize(desiredFont);
+          }
+          emojiText.setPosition(nx, ny);
+          if (!emojiText.visible) emojiText.setVisible(true);
+        }
+      } else if (emojiText) {
+        emojiText.setVisible(false);
+      }
+
+      const numberOffset = canShowEmoji ? -Math.min(r * 0.55, 12) : 0;
+
       // Show juice text if toggle is enabled
       if (persistentNumbers) {
         const juiceValue = Math.floor(n.size || 0); // No decimals
@@ -5946,7 +6116,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
         
         if (!juiceText) {
           // Create new text object (world-space; camera handles positioning)
-          juiceText = sceneRef.add.text(nx, ny, juiceValue.toString(), {
+          juiceText = sceneRef.add.text(nx, ny + numberOffset, juiceValue.toString(), {
             font: '12px monospace',
             color: n.owner === null ? '#ffffff' : '#000000', // White for neutrals, black for owned
             align: 'center'
@@ -5957,7 +6127,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
           juiceText._lastOwner = n.owner;
         } else {
           // Always re-center text to the node's current screen position
-          juiceText.setPosition(nx, ny);
+          juiceText.setPosition(nx, ny + numberOffset);
           // Update only when changed to reduce per-frame overhead
           const newTextValue = juiceValue.toString();
           if (juiceText.text !== newTextValue) {
@@ -7625,6 +7795,96 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
 
 
+  function syncGemCountsFromPayload(payload) {
+    if (!Array.isArray(payload)) {
+      playerStats.forEach((stats) => {
+        if (stats) stats.gems = createEmptyGemCounts();
+      });
+      return;
+    }
+
+    const seen = new Set();
+    payload.forEach((entry) => {
+      let pid;
+      let rawCounts;
+      if (Array.isArray(entry)) {
+        [pid, rawCounts] = entry;
+      } else if (entry && typeof entry === 'object') {
+        pid = entry.playerId ?? entry.id ?? entry.pid ?? entry.player ?? entry[0];
+        rawCounts = entry.counts ?? entry.gems ?? entry.values ?? entry.data ?? entry[1];
+      } else {
+        return;
+      }
+      const id = Number(pid);
+      if (!Number.isFinite(id)) return;
+      seen.add(id);
+      const stats = ensurePlayerStats(id);
+      const nextCounts = createEmptyGemCounts();
+      if (rawCounts && typeof rawCounts === 'object') {
+        Object.entries(rawCounts).forEach(([key, value]) => {
+          const normalizedKey = normalizeGemKey(key);
+          if (!normalizedKey) return;
+          const numeric = Number(value);
+          nextCounts[normalizedKey] = Number.isFinite(numeric) && numeric > 0 ? Math.max(0, Math.floor(numeric)) : 0;
+        });
+      }
+      stats.gems = nextCounts;
+    });
+
+    playerStats.forEach((stats, id) => {
+      if (!stats) return;
+      if (seen.has(id)) return;
+      stats.gems = createEmptyGemCounts();
+    });
+  }
+
+  function updateGemCountsDisplay() {
+    if (!gemCountsDisplay || gemCountLabels.size === 0) {
+      gemCountsDisplay = document.getElementById('gemCountsDisplay');
+      gemCountLabels.clear();
+      if (gemCountsDisplay) {
+        GEM_TYPE_ORDER.forEach((key) => {
+          const container = gemCountsDisplay.querySelector(`[data-gem="${key}"]`);
+          if (!container) return;
+          const numberEl = container.querySelector('.gem-number');
+          if (numberEl) gemCountLabels.set(key, numberEl);
+        });
+      }
+    }
+
+    if (!gemCountsDisplay || gemCountLabels.size === 0) {
+      return;
+    }
+
+    let targetId = Number.isFinite(myPlayerId) ? myPlayerId : NaN;
+    if (!Number.isFinite(targetId)) {
+      const storedRaw = localStorage.getItem('myPlayerId');
+      if (storedRaw != null) {
+        const storedValue = Number(storedRaw);
+        if (Number.isFinite(storedValue)) {
+          targetId = storedValue;
+        }
+      }
+    }
+
+    let counts = createEmptyGemCounts();
+    if (Number.isFinite(targetId) && (playerStats.has(targetId) || players.has(targetId))) {
+      const stats = ensurePlayerStats(targetId);
+      const maybeCounts = stats && stats.gems;
+      if (maybeCounts && typeof maybeCounts === 'object') {
+        counts = maybeCounts;
+      }
+    }
+
+    GEM_TYPE_ORDER.forEach((key) => {
+      const label = gemCountLabels.get(key);
+      if (!label) return;
+      const numeric = Number(counts[key]) || 0;
+      label.textContent = String(Math.max(0, Math.floor(numeric)));
+    });
+  }
+
+
   function updateGoldBar() {
     const val = Math.max(0, goldValue || 0);
     if (goldDisplay) {
@@ -7716,9 +7976,22 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
   function ensurePlayerStats(id) {
     if (!playerStats.has(id)) {
-      playerStats.set(id, { nodes: 0, gold: 0 });
+      playerStats.set(id, createDefaultPlayerStats());
     }
-    return playerStats.get(id);
+    const stats = playerStats.get(id);
+    if (!stats.gems || typeof stats.gems !== 'object') {
+      stats.gems = createEmptyGemCounts();
+    } else {
+      GEM_TYPE_ORDER.forEach((key) => {
+        if (!Object.prototype.hasOwnProperty.call(stats.gems, key)) {
+          stats.gems[key] = 0;
+          return;
+        }
+        const value = Number(stats.gems[key]) || 0;
+        stats.gems[key] = value >= 0 ? Math.floor(value) : 0;
+      });
+    }
+    return stats;
   }
 
   function updateProgressBar() {

@@ -3,6 +3,7 @@ Game Engine - Core game logic separated from server implementation.
 Handles game state management, validation, and game rules.
 """
 import math
+import random
 import time
 from collections import deque
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -143,6 +144,8 @@ class GameEngine:
         self.state.starting_node_juice = STARTING_NODE_JUICE
         self.state.king_crown_max_health = KING_CROWN_MAX_HEALTH
 
+        resource_mode = "standard"
+
         if normalized_mode in {"warp-old", "warp", "i-warp"}:
             screen_variant = "warp"
         elif normalized_mode in {"semi", "i-semi"}:
@@ -263,6 +266,12 @@ class GameEngine:
             if isinstance(win_condition_option, str) and win_condition_option.strip().lower() == "king":
                 win_condition = "king"
 
+            resources_option = str(options.get("resources", "")).strip().lower()
+            if resources_option == "gems":
+                resource_mode = "gems"
+            elif resources_option == "standard":
+                resource_mode = "standard"
+
         if normalized_mode == "basic":
             auto_brass_on_cross = False
             manual_brass_selection = False
@@ -283,6 +292,8 @@ class GameEngine:
 
         brass_double_cost = manual_brass_selection or normalized_mode == "cross"
 
+        self._apply_resource_distribution(resource_mode)
+
         sanitized_options: Dict[str, Any] = {
             "screen": screen_variant,
             "brass": "right-click" if manual_brass_selection else "cross",
@@ -297,6 +308,7 @@ class GameEngine:
             "ringPayoutGold": overflow_payout,
             "winCondition": win_condition,
             "kingCrownHealth": crown_health_value,
+            "resources": resource_mode,
         }
         sanitized_options["pipeStart"] = sanitized_options["brassStart"]
         if isinstance(options, dict):
@@ -320,6 +332,61 @@ class GameEngine:
             self.state.player_king_nodes.clear()
 
         return sanitized_options
+
+    def _apply_resource_distribution(self, resource_mode: str) -> None:
+        if not self.state:
+            return
+
+        normalized = "gems" if str(resource_mode).strip().lower() == "gems" else "standard"
+        nodes = list(self.state.nodes.values())
+
+        if not nodes:
+            self.state.resource_mode = normalized
+            self.state.gem_nodes = {}
+            return
+
+        self.state.resource_mode = normalized
+        self.state.gem_nodes = {}
+        self.state.reset_player_gem_counts()
+
+        for node in nodes:
+            node.resource_type = "money"
+            node.resource_key = None
+
+        if normalized != "gems":
+            return
+
+        gem_plan = [
+            ("warp", 3),
+            ("brass", 7),
+            ("rage", 4),
+            ("reverse", 6),
+        ]
+
+        seed_basis = 0
+        for node in nodes:
+            seed_basis ^= (int(round(node.x * 1000)) + int(round(node.y * 1000)) + int(node.id))
+
+        rng = random.Random(seed_basis)
+        shuffled_nodes = nodes[:]
+        rng.shuffle(shuffled_nodes)
+
+        assigned: Dict[int, str] = {}
+        index = 0
+        total_nodes = len(shuffled_nodes)
+
+        for gem_key, desired_count in gem_plan:
+            if index >= total_nodes:
+                break
+            allocatable = min(desired_count, total_nodes - index)
+            for _ in range(allocatable):
+                node = shuffled_nodes[index]
+                index += 1
+                node.resource_type = "gem"
+                node.resource_key = gem_key
+                assigned[node.id] = gem_key
+
+        self.state.gem_nodes = assigned
 
     def _configure_hidden_start_mode(
         self,
@@ -1967,6 +2034,8 @@ class GameEngine:
                     "owner": node.owner,
                     "pendingGold": round(getattr(node, "pending_gold", 0.0), 3),
                     "isBrass": getattr(node, "node_type", "normal") == "brass",
+                    "resourceType": getattr(node, "resource_type", "money"),
+                    "resourceKey": getattr(node, "resource_key", None),
                 },
                 "totalNodes": len(self.state.nodes),
                 "winThreshold": self.state.calculate_win_threshold(),
@@ -1998,6 +2067,7 @@ class GameEngine:
             if hasattr(self.state, "pending_edge_reversal"):
                 self.state.pending_edge_reversal = None
             self.state.player_king_nodes.clear()
+            self.state.gem_nodes = {}
 
             return {
                 "removedNodes": removed_nodes,

@@ -209,6 +209,7 @@ class MessageRouter:
             "startingNodeJuice": 300.0,
             "winCondition": "king",
             "kingCrownHealth": KING_CROWN_MAX_HEALTH,
+            "resources": "standard",
         }
         if not isinstance(payload, dict):
             settings["pipeStart"] = settings["brassStart"]
@@ -318,6 +319,14 @@ class MessageRouter:
             settings["winCondition"] = "king"
         else:
             settings["winCondition"] = "dominate"
+
+        resources_value = payload.get("resources", settings["resources"])
+        if isinstance(resources_value, str):
+            normalized_resources = resources_value.strip().lower()
+            if normalized_resources == "gems":
+                settings["resources"] = "gems"
+            else:
+                settings["resources"] = "standard"
 
         settings["pipeStart"] = settings["brassStart"]
 
