@@ -282,6 +282,7 @@ class GameEngine:
             auto_brass_on_cross = False
             manual_brass_selection = True
             brass_double_cost = False
+            screen_variant = "warp"
 
         if normalized_mode == "basic":
             auto_brass_on_cross = False
@@ -1399,6 +1400,7 @@ class GameEngine:
                 normalized_pipe_type = "normal"
 
             requires_brass_gem = resource_mode == "gems" and normalized_pipe_type == "gold"
+            requires_warp_gem = False
             if requires_brass_gem:
                 available_gems = self.state.get_player_gem_count(player_id, "brass") if self.state else 0
                 if available_gems <= 0:
@@ -1437,6 +1439,12 @@ class GameEngine:
                 raise GameValidationError("No double warping")
             if warp_axis != "none" and len(candidate_segments) != 2:
                 raise GameValidationError("Warp bridges must include entry and exit segments")
+
+            if resource_mode == "gems" and warp_axis != "none":
+                requires_warp_gem = True
+                available_warp_gems = self.state.get_player_gem_count(player_id, "warp") if self.state else 0
+                if available_warp_gems <= 0:
+                    raise GameValidationError("Warp gem required to warp pipes")
 
             # Calculate and validate gold using server-side formula
             actual_cost = self.calculate_bridge_cost(from_node, to_node, segments_override=candidate_segments)
@@ -1602,6 +1610,11 @@ class GameEngine:
             self.state.edges[new_edge_id] = new_edge
             from_node.attached_edge_ids.append(new_edge_id)
             to_node.attached_edge_ids.append(new_edge_id)
+
+            if requires_warp_gem and self.state:
+                gem_consumed = self.state.consume_player_gem(player_id, "warp")
+                if not gem_consumed:
+                    raise GameValidationError("Warp gem required to warp pipes")
 
             if requires_brass_gem and self.state:
                 gem_consumed = self.state.consume_player_gem(player_id, "brass")

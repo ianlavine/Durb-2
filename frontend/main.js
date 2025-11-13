@@ -62,6 +62,9 @@
   let currentResourceMode = 'standard';
   let brassGemModeActive = false;
   let pendingBrassGemSpend = false;
+  let warpGemModeActive = false;
+  let pendingWarpGemSpend = false;
+  let lastWarpGemErrorTime = 0;
   let myPicked = false;
   let hiddenStartActive = false;
   let hiddenStartRevealed = false;
@@ -526,8 +529,10 @@
     if (!isMagicResourceModeActive()) {
       pendingBrassGemSpend = false;
       setBrassGemModeActive(false);
+      pendingWarpGemSpend = false;
+      setWarpGemModeActive(false);
     } else {
-      updateBrassGemUi();
+      updateGemModeUi();
       if (activeAbility === 'bridge1way' && bridgeFirstNode != null) {
         const node = nodes.get(bridgeFirstNode);
         const nextPreference = determineBridgeBrassPreference(node, bridgeIsBrass);
@@ -567,6 +572,16 @@
     return getMyGemCount('brass') > 0;
   }
 
+  function canActivateWarpGemMode() {
+    if (!isMagicResourceModeActive()) return false;
+    return getMyGemCount('warp') > 0;
+  }
+
+  function isWarpWrapUnlocked() {
+    if (!isMagicResourceModeActive()) return true;
+    return warpGemModeActive && canActivateWarpGemMode();
+  }
+
   function determineBridgeBrassPreference(startNode, useBrassHint = false) {
     if (isMagicResourceModeActive()) {
       return brassGemModeActive && canActivateBrassGemMode();
@@ -590,7 +605,7 @@
   function setBrassGemModeActive(enabled, options = {}) {
     const desired = Boolean(enabled) && isMagicResourceModeActive() && canActivateBrassGemMode();
     if (brassGemModeActive === desired) {
-      updateBrassGemUi();
+    updateGemModeUi();
       return;
     }
     brassGemModeActive = desired;
@@ -598,7 +613,7 @@
     if (!desired && shouldClearPending) {
       pendingBrassGemSpend = false;
     }
-    updateBrassGemUi();
+    updateGemModeUi();
     if (isMagicResourceModeActive()) {
       bridgeIsBrass = brassGemModeActive && canActivateBrassGemMode();
     }
@@ -614,17 +629,48 @@
     }
   }
 
-  function updateBrassGemUi() {
+  function setWarpGemModeActive(enabled, options = {}) {
+    const desired = Boolean(enabled) && isMagicResourceModeActive() && canActivateWarpGemMode();
+    if (warpGemModeActive === desired) {
+      updateGemModeUi();
+      return;
+    }
+    warpGemModeActive = desired;
+    const shouldClearPending = options.clearPending !== false;
+    if (!desired && shouldClearPending) {
+      pendingWarpGemSpend = false;
+    }
+    if (!desired) {
+      warpWrapUsed = false;
+      lastWarpAxis = null;
+      lastWarpDirection = null;
+    }
+    updateGemModeUi();
+    if (activeAbility === 'bridge1way') {
+      redrawStatic();
+    }
+  }
+
+  function updateGemModeUi() {
     if (!gemCountsDisplay || !gemCountsDisplay.isConnected) return;
     const interactive = isMagicResourceModeActive();
     gemCountsDisplay.classList.toggle('interactive', interactive);
+
     const brassContainer = gemCountsDisplay.querySelector('[data-gem="brass"]');
-    if (!brassContainer) return;
-    const available = getMyGemCount('brass');
-    const canUse = interactive && available > 0;
-    brassContainer.classList.toggle('disabled', !canUse);
-    brassContainer.classList.toggle('active', canUse && brassGemModeActive);
-    brassContainer.setAttribute('aria-disabled', canUse ? 'false' : 'true');
+    if (brassContainer) {
+      const canUseBrass = canActivateBrassGemMode();
+      brassContainer.classList.toggle('disabled', !canUseBrass);
+      brassContainer.classList.toggle('active', canUseBrass && brassGemModeActive);
+      brassContainer.setAttribute('aria-disabled', canUseBrass ? 'false' : 'true');
+    }
+
+    const warpContainer = gemCountsDisplay.querySelector('[data-gem="warp"]');
+    if (warpContainer) {
+      const canUseWarp = canActivateWarpGemMode();
+      warpContainer.classList.toggle('disabled', !canUseWarp);
+      warpContainer.classList.toggle('active', canUseWarp && warpGemModeActive);
+      warpContainer.setAttribute('aria-disabled', canUseWarp ? 'false' : 'true');
+    }
   }
 
   function handleGemCountsClick(ev) {
@@ -636,14 +682,32 @@
     if (!container) return;
     const gemData = container.dataset ? container.dataset.gem : null;
     const gemKey = normalizeGemKey(gemData);
-    if (gemKey !== 'brass') return;
-    ev.preventDefault();
-    ev.stopPropagation();
-    if (!canActivateBrassGemMode()) {
-      showErrorMessage('No brass gems available', 'error');
+    if (gemKey === 'brass') {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (!canActivateBrassGemMode()) {
+        showErrorMessage('No brass gems available', 'error');
+        return;
+      }
+      setBrassGemModeActive(!brassGemModeActive);
       return;
     }
-    setBrassGemModeActive(!brassGemModeActive);
+    if (gemKey === 'warp') {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (!canActivateWarpGemMode()) {
+        showErrorMessage('No warp gems available', 'error');
+        return;
+      }
+      setWarpGemModeActive(!warpGemModeActive);
+    }
+  }
+
+  function notifyWarpGemRequired() {
+    const now = Date.now();
+    if (now - lastWarpGemErrorTime < 600) return;
+    lastWarpGemErrorTime = now;
+    showErrorMessage('Warp gem required to warp pipes', 'error');
   }
 
   function normalizeNodeResourceType(value) {
@@ -736,6 +800,11 @@
       let isActive = false;
       if (setting === 'screen') {
         isActive = value.toLowerCase() === currentScreen;
+        if (currentResources === 'gems') {
+          btn.disabled = true;
+          btn.classList.add('disabled');
+          btn.title = 'Gem mode requires the Warp screen';
+        }
       } else if (setting === 'brass') {
         const normalized = value.toLowerCase();
         if (currentResources === 'gems') {
@@ -881,6 +950,7 @@
     if (next.resources === 'gems') {
       next.brass = 'gem';
       next.brassStart = 'owned';
+      next.screen = 'warp';
     } else if (next.brass === 'gem') {
       next.brass = 'cross';
     } else {
@@ -1681,6 +1751,9 @@
   }
 
   function getActiveWarpPreference() {
+    if (!isWarpWrapUnlocked()) {
+      return { allowWarp: false, preferredWrapAxis: null, preferredWrapDirection: null };
+    }
     if (!warpWrapUsed) {
       return { allowWarp: false, preferredWrapAxis: null, preferredWrapDirection: null };
     }
@@ -1755,7 +1828,7 @@
 
     const EPS = 1e-6;
 
-    if (!allowWarp) {
+    if (!allowWarp || !isWarpWrapUnlocked()) {
       return best;
     }
 
@@ -3323,7 +3396,7 @@ function clearBridgeSelection() {
         }
       });
     }
-    updateBrassGemUi();
+    updateGemModeUi();
     updateGemCountsDisplay();
     
     // Initialize timer display
@@ -4745,6 +4818,8 @@ function clearBridgeSelection() {
       hideBridgeCostDisplay();
       pendingBrassGemSpend = false;
       setBrassGemModeActive(false);
+      pendingWarpGemSpend = false;
+      setWarpGemModeActive(false);
     }
   }
 
@@ -4841,6 +4916,14 @@ function clearBridgeSelection() {
     const mapped = translateErrorMessage(msg.message, 'bridge');
     const variant = mapped.toLowerCase().includes('money') ? 'money' : 'error';
     showErrorMessage(mapped, variant);
+    if (pendingWarpGemSpend) {
+      pendingWarpGemSpend = false;
+      if (isMagicResourceModeActive()) {
+        setWarpGemModeActive(true);
+      } else {
+        setWarpGemModeActive(false);
+      }
+    }
     if (pendingBrassGemSpend) {
       pendingBrassGemSpend = false;
       if (isMagicResourceModeActive()) {
@@ -5716,6 +5799,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     if (lower.includes('intersect')) return 'No overlapping pipes';
     if (lower.includes('only golden pipes can cross')) return 'Only brass pipes can cross';
     if (lower.includes('cannot cross golden pipe')) return 'Brass pipes cannot be crossed';
+    if (lower.includes('warp gem')) return 'Warp gem required to warp pipes';
     if (
       lower.includes('must control brass pipes') ||
       lower.includes('must control pipe start') ||
@@ -7090,6 +7174,16 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
   function applyWarpWrapToScreen(x, y) {
     if (!shouldWarpCursor()) return { x, y };
+    if (!isWarpWrapUnlocked()) {
+      const clamped = clampCursorToWarpBounds(x, y);
+      if (
+        activeAbility === 'bridge1way'
+        && (Math.abs(clamped.x - x) > 1e-3 || Math.abs(clamped.y - y) > 1e-3)
+      ) {
+        notifyWarpGemRequired();
+      }
+      return clamped;
+    }
     const bounds = warpBoundsScreen;
     const width = bounds.maxX - bounds.minX;
     const height = bounds.maxY - bounds.minY;
@@ -7233,6 +7327,13 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
     const toggle = element.closest ? element.closest('.toggle-switch') : null;
     if (toggle) return toggle;
+
+    if (element.closest) {
+      const gemTarget = element.closest('.gem-count');
+      if (gemTarget && gemCountsDisplay && gemCountsDisplay.contains(gemTarget)) {
+        return gemTarget;
+      }
+    }
 
     const button = element.closest ? element.closest('button') : null;
     if (button) return button;
@@ -7513,6 +7614,15 @@ function fallbackRemoveEdgesForNode(nodeId) {
               pipeType,
             };
 
+            const usesWarpGem = isMagicResourceModeActive()
+              && warpInfoPayload
+              && typeof warpInfoPayload.axis === 'string'
+              && warpInfoPayload.axis !== 'none';
+
+            if (usesWarpGem) {
+              setWarpGemModeActive(false, { clearPending: false });
+              pendingWarpGemSpend = true;
+            }
             if (isMagicResourceModeActive() && useBrassPipe) {
               setBrassGemModeActive(false, { clearPending: false });
               pendingBrassGemSpend = true;
@@ -8127,7 +8237,14 @@ function fallbackRemoveEdgesForNode(nodeId) {
       const numeric = Number(counts[key]) || 0;
       label.textContent = String(Math.max(0, Math.floor(numeric)));
     });
-    updateBrassGemUi();
+    if (brassGemModeActive && !canActivateBrassGemMode()) {
+      setBrassGemModeActive(false);
+    }
+    if (warpGemModeActive && !canActivateWarpGemMode()) {
+      setWarpGemModeActive(false);
+    } else {
+      updateGemModeUi();
+    }
   }
 
 
