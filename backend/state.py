@@ -171,6 +171,38 @@ class GraphState:
             payload.append([int(pid), serialized])
         return payload
 
+    def get_player_gem_count(self, player_id: int, gem_key: Any) -> int:
+        """Return the number of gems of the specified type the player currently has."""
+        try:
+            normalized_key = str(gem_key).strip().lower()
+        except Exception:
+            return 0
+        if not normalized_key:
+            return 0
+        counts = self.player_gem_counts.setdefault(int(player_id), {})
+        try:
+            return max(0, int(counts.get(normalized_key, 0)))
+        except (TypeError, ValueError):
+            return 0
+
+    def consume_player_gem(self, player_id: int, gem_key: Any) -> bool:
+        """Attempt to spend a gem of the specified type for the player."""
+        try:
+            normalized_key = str(gem_key).strip().lower()
+        except Exception:
+            return False
+        if not normalized_key:
+            return False
+        counts = self.player_gem_counts.setdefault(int(player_id), {})
+        try:
+            current = int(counts.get(normalized_key, 0))
+        except (TypeError, ValueError):
+            current = 0
+        if current <= 0:
+            return False
+        counts[normalized_key] = current - 1
+        return True
+
     def get_player_node_counts(self) -> Dict[int, int]:
         """Return a mapping of player id to number of nodes they currently own."""
         counts: Dict[int, int] = {pid: 0 for pid in self.players.keys()}

@@ -272,6 +272,10 @@ class GameEngine:
             elif resources_option == "standard":
                 resource_mode = "standard"
 
+        if resource_mode == "gems":
+            auto_brass_on_cross = False
+            manual_brass_selection = True
+
         if normalized_mode == "basic":
             auto_brass_on_cross = False
             manual_brass_selection = False
@@ -1372,12 +1376,20 @@ class GameEngine:
             from_node = self.validate_node_exists(from_node_id)
             to_node = self.validate_node_exists(to_node_id)
 
+            resource_mode = str(getattr(self.state, "resource_mode", "standard") or "standard").strip().lower()
+
             if is_brass_mode:
                 normalized_pipe_type = "gold" if getattr(from_node, "node_type", "normal") == "brass" else "normal"
             elif is_cross_mode or manual_brass_selection:
                 normalized_pipe_type = "gold" if (pipe_type or "").lower() == "gold" else "normal"
             else:
                 normalized_pipe_type = "normal"
+
+            requires_brass_gem = resource_mode == "gems" and normalized_pipe_type == "gold"
+            if requires_brass_gem:
+                available_gems = self.state.get_player_gem_count(player_id, "brass") if self.state else 0
+                if available_gems <= 0:
+                    raise GameValidationError("No brass gems available")
 
             allow_pipe_anywhere = bool(getattr(self.state, "allow_pipe_start_anywhere", False))
 
@@ -1577,6 +1589,11 @@ class GameEngine:
             self.state.edges[new_edge_id] = new_edge
             from_node.attached_edge_ids.append(new_edge_id)
             to_node.attached_edge_ids.append(new_edge_id)
+
+            if requires_brass_gem and self.state:
+                gem_consumed = self.state.consume_player_gem(player_id, "brass")
+                if not gem_consumed:
+                    raise GameValidationError("No brass gems available")
 
             # Deduct gold using verified cost
             self.state.player_gold[player_id] = max(0.0, self.state.player_gold[player_id] - actual_cost)

@@ -682,6 +682,14 @@ class MessageRouter:
             )
             return
 
+        if engine.state:
+            try:
+                gem_counts_payload = engine.state._serialize_gem_counts()
+            except Exception:
+                gem_counts_payload = []
+        else:
+            gem_counts_payload = []
+
         if new_edge:
             # Send edge state update to all players (without cost)
             warp_payload = {
@@ -719,6 +727,7 @@ class MessageRouter:
                     continue
                 
                 message_to_send = edge_update_message.copy()
+                message_to_send["gemCounts"] = gem_counts_payload
                 # Only include cost for the player who built the bridge
                 if token_key == token:
                     message_to_send["cost"] = actual_cost
@@ -742,6 +751,7 @@ class MessageRouter:
                 event_payload["nodeMovements"] = movement_payloads
         if removed_edges:
             event_payload["removedEdges"] = removed_edges
+        event_payload["gemCounts"] = gem_counts_payload
         self._record_game_event(game_info, token, "buildBridge", event_payload)
 
     async def handle_redirect_energy(

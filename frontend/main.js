@@ -59,6 +59,9 @@
   let goldDisplay = null; // gold number display in bottom right
   let myPlayerId = null;
   let phase = 'picking';
+  let currentResourceMode = 'standard';
+  let brassGemModeActive = false;
+  let pendingBrassGemSpend = false;
   let myPicked = false;
   let hiddenStartActive = false;
   let hiddenStartRevealed = false;
@@ -199,6 +202,7 @@
   let topUiBar = null;
   let bottomUiBar = null;
   let gemCountsDisplay = null;
+  let gemCountsClickHandlerBound = false;
   const gemCountLabels = new Map();
 
   // Warp mode visuals & geometry (frontend prototype hooked to Warp mode)
@@ -512,6 +516,133 @@
     return value.trim().toLowerCase() === 'gems' ? 'gems' : 'standard';
   }
 
+  function isMagicResourceModeActive() {
+    return normalizeResources(currentResourceMode) === 'gems';
+  }
+
+  function setCurrentResourceMode(mode) {
+    currentResourceMode = normalizeResources(mode);
+    if (!isMagicResourceModeActive()) {
+      pendingBrassGemSpend = false;
+      setBrassGemModeActive(false);
+    } else {
+      updateBrassGemUi();
+      if (activeAbility === 'bridge1way' && bridgeFirstNode != null) {
+        const node = nodes.get(bridgeFirstNode);
+        const nextPreference = determineBridgeBrassPreference(node, bridgeIsBrass);
+        if (bridgeIsBrass !== nextPreference) {
+          bridgeIsBrass = nextPreference;
+          const xbMode = isXbModeActive();
+          bridgePreviewWillBeBrass = bridgeIsBrass && !xbMode;
+          updateBrassPreviewIntersections();
+          redrawStatic();
+        }
+      }
+    }
+  }
+
+  function getMyGemCount(gemKey = 'brass') {
+    const normalized = normalizeGemKey(gemKey);
+    if (!normalized) return 0;
+    let targetId = Number.isFinite(myPlayerId) ? myPlayerId : null;
+    if (!Number.isFinite(targetId)) {
+      const storedRaw = localStorage.getItem('myPlayerId');
+      if (storedRaw != null) {
+        const storedValue = Number(storedRaw);
+        if (Number.isFinite(storedValue)) {
+          targetId = storedValue;
+        }
+      }
+    }
+    if (!Number.isFinite(targetId)) return 0;
+    const stats = ensurePlayerStats(targetId);
+    if (!stats || !stats.gems) return 0;
+    const value = Number(stats.gems[normalized]);
+    return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+  }
+
+  function canActivateBrassGemMode() {
+    if (!isMagicResourceModeActive()) return false;
+    return getMyGemCount('brass') > 0;
+  }
+
+  function determineBridgeBrassPreference(startNode, useBrassHint = false) {
+    if (isMagicResourceModeActive()) {
+      if (!canActivateBrassGemMode()) {
+        if (brassGemModeActive) {
+          brassGemModeActive = false;
+          updateBrassGemUi();
+        }
+        return false;
+      }
+      return brassGemModeActive;
+    }
+    if (isBrassModeActive()) {
+      return !!(startNode && startNode.isBrass);
+    }
+    if (isIntentionalBrassModeActive()) {
+      return !!useBrassHint;
+    }
+    return false;
+  }
+
+  function setBrassGemModeActive(enabled, options = {}) {
+    const desired = Boolean(enabled) && isMagicResourceModeActive() && canActivateBrassGemMode();
+    if (brassGemModeActive === desired) {
+      updateBrassGemUi();
+      return;
+    }
+    brassGemModeActive = desired;
+    const shouldClearPending = options.clearPending !== false;
+    if (!desired && shouldClearPending) {
+      pendingBrassGemSpend = false;
+    }
+    updateBrassGemUi();
+    if (activeAbility === 'bridge1way' && bridgeFirstNode != null) {
+      const node = nodes.get(bridgeFirstNode);
+      const nextPreference = determineBridgeBrassPreference(node, bridgeIsBrass);
+      if (bridgeIsBrass !== nextPreference) {
+        bridgeIsBrass = nextPreference;
+        const xbMode = isXbModeActive();
+        bridgePreviewWillBeBrass = bridgeIsBrass && !xbMode;
+        updateBrassPreviewIntersections();
+        redrawStatic();
+      }
+    }
+  }
+
+  function updateBrassGemUi() {
+    if (!gemCountsDisplay || !gemCountsDisplay.isConnected) return;
+    const interactive = isMagicResourceModeActive();
+    gemCountsDisplay.classList.toggle('interactive', interactive);
+    const brassContainer = gemCountsDisplay.querySelector('[data-gem="brass"]');
+    if (!brassContainer) return;
+    const available = getMyGemCount('brass');
+    const canUse = interactive && available > 0;
+    brassContainer.classList.toggle('disabled', !canUse);
+    brassContainer.classList.toggle('active', canUse && brassGemModeActive);
+    brassContainer.setAttribute('aria-disabled', canUse ? 'false' : 'true');
+  }
+
+  function handleGemCountsClick(ev) {
+    if (!isMagicResourceModeActive()) return;
+    const target = ev.target;
+    const container = target && typeof target.closest === 'function'
+      ? target.closest('.gem-count')
+      : null;
+    if (!container) return;
+    const gemData = container.dataset ? container.dataset.gem : null;
+    const gemKey = normalizeGemKey(gemData);
+    if (gemKey !== 'brass') return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    if (!canActivateBrassGemMode()) {
+      showErrorMessage('No brass gems available', 'error');
+      return;
+    }
+    setBrassGemModeActive(!brassGemModeActive);
+  }
+
   function normalizeNodeResourceType(value) {
     if (typeof value !== 'string') return 'money';
     return value.trim().toLowerCase() === 'gem' ? 'gem' : 'money';
@@ -717,6 +848,7 @@
     }
 
     selectedSettings = next;
+    setCurrentResourceMode(selectedSettings.resources);
     kingCrownDefaultMax = coerceKingCrownHealth(selectedSettings.kingCrownHealth);
     selectedMode = deriveModeFromSettings(selectedSettings);
     updateModeOptionButtonStates();
@@ -3130,6 +3262,10 @@ function clearBridgeSelection() {
     topUiBar = document.getElementById('topUiBar');
     bottomUiBar = document.getElementById('bottomUiBar');
     gemCountsDisplay = document.getElementById('gemCountsDisplay');
+    if (gemCountsDisplay && !gemCountsClickHandlerBound) {
+      gemCountsDisplay.addEventListener('click', handleGemCountsClick);
+      gemCountsClickHandlerBound = true;
+    }
     gemCountLabels.clear();
     if (gemCountsDisplay) {
       GEM_TYPE_ORDER.forEach((key) => {
@@ -3141,6 +3277,7 @@ function clearBridgeSelection() {
         }
       });
     }
+    updateBrassGemUi();
     updateGemCountsDisplay();
     
     // Initialize timer display
@@ -3644,6 +3781,8 @@ function clearBridgeSelection() {
       selectedMode = deriveModeFromSettings(selectedSettings);
       setSelectedMode(selectedMode, { force: true });
     }
+    const initResourceMode = (msg.modeSettings && msg.modeSettings.resources) || selectedSettings.resources;
+    setCurrentResourceMode(initResourceMode);
 
     // Clear any lingering edge flow labels between games
     edgeFlowTexts.forEach(text => {
@@ -4108,6 +4247,8 @@ function clearBridgeSelection() {
     } else {
       setSelectedMode(mode, { force: true });
     }
+    const lobbyResourceMode = (msg.modeSettings && msg.modeSettings.resources) || selectedSettings.resources;
+    setCurrentResourceMode(lobbyResourceMode);
     const isBrassQueue = msg.mode === MODE_QUEUE_KEY || Boolean(msg.modeSettings);
     const lobbyLabel = isBrassQueue ? `Brass game · ${summaryText}` : `${formatModeText(mode)} game`;
     if (msg.status === 'waiting') {
@@ -4556,6 +4697,8 @@ function clearBridgeSelection() {
       activeAbility = null;
       clearBridgeSelection();
       hideBridgeCostDisplay();
+      pendingBrassGemSpend = false;
+      setBrassGemModeActive(false);
     }
   }
 
@@ -4652,6 +4795,14 @@ function clearBridgeSelection() {
     const mapped = translateErrorMessage(msg.message, 'bridge');
     const variant = mapped.toLowerCase().includes('money') ? 'money' : 'error';
     showErrorMessage(mapped, variant);
+    if (pendingBrassGemSpend) {
+      pendingBrassGemSpend = false;
+      if (isMagicResourceModeActive()) {
+        setBrassGemModeActive(true);
+      } else {
+        setBrassGemModeActive(false);
+      }
+    }
   }
 
   function handleReverseEdgeError(msg) {
@@ -7209,15 +7360,12 @@ function fallbackRemoveEdgesForNode(nodeId) {
     if (!node) return false;
     brassActivationDenied = false;
 
-    const brassMode = isBrassModeActive();
-    const intentionalBrassMode = isIntentionalBrassModeActive();
+    const magicBrassMode = isMagicResourceModeActive();
     const xbMode = isXbModeActive();
 
-    let wantBrass = false;
-    if (brassMode) {
-      wantBrass = !!node.isBrass;
-    } else if (intentionalBrassMode) {
-      wantBrass = !!useBrass;
+    let wantBrass = determineBridgeBrassPreference(node, useBrass);
+    if (magicBrassMode && wantBrass && !canActivateBrassGemMode()) {
+      wantBrass = false;
     }
 
     const ownershipRequired = pipeStartRequiresOwnership();
@@ -7315,6 +7463,10 @@ function fallbackRemoveEdgesForNode(nodeId) {
               pipeType,
             };
 
+            if (isMagicResourceModeActive() && useBrassPipe) {
+              setBrassGemModeActive(false, { clearPending: false });
+              pendingBrassGemSpend = true;
+            }
             ws.send(JSON.stringify(buildBridgePayload));
             // Don't reset bridge building state here - wait for server response
             return true; // Handled
@@ -7880,6 +8032,10 @@ function fallbackRemoveEdgesForNode(nodeId) {
   function updateGemCountsDisplay() {
     if (!gemCountsDisplay || gemCountLabels.size === 0) {
       gemCountsDisplay = document.getElementById('gemCountsDisplay');
+      if (gemCountsDisplay && !gemCountsClickHandlerBound) {
+        gemCountsDisplay.addEventListener('click', handleGemCountsClick);
+        gemCountsClickHandlerBound = true;
+      }
       gemCountLabels.clear();
       if (gemCountsDisplay) {
         GEM_TYPE_ORDER.forEach((key) => {
@@ -7921,6 +8077,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
       const numeric = Number(counts[key]) || 0;
       label.textContent = String(Math.max(0, Math.floor(numeric)));
     });
+    updateBrassGemUi();
   }
 
 
