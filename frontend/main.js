@@ -68,6 +68,7 @@
   let pendingReverseGemSpend = false;
   let warpGemModeActive = false;
   let pendingWarpGemSpend = false;
+  let warpGemAutoUnlockActive = false;
   let activePipeGemKey = null;
   let lastWarpGemErrorTime = 0;
   let myPicked = false;
@@ -393,6 +394,11 @@
   const BRASS_TRIANGLE_OUTER_HEIGHT_BONUS = PIPE_TRIANGLE_HEIGHT * (BRASS_TRIANGLE_OUTER_SCALE - 1);
   const BRASS_TRIANGLE_OUTER_WIDTH_BONUS = PIPE_TRIANGLE_WIDTH * (BRASS_TRIANGLE_OUTER_SCALE - 1);
   const BRASS_OUTER_OUTLINE_THICKNESS = 3;
+  const WARP_PIPE_OUTLINE_COLOR = WARP_BORDER_COLOR;
+  const WARP_TRIANGLE_OUTER_SCALE = BRASS_TRIANGLE_OUTER_SCALE;
+  const WARP_TRIANGLE_OUTER_HEIGHT_BONUS = PIPE_TRIANGLE_HEIGHT * (WARP_TRIANGLE_OUTER_SCALE - 1);
+  const WARP_TRIANGLE_OUTER_WIDTH_BONUS = PIPE_TRIANGLE_WIDTH * (WARP_TRIANGLE_OUTER_SCALE - 1);
+  const WARP_OUTER_OUTLINE_THICKNESS = BRASS_OUTER_OUTLINE_THICKNESS;
   const BUILDING_TRIANGLE_INITIAL_SCALE = 1.8; // >1 means newly placed triangles start this many times larger
   const BUILDING_TRIANGLE_SHRINK_DURATION = 0.8; // seconds for construction triangles to shrink back to normal size
   const MONEY_SPEND_COLOR = '#b87333';
@@ -609,7 +615,10 @@
 
   function isWarpWrapUnlocked() {
     if (!isMagicResourceModeActive()) return true;
-    return warpGemModeActive && canActivateWarpGemMode();
+    if (warpGemModeActive && canActivateWarpGemMode()) {
+      return true;
+    }
+    return autoWarpUnlockStillValid();
   }
 
   function determineBridgeBrassPreference(startNode, useBrassHint = false) {
@@ -694,6 +703,7 @@
       return;
     }
     warpGemModeActive = desired;
+    resetAutoWarpGemUnlock();
     const shouldClearPending = options.clearPending !== false;
     if (!desired && shouldClearPending) {
       pendingWarpGemSpend = false;
@@ -886,6 +896,48 @@
     if (now - lastWarpGemErrorTime < 600) return;
     lastWarpGemErrorTime = now;
     showErrorMessage('Warp gem required to warp pipes', 'error');
+  }
+
+  function resetAutoWarpGemUnlock() {
+    warpGemAutoUnlockActive = false;
+  }
+
+  function autoWarpUnlockStillValid() {
+    if (!warpGemAutoUnlockActive) return false;
+    if (!canActivateWarpGemMode()) {
+      resetAutoWarpGemUnlock();
+      return false;
+    }
+    if (activeAbility !== 'bridge1way' || bridgeFirstNode == null) {
+      resetAutoWarpGemUnlock();
+      return false;
+    }
+    if (!isWarpFrontendActive()) {
+      resetAutoWarpGemUnlock();
+      return false;
+    }
+    return true;
+  }
+
+  function isPointerOutsideWarpBounds(screenX, screenY) {
+    if (!warpBoundsScreen) return false;
+    return (
+      screenX < warpBoundsScreen.minX
+      || screenX > warpBoundsScreen.maxX
+      || screenY < warpBoundsScreen.minY
+      || screenY > warpBoundsScreen.maxY
+    );
+  }
+
+  function maybeAutoUnlockWarpWrap(screenX, screenY) {
+    if (!isMagicResourceModeActive()) return false;
+    if (warpGemModeActive || warpGemAutoUnlockActive) return false;
+    if (activeAbility !== 'bridge1way' || bridgeFirstNode == null) return false;
+    if (!canActivateWarpGemMode()) return false;
+    if (!isWarpFrontendActive()) return false;
+    if (!isPointerOutsideWarpBounds(screenX, screenY)) return false;
+    warpGemAutoUnlockActive = true;
+    return true;
   }
 
   function normalizeNodeResourceType(value) {
@@ -2285,6 +2337,12 @@
     return [];
   }
 
+  function edgeUsesWarp(edge) {
+    if (!edge) return false;
+    const axisRaw = typeof edge.warpAxis === 'string' ? edge.warpAxis.toLowerCase() : '';
+    return axisRaw === 'horizontal' || axisRaw === 'vertical' || axisRaw === 'mixed';
+  }
+
   function toEdgeId(value) {
     if (value == null) return null;
     if (typeof value === 'number' && Number.isFinite(value)) {
@@ -2684,6 +2742,7 @@ function clearBridgeSelection() {
   lastDoubleWarpWarningTime = 0;
   lastWarpAxis = null;
   lastWarpDirection = null;
+  resetAutoWarpGemUnlock();
 }
 
 
@@ -7478,6 +7537,9 @@ function fallbackRemoveEdgesForNode(nodeId) {
   function applyWarpWrapToScreen(x, y) {
     if (!shouldWarpCursor()) return { x, y };
     if (!isWarpWrapUnlocked()) {
+      maybeAutoUnlockWarpWrap(x, y);
+    }
+    if (!isWarpWrapUnlocked()) {
       const clamped = clampCursorToWarpBounds(x, y);
       if (
         activeAbility === 'bridge1way'
@@ -7717,6 +7779,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
       lastDoubleWarpWarningTime = 0;
       lastWarpAxis = null;
       lastWarpDirection = null;
+      resetAutoWarpGemUnlock();
     }
     updateMouseWorldFromVirtualCursor();
   }
@@ -7842,6 +7905,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     lastDoubleWarpWarningTime = 0;
     lastWarpAxis = null;
     lastWarpDirection = null;
+    resetAutoWarpGemUnlock();
     hideBridgeCostDisplay();
     updateBrassPreviewIntersections();
     return true;
@@ -7869,6 +7933,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
           lastDoubleWarpWarningTime = 0;
           lastWarpAxis = null;
           lastWarpDirection = null;
+          resetAutoWarpGemUnlock();
           return true; // Handled
         } else if (bridgeFirstNode !== nodeId) {
           // Complete bridge building - second node can be any node
@@ -9163,9 +9228,11 @@ function fallbackRemoveEdgesForNode(nodeId) {
     const toNode = nodes.get(prePipe.toNodeId);
     if (!fromNode || !toNode) return [];
     const path = computeWarpBridgeSegments(fromNode, toNode, prePipe.warpPreference || {});
+    const isWarpPath = path && typeof path.wrapAxis === 'string' && path.wrapAxis !== 'none';
     const segments = [];
     if (!path || !Array.isArray(path.segments) || !path.segments.length) {
       const entry = { sx: fromNode.x, sy: fromNode.y, ex: toNode.x, ey: toNode.y };
+      entry.isWarp = isWarpPath;
       if (includeMeta) {
         entry.startNode = fromNode;
         entry.endNode = toNode;
@@ -9180,7 +9247,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
       const ex = Number(segment.end.x);
       const ey = Number(segment.end.y);
       if (![sx, sy, ex, ey].every((value) => Number.isFinite(value))) return;
-      const entry = { sx, sy, ex, ey };
+      const entry = { sx, sy, ex, ey, isWarp: isWarpPath };
       if (includeMeta) {
         entry.startNode = segment.start.node || null;
         entry.endNode = segment.end.node || null;
@@ -9339,6 +9406,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     const outlineColor = Number.isFinite(prePipe.outlineColor) ? prePipe.outlineColor : PRE_PIPE_OUTLINE_COLOR;
     const outlineAlpha = waitingOwnership ? 0.8 : (waitingGold ? 0.55 : 0.3);
     const wave = Math.sin(animationTime * PRE_PIPE_SHAKE_SPEED);
+    const isWarpSegment = !!segment.isWarp;
 
     for (let i = 0; i < count; i++) {
       const alternatingSign = (i % 2 === 0) ? 1 : -1;
@@ -9347,14 +9415,17 @@ function fallbackRemoveEdgesForNode(nodeId) {
       const offsetY = normalY * sway;
       const cx = sx + (i + 0.5) * actualSpacing * ux + offsetX;
       const cy = sy + (i + 0.5) * actualSpacing * uy + offsetY;
-      drawPrePipeTriangle(cx, cy, triW, triH, angle, outlineColor, outlineAlpha, pipeType);
+      drawPrePipeTriangle(cx, cy, triW, triH, angle, outlineColor, outlineAlpha, pipeType, isWarpSegment);
     }
   }
 
-  function drawPrePipeTriangle(cx, cy, baseW, height, angle, outlineColor, outlineAlpha, pipeType = 'normal') {
+  function drawPrePipeTriangle(cx, cy, baseW, height, angle, outlineColor, outlineAlpha, pipeType = 'normal', isWarpSegment = false) {
     const drawInstance = (centerX, centerY) => {
       const shape = createPipeShape(centerX, centerY, baseW, height, angle, pipeType);
       strokePipeShape(shape, 1.4, outlineColor, outlineAlpha);
+      if (isWarpSegment && shape.type !== 'droplet') {
+        strokeWarpOuterTriangle(centerX, centerY, baseW, height, angle, 0.92);
+      }
     };
 
     forEachPipeOffset(pipeType, angle, (dx, dy) => {
@@ -9478,17 +9549,18 @@ function fallbackRemoveEdgesForNode(nodeId) {
       previewColor = canAfford ? ownerToSecondaryColor(myPlayerId) : 0x000000;
     }
 
-    for (const segment of path.segments) {
-      drawBridgePreviewSegment(segment, previewColor, baseScale, pipeType);
-    }
+  const isWarpBridge = typeof path.wrapAxis === 'string' && path.wrapAxis !== 'none';
+  for (const segment of path.segments) {
+    drawBridgePreviewSegment(segment, previewColor, baseScale, pipeType, isWarpBridge);
   }
+}
 
   function endpointRadius(endpoint, baseScale) {
     if (!endpoint || !endpoint.node) return 0;
     return Math.max(1, calculateNodeRadius(endpoint.node, baseScale)) + 1;
   }
 
-function drawBridgePreviewSegment(segment, color, baseScale, pipeType = 'normal') {
+function drawBridgePreviewSegment(segment, color, baseScale, pipeType = 'normal', showWarpOutline = false) {
   if (!segment) return;
   const start = segment.start;
   const end = segment.end;
@@ -9529,7 +9601,7 @@ function drawBridgePreviewSegment(segment, color, baseScale, pipeType = 'normal'
       const cx = sx + (i + 0.5) * actualSpacing * ux;
       const cy = sy + (i + 0.5) * actualSpacing * uy;
       const useBrass = pipeType === 'gold';
-      drawPreviewTriangle(cx, cy, triW, triH, angle, color, useBrass, pipeType);
+      drawPreviewTriangle(cx, cy, triW, triH, angle, color, useBrass, pipeType, showWarpOutline);
     }
 }
 
@@ -9746,6 +9818,24 @@ function fillPipeShape(shape, color, alpha) {
   graphicsEdges.fillTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
 }
 
+function strokeWarpOuterTriangle(cx, cy, baseW, height, angle, alpha = 0.95) {
+  if (!graphicsEdges) return;
+  if (!Number.isFinite(baseW) || !Number.isFinite(height)) return;
+  const expandedPoints = computeTrianglePoints(
+    cx,
+    cy,
+    baseW + WARP_TRIANGLE_OUTER_WIDTH_BONUS,
+    height + WARP_TRIANGLE_OUTER_HEIGHT_BONUS,
+    angle,
+  );
+  graphicsEdges.lineStyle(WARP_OUTER_OUTLINE_THICKNESS, WARP_PIPE_OUTLINE_COLOR, alpha);
+  graphicsEdges.strokeTriangle(
+    expandedPoints[0][0], expandedPoints[0][1],
+    expandedPoints[1][0], expandedPoints[1][1],
+    expandedPoints[2][0], expandedPoints[2][1],
+  );
+}
+
 function forEachPipeOffset(pipeType, angle, callback) {
   const shouldSplit = pipeType === 'rage' && Number.isFinite(RAGE_PIPE_OFFSET) && RAGE_PIPE_OFFSET > 0;
   if (!shouldSplit) {
@@ -9761,7 +9851,7 @@ function forEachPipeOffset(pipeType, angle, callback) {
   callback(offsetX, offsetY);
 }
 
-function drawPreviewTriangle(cx, cy, baseW, height, angle, color, useBrass = false, pipeType = 'normal') {
+function drawPreviewTriangle(cx, cy, baseW, height, angle, color, useBrass = false, pipeType = 'normal', showWarpOutline = false) {
   const drawInstance = (centerX, centerY) => {
     const shape = createPipeShape(centerX, centerY, baseW, height, angle, pipeType);
 
@@ -9779,6 +9869,9 @@ function drawPreviewTriangle(cx, cy, baseW, height, angle, color, useBrass = fal
 
     const outlineAlpha = useBrass ? 0.95 : 0.9;
     strokePipeShape(shape, 2, color, outlineAlpha);
+    if (showWarpOutline && shape.type !== 'droplet') {
+      strokeWarpOuterTriangle(centerX, centerY, baseW, height, angle, 0.92);
+    }
   };
 
   forEachPipeOffset(pipeType, angle, (dx, dy) => {
@@ -9927,6 +10020,7 @@ function drawRemovalExplosion(edge, removal, fromNode) {
     const fadeEndTime = fadeStartTime + (Number(removal.fadeDuration) || 0);
     const pipeType = edge?.pipeType || 'normal';
     const outlineColor = pipeType === 'gold' ? BRASS_PIPE_OUTLINE_COLOR : 0x000000;
+    const showWarpOutline = edgeUsesWarp(edge);
     const driftAlphaStart = Number.isFinite(removal.driftAlphaStart) ? removal.driftAlphaStart : 0.6;
     const driftAlphaEnd = Number.isFinite(removal.driftAlphaEnd) ? removal.driftAlphaEnd : 0.95;
     const restAlpha = Number.isFinite(removal.restAlpha) ? removal.restAlpha : 0.65;
@@ -9969,7 +10063,7 @@ function drawRemovalExplosion(edge, removal, fromNode) {
       const [screenX, screenY] = worldToScreen(currentX, currentY);
       const triWidth = Number(particle.triWidth) || PIPE_TRIANGLE_WIDTH;
       const triHeight = Number(particle.triHeight) || PIPE_TRIANGLE_HEIGHT;
-      drawExplosionTriangle(screenX, screenY, triWidth, triHeight, angle, color, alpha, outlineColor, pipeType);
+      drawExplosionTriangle(screenX, screenY, triWidth, triHeight, angle, color, alpha, outlineColor, pipeType, showWarpOutline);
     }
 
     if (fadeEndTime > fadeStartTime && now >= fadeEndTime) {
@@ -10000,6 +10094,7 @@ function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, 
       const shape = createPipeShape(centerX, centerY, scaledBaseW, scaledHeight, finalAngle, pipeType);
       const isDroplet = shape.type === 'droplet';
       const trianglePoints = !isDroplet ? shape.points : null;
+      const showWarpOutline = !isDroplet && !isRemovalOutline && edgeUsesWarp(e);
       const brassPoints = (!isDroplet && isBrass && !isRemovalOutline)
         ? computeTrianglePoints(
             centerX,
@@ -10071,6 +10166,10 @@ function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, 
         );
       }
 
+      if (showWarpOutline) {
+        strokeWarpOuterTriangle(centerX, centerY, scaledBaseW, scaledHeight, finalAngle, 0.95);
+      }
+
       // Add hover border using the same color
       if (isHovered) {
         strokePipeShape(shape, 2, color, 1);
@@ -10082,7 +10181,7 @@ function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, 
     });
   }
 
-  function drawExplosionTriangle(cx, cy, baseW, height, angle, color, alpha, outlineColor, pipeType) {
+function drawExplosionTriangle(cx, cy, baseW, height, angle, color, alpha, outlineColor, pipeType, showWarpOutline = false) {
     const [p1, p2, p3] = computeTrianglePoints(cx, cy, baseW, height, angle);
     const isBrass = pipeType === 'gold';
 
@@ -10098,6 +10197,10 @@ function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, 
       graphicsEdges.fillTriangle(bp1[0], bp1[1], bp2[0], bp2[1], bp3[0], bp3[1]);
       graphicsEdges.lineStyle(BRASS_OUTER_OUTLINE_THICKNESS, BRASS_PIPE_OUTLINE_COLOR, Math.max(0, Math.min(1, alpha * 0.95)));
       graphicsEdges.strokeTriangle(bp1[0], bp1[1], bp2[0], bp2[1], bp3[0], bp3[1]);
+    }
+
+    if (showWarpOutline) {
+      strokeWarpOuterTriangle(cx, cy, baseW, height, angle, Math.max(0, Math.min(1, alpha * 0.95)));
     }
 
     graphicsEdges.fillStyle(color, Math.max(0, Math.min(1, alpha)));
