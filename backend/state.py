@@ -84,6 +84,8 @@ class GraphState:
         # Replay helpers
         self.tick_count: int = 0
         self.pending_edge_removals: List[Dict[str, Any]] = []
+        self.pending_auto_reversed_edge_ids: List[int] = []
+        self.pending_edge_reversal_events: List[Dict[str, Any]] = []
 
         # Economy overrides
         self.passive_income_per_second: float = 0.0
@@ -1005,6 +1007,13 @@ class GraphState:
                         'player_id': new_owner
                     })
 
+                if (
+                    new_owner is not None
+                    and previous_owner is not None
+                    and new_owner != previous_owner
+                ):
+                    self._auto_reverse_edges_from_node_loss(nid, previous_owner)
+
                 node.owner = new_owner
 
                 if getattr(self, "win_condition", "dominate") == "king":
@@ -1157,6 +1166,27 @@ class GraphState:
                 continue
 
             edge.on = True
+
+    def _auto_reverse_edges_from_node_loss(self, node_id: int, previous_owner: Optional[int]) -> None:
+        if previous_owner is None:
+            return
+        node = self.nodes.get(node_id)
+        if not node:
+            return
+
+        for edge_id in list(node.attached_edge_ids):
+            edge = self.edges.get(edge_id)
+            if not edge or getattr(edge, "pipe_type", "normal") != "reverse":
+                continue
+            if edge.source_node_id != node_id:
+                continue
+            target_node = self.nodes.get(edge.target_node_id)
+            if not target_node or target_node.owner != previous_owner:
+                continue
+
+            edge.source_node_id, edge.target_node_id = edge.target_node_id, edge.source_node_id
+            if edge_id not in self.pending_auto_reversed_edge_ids:
+                self.pending_auto_reversed_edge_ids.append(edge_id)
 
     def toggle_auto_expand(self, player_id: int) -> bool:
         """

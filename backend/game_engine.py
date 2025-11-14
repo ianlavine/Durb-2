@@ -962,10 +962,6 @@ class GameEngine:
             # Allow reverse edge if player has picked starting node
             self.validate_player_can_act(player_id)
 
-            current_mode = normalize_game_mode(getattr(self.state, "mode", DEFAULT_GAME_MODE))
-            if current_mode in {"nuke", "cross", "brass-old", "go", "warp", "flat", "i-warp", "i-flat"}:
-                raise GameValidationError("Edge reversal disabled in this mode")
-
             edge = self.validate_edge_exists(edge_id)
             if getattr(edge, "pipe_type", "normal") != "reverse":
                 raise GameValidationError("Edge is not reversible")
@@ -1308,6 +1304,48 @@ class GameEngine:
             return
         for edge in self.state.edges.values():
             self._apply_edge_warp_geometry(edge)
+
+    def _finalize_auto_reversed_edges(self) -> None:
+        if not self.state:
+            return
+
+        pending_ids = list(getattr(self.state, "pending_auto_reversed_edge_ids", []) or [])
+        self.state.pending_edge_reversal_events = []
+        if not pending_ids:
+            return
+
+        events: List[Dict[str, Any]] = []
+        for edge_id in pending_ids:
+            edge = self.state.edges.get(edge_id)
+            if not edge:
+                continue
+            self._apply_edge_warp_geometry(edge)
+            warp_payload = {
+                "axis": edge.warp_axis,
+                "segments": [
+                    [sx, sy, ex, ey]
+                    for sx, sy, ex, ey in (edge.warp_segments or [])
+                ],
+            }
+            events.append({
+                "type": "edgeReversed",
+                "edge": {
+                    "id": edge.id,
+                    "source": edge.source_node_id,
+                    "target": edge.target_node_id,
+                    "bidirectional": False,
+                    "forward": True,
+                    "on": edge.on,
+                    "flowing": edge.flowing,
+                    "pipeType": getattr(edge, "pipe_type", "normal"),
+                    "warp": warp_payload,
+                    "warpAxis": warp_payload["axis"],
+                    "warpSegments": warp_payload["segments"],
+                },
+            })
+
+        self.state.pending_edge_reversal_events = events
+        self.state.pending_auto_reversed_edge_ids = []
 
     def calculate_bridge_cost(
         self,
@@ -1904,6 +1942,7 @@ class GameEngine:
             return None
 
         self.state.simulate_tick(tick_interval_seconds)
+        self._finalize_auto_reversed_edges()
 
         for eliminated_id in list(self.state.eliminated_players):
             self._deactivate_player_edges(eliminated_id)

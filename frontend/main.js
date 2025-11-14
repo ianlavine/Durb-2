@@ -2867,45 +2867,67 @@ function clearBridgeSelection() {
     if (!entry) {
       const text = sceneRef.add.text(symbolX, symbolY, '⟳', {
         fontFamily: 'sans-serif',
-        fontSize: '20px',
+        fontSize: '28px',
+        fontStyle: 'bold',
         color: '#f4f4f4',
         stroke: '#000000',
-        strokeThickness: 3,
+        strokeThickness: 4,
       });
       text.setOrigin(0.5, 0.5);
       text.setDepth(6);
       text.setAlpha(0.9);
       text.setData('edgeId', edgeId);
-      text.on('pointerdown', (pointer) => {
-        if (pointer?.event) {
-          pointer.event.preventDefault();
-          pointer.event.stopPropagation();
-        }
-        if (!ws || ws.readyState !== WebSocket.OPEN) return;
-        const token = localStorage.getItem('token');
-        if (!token) return;
-        const currentEdge = edges.get(edgeId);
-        if (!currentEdge || !canReverseEdge(currentEdge)) return;
-        ws.send(JSON.stringify({ type: 'reverseEdge', edgeId, token }));
-      });
-      entry = { text };
+      entry = { text, pulseStart: null };
       reversePipeButtons.set(edgeId, entry);
     }
 
     const { text } = entry;
     const canControl = canReverseEdge(edgeRecord) && !edgeRecord.building;
-    const color = canControl ? '#f3f3f3' : '#6a6a6a';
+    const sourceNode = nodes.get(edgeRecord.source);
+    const ownerColor = ownerToHexColor(sourceNode ? sourceNode.owner : null);
 
     text.setPosition(symbolX, symbolY);
-    text.setColor(color);
-    text.setAlpha(canControl ? 0.95 : 0.45);
+    text.setColor(ownerColor);
+    text.setAlpha(canControl ? 1 : 0.5);
     text.setVisible(true);
 
-    if (canControl) {
-      text.setInteractive({ useHandCursor: true });
-    } else if (text.input && text.input.enabled) {
-      text.disableInteractive();
+    applyReverseButtonPulse(entry, text);
+  }
+
+  function applyReverseButtonPulse(entry, text) {
+    if (!entry || !text) return;
+    const start = entry.pulseStart;
+    if (start == null) {
+      if (text.scaleX !== 1 || text.scaleY !== 1) text.setScale(1);
+      if (text.rotation !== 0) text.setRotation(0);
+      return;
     }
+
+    const duration = Math.max(0.1, entry.pulseDuration || 0.45);
+    const elapsed = Math.max(0, animationTime - start);
+    if (elapsed >= duration) {
+      entry.pulseStart = null;
+      text.setScale(1);
+      text.setRotation(0);
+      return;
+    }
+
+    const progress = Math.min(1, elapsed / duration);
+    const scaleBoost = entry.pulseScale ?? 0.35;
+    const eased = 1 - easeOutCubic(progress);
+    const scale = 1 + scaleBoost * eased;
+    const turns = entry.pulseTurns ?? 1;
+    text.setScale(scale);
+    text.setRotation(progress * turns * Math.PI * 2);
+  }
+
+  function triggerReverseButtonPulse(edgeId, options = {}) {
+    const entry = reversePipeButtons.get(edgeId);
+    if (!entry) return;
+    entry.pulseStart = animationTime;
+    entry.pulseDuration = options.duration ?? 0.45;
+    entry.pulseScale = options.scale ?? 0.35;
+    entry.pulseTurns = options.turns ?? 1.15;
   }
 
   // Called from redrawStatic(); now just toggles visibility if menu is open
@@ -5145,6 +5167,7 @@ function clearBridgeSelection() {
         
         // Trigger reverse animation and sound (only if this action was mine)
         startEdgeReverseSpin(existingEdge);
+        triggerReverseButtonPulse(edgeId);
         playReverseShuffle();
         redrawStatic();
       }
@@ -6630,9 +6653,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
       if (persistentEdgeFlow && (e.lastTransfer || 0) > 0) {
         const perSecond = (e.lastTransfer || 0) / Math.max(1e-6, tickIntervalSec);
         const label = Math.round(perSecond).toString();
-        const flowOffsetY = e.pipeType === 'reverse' ? -18 : 0;
         if (!textObj) {
-          textObj = sceneRef.add.text(sx, sy + flowOffsetY, label, {
+          textObj = sceneRef.add.text(sx, sy, label, {
             font: '14px monospace',
             color: '#000000',
             align: 'center',
@@ -6643,8 +6665,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
           edgeFlowTexts.set(id, textObj);
         } else {
           if (textObj.text !== label) textObj.setText(label);
-          const flowOffsetY = e.pipeType === 'reverse' ? -18 : 0;
-          textObj.setPosition(sx, sy + flowOffsetY);
+          textObj.setPosition(sx, sy);
           if (textObj.style && textObj.style.fontSize !== '14px') textObj.setFontSize(14);
           textObj.setStroke('#ffffff', 3);
           if (!textObj.visible) textObj.setVisible(true);
@@ -7227,6 +7248,14 @@ function fallbackRemoveEdgesForNode(nodeId) {
     return hexToInt(entry?.color);
   }
 
+  function ownerToHexColor(ownerId, fallback = '#f4f4f4') {
+    if (ownerId == null) return fallback;
+    const entry = players.get(ownerId);
+    const raw = typeof entry?.color === 'string' ? entry.color.trim() : '';
+    if (!raw) return fallback;
+    return raw.startsWith('#') ? raw : `#${raw}`;
+  }
+
   function ownerToSecondaryColor(ownerId) {
     if (ownerId == null) return 0x000000;
     const entry = players.get(ownerId);
@@ -7242,7 +7271,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
     if (!edge) return false;
 
     if (edge.pipeType !== 'reverse') return false;
-    if (isNukeLikeModeActive()) return false;
     
     const sourceNode = nodes.get(edge.source);
     if (!sourceNode) return false;
@@ -7418,9 +7446,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
       const edge = edges.get(edgeId);
       if (edge) {
         if (!canReverseEdge(edge)) {
-          if (isNukeLikeModeActive()) {
-            showErrorMessage('Edge reversal disabled in this mode');
-          } else if (edge.pipeType !== 'reverse') {
+          if (edge.pipeType !== 'reverse') {
             showErrorMessage('Edge is not reversible');
           } else {
             const sourceNode = nodes.get(edge.source);
@@ -9826,10 +9852,9 @@ function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, 
     const pipeType = e?.pipeType || 'normal';
     const isBrass = pipeType === 'gold';
     const isRage = pipeType === 'rage';
-    const isReverse = pipeType === 'reverse';
     const inactiveColor = isBrass
       ? BRASS_PIPE_DIM_COLOR
-      : (isRage ? RAGE_PIPE_DIM_COLOR : (isReverse ? REVERSE_PIPE_DIM_COLOR : 0x999999));
+      : (isRage ? RAGE_PIPE_DIM_COLOR : 0x999999);
     const isRemovalOutline = !!removalOutline;
     const color = (overrideColor != null) ? overrideColor : edgeColor(e, fromNode);
 
