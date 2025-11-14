@@ -9539,24 +9539,22 @@ function updateBrassPreviewIntersections() {
 
   const gemMode = isMagicResourceModeActive();
   const modeIsXb = isXbModeActive();
-  if (gemMode) {
-    bridgePreviewWillBeBrass = bridgeIsBrass;
-    return;
-  }
-
   const modeIsCrossLike = isCrossLikeModeActive();
-  const modeIsCross = isTrueCrossModeActive();
+
+  const setDefaultPreviewState = () => {
+    bridgePreviewWillBeBrass = gemMode ? bridgeIsBrass : (bridgeIsBrass && modeIsCrossLike);
+  };
+
+  setDefaultPreviewState();
 
   if (activeAbility !== 'bridge1way' || bridgeFirstNode == null) {
-    bridgePreviewWillBeBrass = bridgeIsBrass && modeIsCrossLike;
     return;
   }
 
   const firstNode = nodes.get(bridgeFirstNode);
   if (!firstNode) return;
 
-  const shouldCheck = modeIsXb || (bridgeIsBrass && modeIsCrossLike);
-  bridgePreviewWillBeBrass = bridgeIsBrass && modeIsCrossLike;
+  const shouldCheck = modeIsXb || (bridgeIsBrass && (modeIsCrossLike || gemMode));
   if (!shouldCheck) return;
 
   let previewTarget = null;
@@ -9626,6 +9624,11 @@ function updateBrassPreviewIntersections() {
   if (modeIsXb) {
     bridgePreviewWillBeBrass = willCross;
     xbPreviewBlockedByBrass = blockedByBrass;
+  } else if (gemMode) {
+    if (!bridgeIsBrass) {
+      brassPreviewIntersections.clear();
+    }
+    bridgePreviewWillBeBrass = bridgeIsBrass;
   } else if (modeIsCrossLike) {
     if (!bridgeIsBrass) {
       brassPreviewIntersections.clear();
@@ -9650,40 +9653,39 @@ function pipeSpacingForType(pipeType) {
 }
 
 function computeDropletOutlinePoints(cx, cy, baseW, height, angle) {
+  if (!Number.isFinite(baseW) || !Number.isFinite(height) || baseW <= 0 || height <= 0) {
+    return computeTrianglePoints(cx, cy, baseW, height, angle);
+  }
+
+  const halfBase = baseW / 2;
   const tipForward = height / 2;
-  const tailCenter = -height * 0.32;
-  const baseRadiusTarget = Math.max(baseW * 0.68, 2.2);
-  const dx = Math.max(0.001, tipForward - tailCenter);
-  const tailRadius = Math.min(baseRadiusTarget, dx * 0.9);
-  const arcSegments = 12;
+  const baseX = -height / 2;
+  const arcSegments = 16;
+
+  const tip = [tipForward, 0];
+  const baseRight = [baseX, halfBase];
+  const baseLeft = [baseX, -halfBase];
+  const centerX = baseX;
+  const centerY = 0;
+  const radius = halfBase;
 
   const localPoints = [];
-  localPoints.push([tipForward, 0]);
+  localPoints.push(tip);
+  localPoints.push(baseRight);
 
-  if (tailRadius >= dx) {
-    // Fallback to simple oval if geometry degenerates
-    const widest = baseW * 0.85;
-    localPoints.push([tailCenter * 0.1, widest / 2]);
-    localPoints.push([tailCenter, widest / 2]);
-    localPoints.push([tailCenter, -widest / 2]);
-    localPoints.push([tailCenter * 0.1, -widest / 2]);
-  } else {
-    const relX = (tailRadius * tailRadius) / dx;
-    const relY = (tailRadius / dx) * Math.sqrt(Math.max(0, dx * dx - tailRadius * tailRadius));
-    const tangentX = tailCenter + relX;
-    const tangentY = relY;
-    localPoints.push([tangentX, tangentY]);
-
-    const angleStart = Math.atan2(relY, relX);
-    const angleEnd = (Math.PI * 2) - angleStart;
-    for (let i = 1; i <= arcSegments; i++) {
+  if (radius > 0 && arcSegments > 1) {
+    const thetaStart = Math.PI / 2;
+    const thetaEnd = (3 * Math.PI) / 2;
+    for (let i = 1; i < arcSegments; i++) {
       const t = i / arcSegments;
-      const theta = angleStart + (angleEnd - angleStart) * t;
-      const lx = tailCenter + tailRadius * Math.cos(theta);
-      const ly = tailRadius * Math.sin(theta);
+      const theta = thetaStart + (thetaEnd - thetaStart) * t;
+      const lx = centerX + radius * Math.cos(theta);
+      const ly = centerY + radius * Math.sin(theta);
       localPoints.push([lx, ly]);
     }
   }
+
+  localPoints.push(baseLeft);
 
   const cos = Math.cos(angle);
   const sin = Math.sin(angle);
@@ -9830,7 +9832,7 @@ function drawPreviewTriangle(cx, cy, baseW, height, angle, color, useBrass = fal
     const removalHighlight = (!removal &&
       activeAbility === 'bridge1way' &&
       bridgePreviewWillBeBrass &&
-      isCrossLikeModeActive() &&
+      (isCrossLikeModeActive() || isMagicResourceModeActive()) &&
       brassPreviewIntersections.has(edgeId)
     );
 
