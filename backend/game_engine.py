@@ -950,7 +950,7 @@ class GameEngine:
         except GameValidationError:
             return False
     
-    def handle_reverse_edge(self, token: str, edge_id: int) -> bool:
+    def handle_reverse_edge(self, token: str, edge_id: int, cost: Optional[float] = None) -> bool:
         """
         Handle reversing an edge direction.
         Returns True if the action was successful.

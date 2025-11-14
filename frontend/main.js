@@ -143,6 +143,8 @@
   const PRE_PIPE_OUTLINE_COLOR = 0x4a5568;
   const PRE_PIPE_SHAKE_SPEED = 6.4;
   const PRE_PIPE_SHAKE_AMPLITUDE = 2.1;
+  const RAGE_PIPE_OFFSET = 3; // pixels to offset each side of the double fire pipe
+  const REVERSE_PIPE_SPACING_MULTIPLIER = 1.5;
   let pendingSingleClickTimeout = null;
   let pendingSingleClickData = null;
 
@@ -383,8 +385,6 @@
   const BRASS_PIPE_COLOR = 0x8b6f14;
   const BRASS_PIPE_DIM_COLOR = 0x46320a;
   const BRASS_PIPE_OUTLINE_COLOR = 0x6f5410;
-  const RAGE_PIPE_COLOR = 0xff5a36;
-  const RAGE_PIPE_DIM_COLOR = 0x7a2518;
   const REVERSE_PIPE_COLOR = 0x4c6ef5;
   const REVERSE_PIPE_DIM_COLOR = 0x34487c;
   const PIPE_TRIANGLE_HEIGHT = 16;
@@ -9328,7 +9328,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
     const triH = PIPE_TRIANGLE_HEIGHT;
     const triW = PIPE_TRIANGLE_WIDTH;
-    const spacing = triH;
+    const spacing = Math.max(1, pipeSpacingForType(pipeType));
     const count = Math.max(1, Math.floor(len / spacing));
     const actualSpacing = len / count;
     const angle = Math.atan2(uy, ux);
@@ -9338,6 +9338,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
     const outlineAlpha = waitingOwnership ? 0.8 : (waitingGold ? 0.55 : 0.3);
     const wave = Math.sin(animationTime * PRE_PIPE_SHAKE_SPEED);
 
+    const pipeType = prePipe?.pipeType || 'normal';
+
     for (let i = 0; i < count; i++) {
       const alternatingSign = (i % 2 === 0) ? 1 : -1;
       const sway = PRE_PIPE_SHAKE_AMPLITUDE * alternatingSign * wave;
@@ -9345,14 +9347,19 @@ function fallbackRemoveEdgesForNode(nodeId) {
       const offsetY = normalY * sway;
       const cx = sx + (i + 0.5) * actualSpacing * ux + offsetX;
       const cy = sy + (i + 0.5) * actualSpacing * uy + offsetY;
-      drawPrePipeTriangle(cx, cy, triW, triH, angle, outlineColor, outlineAlpha);
+      drawPrePipeTriangle(cx, cy, triW, triH, angle, outlineColor, outlineAlpha, pipeType);
     }
   }
 
-  function drawPrePipeTriangle(cx, cy, baseW, height, angle, outlineColor, outlineAlpha) {
-    const [p1, p2, p3] = computeTrianglePoints(cx, cy, baseW, height, angle);
-    graphicsEdges.lineStyle(1.4, outlineColor, outlineAlpha);
-    graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
+  function drawPrePipeTriangle(cx, cy, baseW, height, angle, outlineColor, outlineAlpha, pipeType = 'normal') {
+    const drawInstance = (centerX, centerY) => {
+      const shape = createPipeShape(centerX, centerY, baseW, height, angle, pipeType);
+      strokePipeShape(shape, 1.4, outlineColor, outlineAlpha);
+    };
+
+    forEachPipeOffset(pipeType, angle, (dx, dy) => {
+      drawInstance(cx + dx, cy + dy);
+    });
   }
 
   function pickPrePipeNear(wx, wy, maxDist) {
@@ -9465,8 +9472,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
     let previewColor;
     if (pipeType === 'gold') {
       previewColor = canAfford ? BRASS_PIPE_COLOR : BRASS_PIPE_DIM_COLOR;
-    } else if (pipeType === 'rage') {
-      previewColor = canAfford ? RAGE_PIPE_COLOR : RAGE_PIPE_DIM_COLOR;
     } else if (pipeType === 'reverse') {
       previewColor = canAfford ? REVERSE_PIPE_COLOR : REVERSE_PIPE_DIM_COLOR;
     } else {
@@ -9516,16 +9521,16 @@ function drawBridgePreviewSegment(segment, color, baseScale, pipeType = 'normal'
 
     const triH = PIPE_TRIANGLE_HEIGHT;
     const triW = PIPE_TRIANGLE_WIDTH;
-    const packedSpacing = triH;
+    const packedSpacing = Math.max(1, pipeSpacingForType(pipeType));
     const packedCount = Math.max(1, Math.floor(len / packedSpacing));
     const actualSpacing = len / packedCount;
 
     for (let i = 0; i < packedCount; i++) {
       const cx = sx + (i + 0.5) * actualSpacing * ux;
       const cy = sy + (i + 0.5) * actualSpacing * uy;
-    const useBrass = pipeType === 'gold';
-    drawPreviewTriangle(cx, cy, triW, triH, angle, color, useBrass);
-  }
+      const useBrass = pipeType === 'gold';
+      drawPreviewTriangle(cx, cy, triW, triH, angle, color, useBrass, pipeType);
+    }
 }
 
 function updateBrassPreviewIntersections() {
@@ -9637,25 +9642,146 @@ function computeTrianglePoints(cx, cy, baseW, height, angle) {
   return [tip, baseLeft, baseRight];
 }
 
-function drawPreviewTriangle(cx, cy, baseW, height, angle, color, useBrass = false) {
-  const [p1, p2, p3] = computeTrianglePoints(cx, cy, baseW, height, angle);
+function pipeSpacingForType(pipeType) {
+  if (pipeType === 'reverse') {
+    return PIPE_TRIANGLE_HEIGHT * REVERSE_PIPE_SPACING_MULTIPLIER;
+  }
+  return PIPE_TRIANGLE_HEIGHT;
+}
 
-  if (useBrass) {
-    const [bp1, bp2, bp3] = computeTrianglePoints(
-      cx,
-      cy,
-      baseW + BRASS_TRIANGLE_OUTER_WIDTH_BONUS,
-      height + BRASS_TRIANGLE_OUTER_HEIGHT_BONUS,
-      angle,
-    );
-    graphicsEdges.lineStyle(BRASS_OUTER_OUTLINE_THICKNESS, BRASS_PIPE_OUTLINE_COLOR, 0.9);
-    graphicsEdges.strokeTriangle(bp1[0], bp1[1], bp2[0], bp2[1], bp3[0], bp3[1]);
+function computeDropletOutlinePoints(cx, cy, baseW, height, angle) {
+  const tipForward = height / 2;
+  const tailCenter = -height * 0.32;
+  const baseRadiusTarget = Math.max(baseW * 0.68, 2.2);
+  const dx = Math.max(0.001, tipForward - tailCenter);
+  const tailRadius = Math.min(baseRadiusTarget, dx * 0.9);
+  const arcSegments = 12;
+
+  const localPoints = [];
+  localPoints.push([tipForward, 0]);
+
+  if (tailRadius >= dx) {
+    // Fallback to simple oval if geometry degenerates
+    const widest = baseW * 0.85;
+    localPoints.push([tailCenter * 0.1, widest / 2]);
+    localPoints.push([tailCenter, widest / 2]);
+    localPoints.push([tailCenter, -widest / 2]);
+    localPoints.push([tailCenter * 0.1, -widest / 2]);
+  } else {
+    const relX = (tailRadius * tailRadius) / dx;
+    const relY = (tailRadius / dx) * Math.sqrt(Math.max(0, dx * dx - tailRadius * tailRadius));
+    const tangentX = tailCenter + relX;
+    const tangentY = relY;
+    localPoints.push([tangentX, tangentY]);
+
+    const angleStart = Math.atan2(relY, relX);
+    const angleEnd = (Math.PI * 2) - angleStart;
+    for (let i = 1; i <= arcSegments; i++) {
+      const t = i / arcSegments;
+      const theta = angleStart + (angleEnd - angleStart) * t;
+      const lx = tailCenter + tailRadius * Math.cos(theta);
+      const ly = tailRadius * Math.sin(theta);
+      localPoints.push([lx, ly]);
+    }
   }
 
-  const outlineAlpha = useBrass ? 0.95 : 0.9;
-  const outlineColor = color;
-  graphicsEdges.lineStyle(2, outlineColor, outlineAlpha);
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  return localPoints.map(([lx, ly]) => [
+    cx + lx * cos - ly * sin,
+    cy + lx * sin + ly * cos,
+  ]);
+}
+
+function createPipeShape(cx, cy, baseW, height, angle, pipeType = 'normal') {
+  if (pipeType === 'reverse') {
+    return { type: 'droplet', points: computeDropletOutlinePoints(cx, cy, baseW, height, angle) };
+  }
+  return { type: 'triangle', points: computeTrianglePoints(cx, cy, baseW, height, angle) };
+}
+
+function strokeClosedShape(points) {
+  if (!Array.isArray(points) || !points.length) return;
+  graphicsEdges.beginPath();
+  graphicsEdges.moveTo(points[0][0], points[0][1]);
+  for (let i = 1; i < points.length; i++) {
+    graphicsEdges.lineTo(points[i][0], points[i][1]);
+  }
+  graphicsEdges.closePath();
+  graphicsEdges.strokePath();
+}
+
+function fillClosedShape(points) {
+  if (!Array.isArray(points) || !points.length) return;
+  graphicsEdges.beginPath();
+  graphicsEdges.moveTo(points[0][0], points[0][1]);
+  for (let i = 1; i < points.length; i++) {
+    graphicsEdges.lineTo(points[i][0], points[i][1]);
+  }
+  graphicsEdges.closePath();
+  graphicsEdges.fillPath();
+}
+
+function strokePipeShape(shape, lineWidth, color, alpha) {
+  if (!shape || !Array.isArray(shape.points)) return;
+  graphicsEdges.lineStyle(lineWidth, color, alpha);
+  if (shape.type === 'droplet') {
+    strokeClosedShape(shape.points);
+    return;
+  }
+  const [p1, p2, p3] = shape.points;
   graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
+}
+
+function fillPipeShape(shape, color, alpha) {
+  if (!shape || !Array.isArray(shape.points)) return;
+  graphicsEdges.fillStyle(color, alpha);
+  if (shape.type === 'droplet') {
+    fillClosedShape(shape.points);
+    return;
+  }
+  const [p1, p2, p3] = shape.points;
+  graphicsEdges.fillTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
+}
+
+function forEachPipeOffset(pipeType, angle, callback) {
+  const shouldSplit = pipeType === 'rage' && Number.isFinite(RAGE_PIPE_OFFSET) && RAGE_PIPE_OFFSET > 0;
+  if (!shouldSplit) {
+    callback(0, 0);
+    return;
+  }
+
+  const normalX = -Math.sin(angle);
+  const normalY = Math.cos(angle);
+  const offsetX = normalX * RAGE_PIPE_OFFSET;
+  const offsetY = normalY * RAGE_PIPE_OFFSET;
+  callback(-offsetX, -offsetY);
+  callback(offsetX, offsetY);
+}
+
+function drawPreviewTriangle(cx, cy, baseW, height, angle, color, useBrass = false, pipeType = 'normal') {
+  const drawInstance = (centerX, centerY) => {
+    const shape = createPipeShape(centerX, centerY, baseW, height, angle, pipeType);
+
+    if (useBrass && shape.type !== 'droplet') {
+      const [bp1, bp2, bp3] = computeTrianglePoints(
+        centerX,
+        centerY,
+        baseW + BRASS_TRIANGLE_OUTER_WIDTH_BONUS,
+        height + BRASS_TRIANGLE_OUTER_HEIGHT_BONUS,
+        angle,
+      );
+      graphicsEdges.lineStyle(BRASS_OUTER_OUTLINE_THICKNESS, BRASS_PIPE_OUTLINE_COLOR, 0.9);
+      graphicsEdges.strokeTriangle(bp1[0], bp1[1], bp2[0], bp2[1], bp3[0], bp3[1]);
+    }
+
+    const outlineAlpha = useBrass ? 0.95 : 0.9;
+    strokePipeShape(shape, 2, color, outlineAlpha);
+  };
+
+  forEachPipeOffset(pipeType, angle, (dx, dy) => {
+    drawInstance(cx + dx, cy + dy);
+  });
 }
 
   function drawEdge(e, sNode, tNode, edgeId) {
@@ -9676,7 +9802,8 @@ function drawPreviewTriangle(cx, cy, baseW, height, angle, color, useBrass = fal
     // All edges are single direction: chain of triangles along the path
     const triH = PIPE_TRIANGLE_HEIGHT;
     const triW = PIPE_TRIANGLE_WIDTH;
-    const packedCount = Math.max(1, Math.floor(totalLength / triH));
+    const spacing = Math.max(1, pipeSpacingForType(e?.pipeType || 'normal'));
+    const packedCount = Math.max(1, Math.floor(totalLength / spacing));
     const actualSpacing = totalLength / packedCount;
     
     const removal = e.removing || null;
@@ -9851,121 +9978,106 @@ function drawRemovalExplosion(edge, removal, fromNode) {
 function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, isHovered, triangleIndex, totalTriangles, removalOutline = false, scaleOverride = 1) {
     const pipeType = e?.pipeType || 'normal';
     const isBrass = pipeType === 'gold';
-    const isRage = pipeType === 'rage';
-    const inactiveColor = isBrass
-      ? BRASS_PIPE_DIM_COLOR
-      : (isRage ? RAGE_PIPE_DIM_COLOR : 0x999999);
+    const inactiveColor = isBrass ? BRASS_PIPE_DIM_COLOR : 0x999999;
     const isRemovalOutline = !!removalOutline;
     const color = (overrideColor != null) ? overrideColor : edgeColor(e, fromNode);
 
-    let finalAngle = angle;
-    if (e._spin) {
-      const elapsed = Math.max(0, animationTime - e._spin.spinStartTime);
-      const perIndexDelay = EDGE_SPIN_PER_TRIANGLE_SEC;
-      const local = Math.max(0, elapsed - (triangleIndex || 0) * perIndexDelay);
-      const spinPhase = Math.min(1, local / 0.24); // 180deg over ~0.24s (slower)
-      // Start from previous orientation (new angle + PI) and settle on new angle
-      finalAngle = angle + Math.PI * (1 - spinPhase);
-    }
+    const drawInstance = (centerX, centerY) => {
+      let finalAngle = angle;
+      if (e._spin) {
+        const elapsed = Math.max(0, animationTime - e._spin.spinStartTime);
+        const perIndexDelay = EDGE_SPIN_PER_TRIANGLE_SEC;
+        const local = Math.max(0, elapsed - (triangleIndex || 0) * perIndexDelay);
+        const spinPhase = Math.min(1, local / 0.24); // 180deg over ~0.24s (slower)
+        // Start from previous orientation (new angle + PI) and settle on new angle
+        finalAngle = angle + Math.PI * (1 - spinPhase);
+      }
 
-    const scaledBaseW = baseW * Math.max(scaleOverride, 0.01);
-    const scaledHeight = height * Math.max(scaleOverride, 0.01);
-    const [p1, p2, p3] = computeTrianglePoints(cx, cy, scaledBaseW, scaledHeight, finalAngle);
-    const brassPoints = (isBrass && !isRemovalOutline)
-      ? computeTrianglePoints(
-          cx,
-          cy,
-          scaledBaseW + BRASS_TRIANGLE_OUTER_WIDTH_BONUS,
-          scaledHeight + BRASS_TRIANGLE_OUTER_HEIGHT_BONUS,
-          finalAngle,
-        )
-      : null;
-    let brassFilled = false;
-    const fillBrass = () => {
-      if (!brassPoints || brassFilled) return;
-      graphicsEdges.fillStyle(BRASS_PIPE_COLOR, 1);
-      graphicsEdges.fillTriangle(
-        brassPoints[0][0], brassPoints[0][1],
-        brassPoints[1][0], brassPoints[1][1],
-        brassPoints[2][0], brassPoints[2][1],
-      );
-      brassFilled = true;
+      const scaledBaseW = baseW * Math.max(scaleOverride, 0.01);
+      const scaledHeight = height * Math.max(scaleOverride, 0.01);
+      const shape = createPipeShape(centerX, centerY, scaledBaseW, scaledHeight, finalAngle, pipeType);
+      const isDroplet = shape.type === 'droplet';
+      const trianglePoints = !isDroplet ? shape.points : null;
+      const brassPoints = (!isDroplet && isBrass && !isRemovalOutline)
+        ? computeTrianglePoints(
+            centerX,
+            centerY,
+            scaledBaseW + BRASS_TRIANGLE_OUTER_WIDTH_BONUS,
+            scaledHeight + BRASS_TRIANGLE_OUTER_HEIGHT_BONUS,
+            finalAngle,
+          )
+        : null;
+      let brassFilled = false;
+      const fillBrass = () => {
+        if (!brassPoints || brassFilled) return;
+        graphicsEdges.fillStyle(BRASS_PIPE_COLOR, 1);
+        graphicsEdges.fillTriangle(
+          brassPoints[0][0], brassPoints[0][1],
+          brassPoints[1][0], brassPoints[1][1],
+          brassPoints[2][0], brassPoints[2][1],
+        );
+        brassFilled = true;
+      };
+
+      if (e.flowing) {
+        // Animated juice flow effect - filled triangles
+        const animatedColor = getAnimatedJuiceColor(color, triangleIndex || 0, totalTriangles || 1, e.flowStartTime);
+
+        if (animatedColor === null) {
+          // Triangle not yet filled - show outline (same as non-flowing)
+          if (!isRemovalOutline) {
+            strokePipeShape(shape, 2, inactiveColor, 1);
+          }
+        } else {
+          // Triangle is filled - overlay animated color core atop brass shell
+          if (!isRemovalOutline) {
+            fillBrass();
+          }
+          fillPipeShape(shape, animatedColor.color, animatedColor.alpha);
+        }
+      } else if (e.on && ENABLE_IDLE_EDGE_ANIMATION) {
+        // Edge is on but not flowing - show hollow triangles with same animation pattern
+        const animatedColor = getAnimatedJuiceColor(color, triangleIndex || 0, totalTriangles || 1, e.flowStartTime);
+        
+        if (animatedColor === null) {
+          // Triangle not yet reached in animation - show outline
+          if (!isRemovalOutline) {
+            strokePipeShape(shape, 2, inactiveColor, 1);
+          }
+        } else {
+          // Triangle is in animation cycle - show hollow triangle with animated color outline
+          strokePipeShape(shape, 3, animatedColor.color, animatedColor.alpha);
+        }
+      } else {
+        // Edge is not on - show outline
+        if (!isRemovalOutline) {
+          strokePipeShape(shape, 2, inactiveColor, 1);
+        }
+      }
+
+      if (isRemovalOutline) {
+        strokePipeShape(shape, 3, 0x000000, 1);
+        return;
+      }
+
+      if (brassPoints) {
+        graphicsEdges.lineStyle(BRASS_OUTER_OUTLINE_THICKNESS, BRASS_PIPE_OUTLINE_COLOR, 0.95);
+        graphicsEdges.strokeTriangle(
+          brassPoints[0][0], brassPoints[0][1],
+          brassPoints[1][0], brassPoints[1][1],
+          brassPoints[2][0], brassPoints[2][1],
+        );
+      }
+
+      // Add hover border using the same color
+      if (isHovered) {
+        strokePipeShape(shape, 2, color, 1);
+      }
     };
 
-    let primaryFillColor = null;
-    let primaryFillAlpha = 1;
-    let triangleFilled = false;
-
-    if (e.flowing) {
-      // Animated juice flow effect - filled triangles
-      const animatedColor = getAnimatedJuiceColor(color, triangleIndex || 0, totalTriangles || 1, e.flowStartTime);
-
-      if (animatedColor === null) {
-        // Triangle not yet filled - show outline (same as non-flowing)
-        if (!isRemovalOutline) {
-          graphicsEdges.lineStyle(2, inactiveColor, 1);
-          graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
-        }
-      } else {
-        // Triangle is filled - overlay animated color core atop brass shell
-        if (!isRemovalOutline) {
-          fillBrass();
-        }
-        graphicsEdges.fillStyle(animatedColor.color, animatedColor.alpha);
-        graphicsEdges.fillTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
-        primaryFillColor = animatedColor.color;
-        primaryFillAlpha = animatedColor.alpha;
-        triangleFilled = true;
-      }
-    } else if (e.on && ENABLE_IDLE_EDGE_ANIMATION) {
-      // Edge is on but not flowing - show hollow triangles with same animation pattern
-      const animatedColor = getAnimatedJuiceColor(color, triangleIndex || 0, totalTriangles || 1, e.flowStartTime);
-      
-      if (animatedColor === null) {
-        // Triangle not yet reached in animation - show outline
-        if (!isRemovalOutline) {
-          graphicsEdges.lineStyle(2, inactiveColor, 1);
-          graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
-        }
-      } else {
-        // Triangle is in animation cycle - show hollow triangle with animated color outline
-        graphicsEdges.lineStyle(3, animatedColor.color, animatedColor.alpha);
-        graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
-      }
-    } else {
-      // Edge is not on - show outline
-      if (!isRemovalOutline) {
-        graphicsEdges.lineStyle(2, inactiveColor, 1);
-        graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
-      }
-    }
-
-    if (pipeType === 'rage' && !isRemovalOutline) {
-      const overlayColor = (triangleFilled && primaryFillColor != null) ? primaryFillColor : RAGE_PIPE_COLOR;
-      const overlayAlpha = triangleFilled ? primaryFillAlpha : 0.45;
-      drawRageOverlays(p1, p2, p3, overlayColor, overlayAlpha);
-    }
-
-    if (isRemovalOutline) {
-      graphicsEdges.lineStyle(3, 0x000000, 1);
-      graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
-      return;
-    }
-
-    if (brassPoints) {
-      graphicsEdges.lineStyle(BRASS_OUTER_OUTLINE_THICKNESS, BRASS_PIPE_OUTLINE_COLOR, 0.95);
-      graphicsEdges.strokeTriangle(
-        brassPoints[0][0], brassPoints[0][1],
-        brassPoints[1][0], brassPoints[1][1],
-        brassPoints[2][0], brassPoints[2][1],
-      );
-    }
-
-    // Add hover border using the same color
-    if (isHovered) {
-      graphicsEdges.lineStyle(2, color, 1);
-      graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
-    }
+    forEachPipeOffset(pipeType, angle, (dx, dy) => {
+      drawInstance(cx + dx, cy + dy);
+    });
   }
 
   function drawExplosionTriangle(cx, cy, baseW, height, angle, color, alpha, outlineColor, pipeType) {
@@ -10018,37 +10130,6 @@ function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, 
       a[0] + (b[0] - a[0]) * t,
       a[1] + (b[1] - a[1]) * t,
     ];
-  }
-
-  function drawRageOverlays(pTip, pBaseLeft, pBaseRight, color, alpha) {
-    const spikeCount = 3;
-    const highlightColor = lerpColor(color, 0xffffff, 0.35);
-
-    for (let i = 0; i < spikeCount; i++) {
-      const t0 = i / spikeCount;
-      const t1 = (i + 1) / spikeCount;
-      const start = lerpPoint(pBaseLeft, pBaseRight, t0);
-      const end = lerpPoint(pBaseLeft, pBaseRight, t1);
-      const mid = lerpPoint(start, end, 0.5);
-      const stretch = 1.05 - 0.08 * Math.abs(i - (spikeCount - 1) / 2);
-      const spikeTip = [
-        mid[0] + (pTip[0] - mid[0]) * stretch,
-        mid[1] + (pTip[1] - mid[1]) * stretch,
-      ];
-      graphicsEdges.fillStyle(highlightColor, Math.min(1, alpha * 0.95));
-      graphicsEdges.fillTriangle(
-        spikeTip[0], spikeTip[1],
-        start[0], start[1],
-        end[0], end[1],
-      );
-    }
-
-    const baseCenter = lerpPoint(pBaseLeft, pBaseRight, 0.5);
-    const baseRadius = Math.hypot(pBaseRight[0] - pBaseLeft[0], pBaseRight[1] - pBaseLeft[1]) / 2;
-    graphicsEdges.fillStyle(color, Math.min(1, alpha * 0.35));
-    graphicsEdges.fillCircle(baseCenter[0], baseCenter[1], baseRadius * 0.7);
-    graphicsEdges.lineStyle(1.4, lerpColor(color, 0x000000, 0.35), Math.min(1, alpha * 0.75));
-    graphicsEdges.strokeCircle(baseCenter[0], baseCenter[1], baseRadius * 0.72);
   }
 
   function edgeColor(e, fromNodeOrNull) {
