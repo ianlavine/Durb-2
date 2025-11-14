@@ -182,7 +182,7 @@
   const KING_OPTION_VERTICAL_SCALE = 0.55;
   const KING_OPTION_VERTICAL_EXTRA = 6;
   const KING_CROWN_FILL_COLOR = 0xffd700;
-  const KING_CROWN_DEFAULT_HEALTH = 150;
+  const KING_CROWN_DEFAULT_HEALTH = 300;
   let kingCrownDefaultMax = KING_CROWN_DEFAULT_HEALTH;
 
   function computeStandardKingNodeRadius(baseScale = 1) {
@@ -301,19 +301,19 @@
         resources: 'standard',
       }
     : {
-        screen: 'flat',
-        brass: 'cross',
+        screen: 'warp',
+        brass: 'gem',
         brassStart: 'owned',
-        bridgeCost: 0.9,
-        gameStart: 'hidden-split',
+        bridgeCost: 1.0,
+        gameStart: 'open',
         startingNodeJuice: 300,
-        passiveIncome: 0,
-        neutralCaptureGold: 10,
+        passiveIncome: 1,
+        neutralCaptureGold: 0,
         ringJuiceToGoldRatio: 30,
         ringPayoutGold: 10,
         winCondition: 'king',
         kingCrownHealth: KING_CROWN_DEFAULT_HEALTH,
-        resources: 'standard',
+        resources: 'gems',
       };
 
   const INITIAL_MODE = LEGACY_DEFAULT_MODE || (IS_LEGACY_CLIENT ? 'basic' : 'flat');
@@ -399,7 +399,7 @@
   const MONEY_SPEND_STROKE = '#4e2a10';
   const MONEY_GAIN_COLOR = '#ffd700';
   const RESOURCE_EMOJIS = {
-    money: '$',
+    money: '',
     gem: {
       warp: '⭐',
       brass: '🟫',
@@ -5988,6 +5988,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     const rewardTypeRaw = typeof msg.rewardType === 'string' ? msg.rewardType.trim().toLowerCase() : null;
     const rewardKeyRaw = typeof msg.rewardKey === 'string' ? msg.rewardKey : null;
     const normalizedRewardType = normalizeNodeResourceType(rewardTypeRaw === 'gem' ? 'gem' : 'money');
+    const neutralCaptureEnabled = coerceNeutralCaptureReward(selectedSettings.neutralCaptureGold) > 0;
 
     if (normalizedRewardType === 'gem') {
       const normalizedKey = normalizeNodeResourceKey(rewardKeyRaw);
@@ -6005,6 +6006,10 @@ function fallbackRemoveEdgesForNode(nodeId) {
         { strokeColor: '#264a2a' }
       );
       playCaptureDing();
+      return;
+    }
+
+    if (!neutralCaptureEnabled) {
       return;
     }
 
@@ -6733,39 +6738,35 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
       const numberOffset = canShowEmoji ? -Math.min(r * 0.55, 12) : 0;
 
-      // Show juice text if toggle is enabled
-      if (persistentNumbers) {
+      const shouldShowJuiceText = persistentNumbers && n.owner != null;
+      if (shouldShowJuiceText) {
         const juiceValue = Math.floor(n.size || 0); // No decimals
         let juiceText = nodeJuiceTexts.get(id);
-        
+
         if (!juiceText) {
           // Create new text object (world-space; camera handles positioning)
           juiceText = sceneRef.add.text(nx, ny + numberOffset, juiceValue.toString(), {
             font: '12px monospace',
-            color: n.owner === null ? '#ffffff' : '#000000', // White for neutrals, black for owned
+            color: '#000000',
             align: 'center'
           });
           juiceText.setOrigin(0.5, 0.5); // Center the text
           nodeJuiceTexts.set(id, juiceText);
-          // Cache last owner to avoid unnecessary color updates
           juiceText._lastOwner = n.owner;
         } else {
           // Always re-center text to the node's current screen position
           juiceText.setPosition(nx, ny + numberOffset);
-          // Update only when changed to reduce per-frame overhead
           const newTextValue = juiceValue.toString();
           if (juiceText.text !== newTextValue) {
             juiceText.setText(newTextValue);
           }
-          const desiredColor = (n.owner === null ? '#ffffff' : '#000000');
           if (juiceText._lastOwner !== n.owner) {
-            juiceText.setColor(desiredColor);
+            juiceText.setColor('#000000');
             juiceText._lastOwner = n.owner;
           }
           if (!juiceText.visible) juiceText.setVisible(true);
         }
       } else {
-        // Hide juice text if toggle is disabled
         const juiceText = nodeJuiceTexts.get(id);
         if (juiceText) {
           juiceText.setVisible(false);
@@ -9328,6 +9329,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
     const triH = PIPE_TRIANGLE_HEIGHT;
     const triW = PIPE_TRIANGLE_WIDTH;
+    const pipeType = prePipe?.pipeType || 'normal';
     const spacing = Math.max(1, pipeSpacingForType(pipeType));
     const count = Math.max(1, Math.floor(len / spacing));
     const actualSpacing = len / count;
@@ -9337,8 +9339,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
     const outlineColor = Number.isFinite(prePipe.outlineColor) ? prePipe.outlineColor : PRE_PIPE_OUTLINE_COLOR;
     const outlineAlpha = waitingOwnership ? 0.8 : (waitingGold ? 0.55 : 0.3);
     const wave = Math.sin(animationTime * PRE_PIPE_SHAKE_SPEED);
-
-    const pipeType = prePipe?.pipeType || 'normal';
 
     for (let i = 0; i < count; i++) {
       const alternatingSign = (i % 2 === 0) ? 1 : -1;
