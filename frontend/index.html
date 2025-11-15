@@ -6,6 +6,10 @@
     <title>Durb 2</title>
     <style>
       html, body { margin: 0; padding: 0; background: #111; height: 100vh; min-height: 100vh; overflow: hidden; }
+      :root {
+        /* Adjust this to control the width of the Options dropdown */
+        --mode-options-panel-width: 460px;
+      }
       #game { width: 100%; height: 100%; overflow: hidden; }
       #menu {
         position: fixed;
@@ -61,12 +65,8 @@
       
       /* Progress bar styles */
       #progressBar { 
-        position: absolute; 
-        top: 15px; 
-        left: 50%; 
-        transform: translateX(-50%); 
-        width: 80%; 
-        max-width: 800px; 
+        position: relative; 
+        width: min(800px, calc(100% - 32px)); 
         height: 30px; 
         background: #333; 
         border: 2px solid #666; 
@@ -74,6 +74,7 @@
         overflow: hidden; 
         z-index: 10; 
         display: none; 
+        margin: 0 auto; 
       }
       #progressBarInner { 
         position: relative; 
@@ -112,18 +113,15 @@
         display: none; 
       }
       #progressBarNames {
-        position: absolute;
-        top: 38px;
-        left: 50%;
-        transform: translateX(-50%);
-        width: 80%;
-        max-width: 800px;
+        position: relative;
+        width: min(800px, calc(100% - 32px));
         display: none;
         align-items: stretch;
         justify-content: stretch;
         pointer-events: none;
         font-family: "Fira Code", "Source Code Pro", monospace;
         color: #f5f5f5;
+        margin: 0 auto;
       }
       .progressNameCell {
         display: flex;
@@ -151,10 +149,15 @@
         top: 0;
         left: 0;
         right: 0;
-        height: 60px;
+        min-height: 58px;
         background: #000000;
         z-index: 9;
         display: none;
+        align-items: center;
+        justify-content: center;
+        padding: clamp(4px, 1.2vh, 10px) clamp(16px, 4vw, 48px);
+        box-sizing: border-box;
+        font-family: "Fira Code", "Source Code Pro", monospace;
       }
 
       /* Bottom UI background bar */
@@ -163,13 +166,14 @@
         bottom: 0;
         left: 0;
         right: 0;
-        height: 50px;
         background: #000000;
         z-index: 9;
         display: none;
+        flex-direction: column;
         align-items: center;
         justify-content: center;
-        padding: 0 clamp(16px, 4vw, 48px);
+        gap: 4px;
+        padding: clamp(3px, 1vh, 6px) clamp(16px, 4vw, 48px) clamp(6px, 1.6vh, 10px);
         box-sizing: border-box;
         font-family: "Fira Code", "Source Code Pro", monospace;
       }
@@ -179,6 +183,9 @@
         justify-content: center;
         gap: clamp(18px, 4vw, 32px);
         pointer-events: none;
+      }
+      .top-ui-bar .gem-counts {
+        margin-top: clamp(6px, 1.4vh, 14px);
       }
       .gem-counts.interactive {
         pointer-events: auto;
@@ -597,7 +604,7 @@
         display: none;
         flex-direction: column;
         align-items: stretch;
-        min-width: clamp(320px, 36vw, 420px);
+        width: min(var(--mode-options-panel-width), calc(100vw - 48px));
         padding: 12px 16px;
         border-radius: 10px;
         border: 1px solid rgba(255,255,255,0.15);
@@ -629,6 +636,10 @@
         gap: 10px;
         width: 100%;
         flex-wrap: wrap;
+      }
+
+      .mode-option-group.hidden-setting {
+        display: none;
       }
 
       .mode-option-group .selector-label {
@@ -859,21 +870,21 @@
               <button class="mode-option-button active" data-setting="resources" data-value="gems">Gems</button>
             </div>
           </div>
-          <div class="mode-option-group" data-setting-group="startingJuice">
+          <div class="mode-option-group hidden-setting" data-setting-group="startingJuice">
             <span class="selector-label">Starting Juice</span>
             <div class="mode-slider">
               <input type="range" id="startingJuiceSlider" min="50" max="300" step="10" value="300" aria-label="Starting node juice" />
               <span id="startingJuiceValue">300</span>
             </div>
           </div>
-          <div class="mode-option-group" data-setting-group="kingCrownHealth">
+          <div class="mode-option-group hidden-setting" data-setting-group="kingCrownHealth">
             <span class="selector-label">Crown Health</span>
             <div class="mode-slider">
               <input type="range" id="crownHealthSlider" min="1" max="300" step="1" value="300" aria-label="Crown health buffer" />
               <span id="crownHealthValue">300</span>
             </div>
           </div>
-          <div class="mode-option-group bridge-cost-group" data-setting-group="bridgeCost">
+          <div class="mode-option-group bridge-cost-group hidden-setting" data-setting-group="bridgeCost">
             <span class="selector-label">Bridge Cost</span>
             <div class="mode-slider">
               <input type="range" id="bridgeCostSlider" min="0.5" max="1" step="0.1" value="1" aria-label="Bridge cost multiplier" />
@@ -894,18 +905,46 @@
               <span id="neutralCaptureValue">0</span>
             </div>
           </div>
-          <div class="mode-option-group" data-setting-group="ringJuiceRatio">
+          <div class="mode-option-group hidden-setting" data-setting-group="ringJuiceRatio">
             <span class="selector-label">Ring Ratio</span>
             <div class="mode-slider">
               <input type="range" id="ringRatioSlider" min="5" max="30" step="1" value="30" aria-label="Juice to gold ratio" />
               <span id="ringRatioValue">30</span>
             </div>
           </div>
-          <div class="mode-option-group" data-setting-group="ringPayout">
+          <div class="mode-option-group hidden-setting" data-setting-group="ringPayout">
             <span class="selector-label">Ring Payout</span>
             <div class="mode-slider">
               <input type="range" id="ringPayoutSlider" min="1" max="20" step="1" value="10" aria-label="Gold needed to pop ring" />
               <span id="ringPayoutValue">10</span>
+            </div>
+          </div>
+          <div class="mode-option-group" data-setting-group="warpGemCount">
+            <span class="selector-label">Warp Gems</span>
+            <div class="mode-slider">
+              <input type="range" id="warpGemSlider" min="0" max="10" step="1" value="3" aria-label="Warp gem count" />
+              <span id="warpGemValue">3</span>
+            </div>
+          </div>
+          <div class="mode-option-group" data-setting-group="brassGemCount">
+            <span class="selector-label">Brass Gems</span>
+            <div class="mode-slider">
+              <input type="range" id="brassGemSlider" min="0" max="10" step="1" value="7" aria-label="Brass gem count" />
+              <span id="brassGemValue">7</span>
+            </div>
+          </div>
+          <div class="mode-option-group" data-setting-group="rageGemCount">
+            <span class="selector-label">Rage Gems</span>
+            <div class="mode-slider">
+              <input type="range" id="rageGemSlider" min="0" max="10" step="1" value="4" aria-label="Rage gem count" />
+              <span id="rageGemValue">4</span>
+            </div>
+          </div>
+          <div class="mode-option-group" data-setting-group="reverseGemCount">
+            <span class="selector-label">Reverse Gems</span>
+            <div class="mode-slider">
+              <input type="range" id="reverseGemSlider" min="0" max="10" step="1" value="6" aria-label="Reverse gem count" />
+              <span id="reverseGemValue">6</span>
             </div>
           </div>
         </div>
@@ -914,8 +953,7 @@
     </div>
     
     <!-- UI Background Bars -->
-    <div class="top-ui-bar" id="topUiBar"></div>
-    <div class="bottom-ui-bar" id="bottomUiBar">
+    <div class="top-ui-bar" id="topUiBar">
       <div class="gem-counts" id="gemCountsDisplay">
         <div class="gem-count" data-gem="warp">
           <span class="gem-icon">⭐</span>
@@ -935,14 +973,15 @@
         </div>
       </div>
     </div>
-    
-    <!-- Progress bar for node count victory -->
-    <div id="progressBar">
-      <div id="progressBarInner"></div>
-      <div class="progressMarker" id="progressMarkerLeft"></div>
-      <div class="progressMarker" id="progressMarkerRight"></div>
+    <div class="bottom-ui-bar" id="bottomUiBar">
+      <!-- Progress bar for node count victory -->
+      <div id="progressBar">
+        <div id="progressBarInner"></div>
+        <div class="progressMarker" id="progressMarkerLeft"></div>
+        <div class="progressMarker" id="progressMarkerRight"></div>
+      </div>
+      <div id="progressBarNames"></div>
     </div>
-    <div id="progressBarNames"></div>
     
     <!-- Timer display -->
     <div id="timerDisplay">7:00</div>

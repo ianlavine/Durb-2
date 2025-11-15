@@ -295,6 +295,10 @@
         neutralCaptureGold: 10,
         ringJuiceToGoldRatio: 30,
         ringPayoutGold: 10,
+        warpGemCount: 3,
+        brassGemCount: 7,
+        rageGemCount: 4,
+        reverseGemCount: 6,
         baseMode: LEGACY_DEFAULT_MODE || 'basic',
         derivedMode: LEGACY_DEFAULT_MODE || 'basic',
         winCondition: 'king',
@@ -312,6 +316,10 @@
         neutralCaptureGold: 0,
         ringJuiceToGoldRatio: 30,
         ringPayoutGold: 10,
+        warpGemCount: 3,
+        brassGemCount: 7,
+        rageGemCount: 4,
+        reverseGemCount: 6,
         winCondition: 'king',
         kingCrownHealth: KING_CROWN_DEFAULT_HEALTH,
         resources: 'gems',
@@ -342,6 +350,14 @@
   let startingJuiceValueLabel = null;
   let crownHealthSlider = null;
   let crownHealthValueLabel = null;
+  let warpGemSlider = null;
+  let warpGemValueLabel = null;
+  let brassGemSlider = null;
+  let brassGemValueLabel = null;
+  let rageGemSlider = null;
+  let rageGemValueLabel = null;
+  let reverseGemSlider = null;
+  let reverseGemValueLabel = null;
   const BRIDGE_COST_MIN = 0.5;
   const BRIDGE_COST_MAX = 1.0;
   const BRIDGE_COST_STEP = 0.1;
@@ -363,6 +379,9 @@
   const CROWN_HEALTH_MIN = 1;
   const CROWN_HEALTH_MAX = 300;
   const CROWN_HEALTH_STEP = 1;
+  const GEM_COUNT_MIN = 0;
+  const GEM_COUNT_MAX = 10;
+  const GEM_COUNT_STEP = 1;
   const MODE_LABELS = {
     sparse: 'Sparse',
     basic: 'OG Durb',
@@ -532,6 +551,22 @@
       return DEFAULT_MODE_SETTINGS.kingCrownHealth ?? KING_CROWN_DEFAULT_HEALTH;
     }
     const clamped = Math.min(CROWN_HEALTH_MAX, Math.max(CROWN_HEALTH_MIN, numeric));
+    return Math.round(clamped);
+  }
+
+  function coerceGemCount(value, gemKey = 'warp') {
+    const numeric = Number(value);
+    const fallbackMap = {
+      warp: DEFAULT_MODE_SETTINGS.warpGemCount ?? 0,
+      brass: DEFAULT_MODE_SETTINGS.brassGemCount ?? 0,
+      rage: DEFAULT_MODE_SETTINGS.rageGemCount ?? 0,
+      reverse: DEFAULT_MODE_SETTINGS.reverseGemCount ?? 0,
+    };
+    const fallback = Object.prototype.hasOwnProperty.call(fallbackMap, gemKey)
+      ? fallbackMap[gemKey]
+      : 0;
+    if (!Number.isFinite(numeric)) return Math.round(fallback);
+    const clamped = Math.min(GEM_COUNT_MAX, Math.max(GEM_COUNT_MIN, numeric));
     return Math.round(clamped);
   }
 
@@ -1166,6 +1201,26 @@
     } else {
       next.kingCrownHealth = coerceKingCrownHealth(next.kingCrownHealth);
     }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'warpGemCount')) {
+      next.warpGemCount = coerceGemCount(overrides.warpGemCount, 'warp');
+    } else {
+      next.warpGemCount = coerceGemCount(next.warpGemCount, 'warp');
+    }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'brassGemCount')) {
+      next.brassGemCount = coerceGemCount(overrides.brassGemCount, 'brass');
+    } else {
+      next.brassGemCount = coerceGemCount(next.brassGemCount, 'brass');
+    }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'rageGemCount')) {
+      next.rageGemCount = coerceGemCount(overrides.rageGemCount, 'rage');
+    } else {
+      next.rageGemCount = coerceGemCount(next.rageGemCount, 'rage');
+    }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'reverseGemCount')) {
+      next.reverseGemCount = coerceGemCount(overrides.reverseGemCount, 'reverse');
+    } else {
+      next.reverseGemCount = coerceGemCount(next.reverseGemCount, 'reverse');
+    }
     if (Object.prototype.hasOwnProperty.call(overrides, 'winCondition')) {
       next.winCondition = normalizeWinCondition(overrides.winCondition);
     } else {
@@ -1204,6 +1259,7 @@
     syncRingPayoutSlider();
     syncStartingJuiceSlider();
     syncCrownHealthSlider();
+    syncGemCountSliders();
     updatePlayBotAvailability(true);
   }
 
@@ -1220,6 +1276,10 @@
       ringJuiceToGoldRatio: coerceRingRatio(selectedSettings.ringJuiceToGoldRatio),
       ringPayoutGold: coerceRingPayout(selectedSettings.ringPayoutGold),
       kingCrownHealth: coerceKingCrownHealth(selectedSettings.kingCrownHealth),
+      warpGemCount: coerceGemCount(selectedSettings.warpGemCount, 'warp'),
+      brassGemCount: coerceGemCount(selectedSettings.brassGemCount, 'brass'),
+      rageGemCount: coerceGemCount(selectedSettings.rageGemCount, 'rage'),
+      reverseGemCount: coerceGemCount(selectedSettings.reverseGemCount, 'reverse'),
       baseMode: selectedMode,
       derivedMode: selectedMode,
       winCondition: selectedSettings.winCondition || 'dominate',
@@ -1242,6 +1302,10 @@
     if (Object.prototype.hasOwnProperty.call(payload, 'ringJuiceToGoldRatio')) overrides.ringJuiceToGoldRatio = payload.ringJuiceToGoldRatio;
     if (Object.prototype.hasOwnProperty.call(payload, 'ringPayoutGold')) overrides.ringPayoutGold = payload.ringPayoutGold;
     if (Object.prototype.hasOwnProperty.call(payload, 'kingCrownHealth')) overrides.kingCrownHealth = payload.kingCrownHealth;
+    if (Object.prototype.hasOwnProperty.call(payload, 'warpGemCount')) overrides.warpGemCount = payload.warpGemCount;
+    if (Object.prototype.hasOwnProperty.call(payload, 'brassGemCount')) overrides.brassGemCount = payload.brassGemCount;
+    if (Object.prototype.hasOwnProperty.call(payload, 'rageGemCount')) overrides.rageGemCount = payload.rageGemCount;
+    if (Object.prototype.hasOwnProperty.call(payload, 'reverseGemCount')) overrides.reverseGemCount = payload.reverseGemCount;
     if (Object.prototype.hasOwnProperty.call(payload, 'winCondition')) overrides.winCondition = payload.winCondition;
     if (Object.prototype.hasOwnProperty.call(payload, 'resources')) overrides.resources = payload.resources;
     applySelectedSettings(overrides);
@@ -1297,6 +1361,19 @@
     const value = coerceKingCrownHealth(selectedSettings.kingCrownHealth);
     crownHealthSlider.value = String(value);
     crownHealthValueLabel.textContent = String(value);
+  }
+
+  function syncGemCountSliderControl(sliderEl, labelEl, value) {
+    if (!sliderEl || !labelEl) return;
+    sliderEl.value = String(value);
+    labelEl.textContent = String(value);
+  }
+
+  function syncGemCountSliders() {
+    syncGemCountSliderControl(warpGemSlider, warpGemValueLabel, coerceGemCount(selectedSettings.warpGemCount, 'warp'));
+    syncGemCountSliderControl(brassGemSlider, brassGemValueLabel, coerceGemCount(selectedSettings.brassGemCount, 'brass'));
+    syncGemCountSliderControl(rageGemSlider, rageGemValueLabel, coerceGemCount(selectedSettings.rageGemCount, 'rage'));
+    syncGemCountSliderControl(reverseGemSlider, reverseGemValueLabel, coerceGemCount(selectedSettings.reverseGemCount, 'reverse'));
   }
 
   function pipeStartRequiresOwnership() {
@@ -3113,6 +3190,14 @@ function clearBridgeSelection() {
     startingJuiceValueLabel = document.getElementById('startingJuiceValue');
     crownHealthSlider = document.getElementById('crownHealthSlider');
     crownHealthValueLabel = document.getElementById('crownHealthValue');
+    warpGemSlider = document.getElementById('warpGemSlider');
+    warpGemValueLabel = document.getElementById('warpGemValue');
+    brassGemSlider = document.getElementById('brassGemSlider');
+    brassGemValueLabel = document.getElementById('brassGemValue');
+    rageGemSlider = document.getElementById('rageGemSlider');
+    rageGemValueLabel = document.getElementById('rageGemValue');
+    reverseGemSlider = document.getElementById('reverseGemSlider');
+    reverseGemValueLabel = document.getElementById('reverseGemValue');
 
     if (modeOptionButtons.length) {
       modeOptionButtons.forEach((btn) => {
@@ -3212,6 +3297,25 @@ function clearBridgeSelection() {
       crownHealthSlider.addEventListener('input', handler);
       crownHealthSlider.addEventListener('change', handler);
     }
+
+    const bindGemSlider = (sliderEl, changeKey) => {
+      if (!sliderEl) return null;
+      sliderEl.min = String(GEM_COUNT_MIN);
+      sliderEl.max = String(GEM_COUNT_MAX);
+      sliderEl.step = String(GEM_COUNT_STEP);
+      const handler = (event) => {
+        const sliderValue = Number(event.target.value);
+        applySelectedSettings({ [changeKey]: sliderValue });
+      };
+      sliderEl.addEventListener('input', handler);
+      sliderEl.addEventListener('change', handler);
+      return handler;
+    };
+
+    bindGemSlider(warpGemSlider, 'warpGemCount');
+    bindGemSlider(brassGemSlider, 'brassGemCount');
+    bindGemSlider(rageGemSlider, 'rageGemCount');
+    bindGemSlider(reverseGemSlider, 'reverseGemCount');
 
     const closeModePanel = () => {
       if (!modeOptionsPanel) return;

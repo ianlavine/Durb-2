@@ -1,5 +1,6 @@
 import copy
 import json
+import math
 import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
@@ -7,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import websockets
 
 from .constants import (
+    DEFAULT_GEM_COUNTS,
     DEFAULT_GAME_MODE,
     GAME_MODES,
     MAX_FRIEND_PLAYERS,
@@ -206,6 +208,10 @@ class MessageRouter:
             "neutralCaptureGold": 10.0,
             "ringJuiceToGoldRatio": 30.0,
             "ringPayoutGold": 10.0,
+            "warpGemCount": DEFAULT_GEM_COUNTS.get("warp", 3),
+            "brassGemCount": DEFAULT_GEM_COUNTS.get("brass", 7),
+            "rageGemCount": DEFAULT_GEM_COUNTS.get("rage", 4),
+            "reverseGemCount": DEFAULT_GEM_COUNTS.get("reverse", 6),
             "startingNodeJuice": 300.0,
             "winCondition": "king",
             "kingCrownHealth": KING_CROWN_MAX_HEALTH,
@@ -214,6 +220,18 @@ class MessageRouter:
         if not isinstance(payload, dict):
             settings["pipeStart"] = settings["brassStart"]
             return settings
+
+        def sanitize_gem_count(raw_value: Any, fallback: float) -> int:
+            if isinstance(raw_value, str):
+                raw_value = raw_value.strip()
+            try:
+                parsed = float(raw_value)
+            except (TypeError, ValueError):
+                return int(round(fallback))
+            if math.isnan(parsed):
+                return int(round(fallback))
+            clamped = max(0.0, min(10.0, parsed))
+            return int(round(clamped))
 
         screen_option = str(payload.get("screen", settings["screen"])).strip().lower()
         if screen_option in {"warp", "semi", "flat"}:
@@ -313,6 +331,19 @@ class MessageRouter:
             parsed_crown = None
         if parsed_crown is not None and parsed_crown > 0:
             settings["kingCrownHealth"] = max(1.0, min(300.0, round(parsed_crown, 3)))
+
+        gem_field_map = (
+            ("warpGemCount", "warp"),
+            ("brassGemCount", "brass"),
+            ("rageGemCount", "rage"),
+            ("reverseGemCount", "reverse"),
+        )
+        for field_name, gem_key in gem_field_map:
+            current_value = settings[field_name]
+            if field_name in payload:
+                settings[field_name] = sanitize_gem_count(payload.get(field_name), current_value)
+            else:
+                settings[field_name] = int(round(current_value))
 
         win_condition_value = payload.get("winCondition", settings.get("winCondition"))
         if isinstance(win_condition_value, str) and win_condition_value.strip().lower() == "king":

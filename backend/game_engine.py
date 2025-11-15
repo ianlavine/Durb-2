@@ -11,6 +11,7 @@ from .constants import (
     BRIDGE_BASE_COST,
     BRIDGE_COST_PER_UNIT_DISTANCE,
     BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE,
+    DEFAULT_GEM_COUNTS,
     DEFAULT_GAME_MODE,
     OVERFLOW_PENDING_GOLD_PAYOUT,
     PRODUCTION_RATE_PER_NODE,
@@ -169,6 +170,24 @@ class GameEngine:
         starting_node_juice_overridden = False
         win_condition = "dominate"
         crown_health_value = KING_CROWN_MAX_HEALTH
+        gem_counts = {
+            "warp": int(DEFAULT_GEM_COUNTS.get("warp", 3)),
+            "brass": int(DEFAULT_GEM_COUNTS.get("brass", 7)),
+            "rage": int(DEFAULT_GEM_COUNTS.get("rage", 4)),
+            "reverse": int(DEFAULT_GEM_COUNTS.get("reverse", 6)),
+        }
+
+        def sanitize_gem_count(raw_value: Any, fallback: int) -> int:
+            if isinstance(raw_value, str):
+                raw_value = raw_value.strip()
+            try:
+                parsed = float(raw_value)
+            except (TypeError, ValueError):
+                return fallback
+            if math.isnan(parsed):
+                return fallback
+            clamped = max(0.0, min(10.0, parsed))
+            return int(round(clamped))
 
         if isinstance(options, dict):
             screen_option = str(options.get("screen", "")).strip().lower()
@@ -278,6 +297,11 @@ class GameEngine:
             elif resources_option == "standard":
                 resource_mode = "standard"
 
+            gem_counts["warp"] = sanitize_gem_count(options.get("warpGemCount", gem_counts["warp"]), gem_counts["warp"])
+            gem_counts["brass"] = sanitize_gem_count(options.get("brassGemCount", gem_counts["brass"]), gem_counts["brass"])
+            gem_counts["rage"] = sanitize_gem_count(options.get("rageGemCount", gem_counts["rage"]), gem_counts["rage"])
+            gem_counts["reverse"] = sanitize_gem_count(options.get("reverseGemCount", gem_counts["reverse"]), gem_counts["reverse"])
+
         if resource_mode == "gems":
             auto_brass_on_cross = False
             manual_brass_selection = True
@@ -307,7 +331,7 @@ class GameEngine:
         else:
             brass_double_cost = manual_brass_selection or normalized_mode == "cross"
 
-        self._apply_resource_distribution(resource_mode)
+        self._apply_resource_distribution(resource_mode, gem_counts)
 
         sanitized_options: Dict[str, Any] = {
             "screen": screen_variant,
@@ -321,6 +345,10 @@ class GameEngine:
             "neutralCaptureGold": neutral_capture_reward,
             "ringJuiceToGoldRatio": overflow_ratio,
             "ringPayoutGold": overflow_payout,
+            "warpGemCount": gem_counts["warp"],
+            "brassGemCount": gem_counts["brass"],
+            "rageGemCount": gem_counts["rage"],
+            "reverseGemCount": gem_counts["reverse"],
             "winCondition": win_condition,
             "kingCrownHealth": crown_health_value,
             "resources": resource_mode,
@@ -351,7 +379,7 @@ class GameEngine:
 
         return sanitized_options
 
-    def _apply_resource_distribution(self, resource_mode: str) -> None:
+    def _apply_resource_distribution(self, resource_mode: str, gem_counts: Optional[Dict[str, int]] = None) -> None:
         if not self.state:
             return
 
@@ -374,11 +402,28 @@ class GameEngine:
         if normalized != "gems":
             return
 
+        plan_source: Dict[str, Any] = DEFAULT_GEM_COUNTS
+        if isinstance(gem_counts, dict):
+            plan_source = gem_counts
+
+        def resolve_gem_target(key: str) -> int:
+            raw_value = plan_source.get(key, DEFAULT_GEM_COUNTS.get(key, 0))
+            if isinstance(raw_value, str):
+                raw_value = raw_value.strip()
+            try:
+                numeric = float(raw_value)
+            except (TypeError, ValueError):
+                numeric = float(DEFAULT_GEM_COUNTS.get(key, 0))
+            if math.isnan(numeric):
+                numeric = float(DEFAULT_GEM_COUNTS.get(key, 0))
+            clamped = max(0.0, min(10.0, numeric))
+            return int(round(clamped))
+
         gem_plan = [
-            ("warp", 3),
-            ("brass", 7),
-            ("rage", 4),
-            ("reverse", 6),
+            ("warp", resolve_gem_target("warp")),
+            ("brass", resolve_gem_target("brass")),
+            ("rage", resolve_gem_target("rage")),
+            ("reverse", resolve_gem_target("reverse")),
         ]
 
         seed_basis = 0
