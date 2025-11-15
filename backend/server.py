@@ -200,6 +200,11 @@ class WebSocketServer:
                         await self.message_router._send_safe(payout_ws, json.dumps(payout_msg))
                     state.pending_overflow_payouts = []
 
+                if hasattr(state, "pending_edge_reversal_events") and state.pending_edge_reversal_events:
+                    for event in list(state.pending_edge_reversal_events):
+                        await self.message_router._broadcast_to_game(game_info, dict(event))
+                    state.pending_edge_reversal_events = []
+
                 tick_msg = state.to_tick_message(now)
                 await self.message_router._broadcast_to_game(game_info, tick_msg)
 
@@ -267,6 +272,16 @@ class WebSocketServer:
                         )
                         await self._broadcast_to_specific([payout_ws], payout_msg)
                     state.pending_overflow_payouts = []
+
+                if state and getattr(state, "pending_edge_reversal_events", None):
+                    for event in list(state.pending_edge_reversal_events):
+                        for token, websocket in list(self.server_context.get("bot_game_clients", {}).items()):
+                            if not websocket:
+                                continue
+                            player_id = bot_game_engine.token_to_player_id.get(token)
+                            per_player_event = state.build_player_view(copy.deepcopy(event), player_id)
+                            await self._broadcast_to_specific([websocket], json.dumps(per_player_event))
+                    state.pending_edge_reversal_events = []
 
                 if state:
                     base_tick_msg = state.to_tick_message(now)

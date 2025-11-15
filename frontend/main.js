@@ -59,6 +59,18 @@
   let goldDisplay = null; // gold number display in bottom right
   let myPlayerId = null;
   let phase = 'picking';
+  let currentResourceMode = 'standard';
+  let brassGemModeActive = false;
+  let pendingBrassGemSpend = false;
+  let rageGemModeActive = false;
+  let pendingRageGemSpend = false;
+  let reverseGemModeActive = false;
+  let pendingReverseGemSpend = false;
+  let warpGemModeActive = false;
+  let pendingWarpGemSpend = false;
+  let warpGemAutoUnlockActive = false;
+  let activePipeGemKey = null;
+  let lastWarpGemErrorTime = 0;
   let myPicked = false;
   let hiddenStartActive = false;
   let hiddenStartRevealed = false;
@@ -81,9 +93,9 @@
   let mouseWorldX = 0; // current mouse position in world coordinates
   let mouseWorldY = 0;
   let bridgeCostDisplay = null; // current bridge cost display text object
-  let reverseCostDisplay = null; // current reverse edge cost display text object
-  let lastReverseCostPosition = null; // last position where reverse cost was displayed
   let crownHealthDisplays = new Map(); // crown health text displays for king mode, keyed by node ID
+  let reversePipeButtons = new Map();
+  const REVERSE_BUTTON_OFFSET_PX = 24;
 
   function destroyCrownHealthDisplay(nodeId) {
     if (nodeId == null) return;
@@ -132,6 +144,8 @@
   const PRE_PIPE_OUTLINE_COLOR = 0x4a5568;
   const PRE_PIPE_SHAKE_SPEED = 6.4;
   const PRE_PIPE_SHAKE_AMPLITUDE = 2.1;
+  const RAGE_PIPE_OFFSET = 3; // pixels to offset each side of the double fire pipe
+  const REVERSE_PIPE_SPACING_MULTIPLIER = 1.5;
   let pendingSingleClickTimeout = null;
   let pendingSingleClickData = null;
 
@@ -169,7 +183,7 @@
   const KING_OPTION_VERTICAL_SCALE = 0.55;
   const KING_OPTION_VERTICAL_EXTRA = 6;
   const KING_CROWN_FILL_COLOR = 0xffd700;
-  const KING_CROWN_DEFAULT_HEALTH = 150;
+  const KING_CROWN_DEFAULT_HEALTH = 300;
   let kingCrownDefaultMax = KING_CROWN_DEFAULT_HEALTH;
 
   function computeStandardKingNodeRadius(baseScale = 1) {
@@ -199,6 +213,7 @@
   let topUiBar = null;
   let bottomUiBar = null;
   let gemCountsDisplay = null;
+  let gemCountsClickHandlerBound = false;
   const gemCountLabels = new Map();
 
   // Warp mode visuals & geometry (frontend prototype hooked to Warp mode)
@@ -280,6 +295,10 @@
         neutralCaptureGold: 10,
         ringJuiceToGoldRatio: 30,
         ringPayoutGold: 10,
+        warpGemCount: 3,
+        brassGemCount: 7,
+        rageGemCount: 4,
+        reverseGemCount: 6,
         baseMode: LEGACY_DEFAULT_MODE || 'basic',
         derivedMode: LEGACY_DEFAULT_MODE || 'basic',
         winCondition: 'king',
@@ -287,19 +306,23 @@
         resources: 'standard',
       }
     : {
-        screen: 'flat',
-        brass: 'cross',
+        screen: 'warp',
+        brass: 'gem',
         brassStart: 'owned',
-        bridgeCost: 0.9,
-        gameStart: 'hidden-split',
+        bridgeCost: 1.0,
+        gameStart: 'open',
         startingNodeJuice: 300,
-        passiveIncome: 0,
-        neutralCaptureGold: 10,
+        passiveIncome: 1,
+        neutralCaptureGold: 0,
         ringJuiceToGoldRatio: 30,
         ringPayoutGold: 10,
+        warpGemCount: 3,
+        brassGemCount: 7,
+        rageGemCount: 4,
+        reverseGemCount: 6,
         winCondition: 'king',
         kingCrownHealth: KING_CROWN_DEFAULT_HEALTH,
-        resources: 'standard',
+        resources: 'gems',
       };
 
   const INITIAL_MODE = LEGACY_DEFAULT_MODE || (IS_LEGACY_CLIENT ? 'basic' : 'flat');
@@ -327,6 +350,14 @@
   let startingJuiceValueLabel = null;
   let crownHealthSlider = null;
   let crownHealthValueLabel = null;
+  let warpGemSlider = null;
+  let warpGemValueLabel = null;
+  let brassGemSlider = null;
+  let brassGemValueLabel = null;
+  let rageGemSlider = null;
+  let rageGemValueLabel = null;
+  let reverseGemSlider = null;
+  let reverseGemValueLabel = null;
   const BRIDGE_COST_MIN = 0.5;
   const BRIDGE_COST_MAX = 1.0;
   const BRIDGE_COST_STEP = 0.1;
@@ -348,6 +379,9 @@
   const CROWN_HEALTH_MIN = 1;
   const CROWN_HEALTH_MAX = 300;
   const CROWN_HEALTH_STEP = 1;
+  const GEM_COUNT_MIN = 0;
+  const GEM_COUNT_MAX = 10;
+  const GEM_COUNT_STEP = 1;
   const MODE_LABELS = {
     sparse: 'Sparse',
     basic: 'OG Durb',
@@ -371,19 +405,26 @@
   const BRASS_PIPE_COLOR = 0x8b6f14;
   const BRASS_PIPE_DIM_COLOR = 0x46320a;
   const BRASS_PIPE_OUTLINE_COLOR = 0x6f5410;
+  const REVERSE_PIPE_COLOR = 0x4c6ef5;
+  const REVERSE_PIPE_DIM_COLOR = 0x34487c;
   const PIPE_TRIANGLE_HEIGHT = 16;
   const PIPE_TRIANGLE_WIDTH = 12;
   const BRASS_TRIANGLE_OUTER_SCALE = 1.12; // tweak (>1) to adjust how much farther brass extends outward
   const BRASS_TRIANGLE_OUTER_HEIGHT_BONUS = PIPE_TRIANGLE_HEIGHT * (BRASS_TRIANGLE_OUTER_SCALE - 1);
   const BRASS_TRIANGLE_OUTER_WIDTH_BONUS = PIPE_TRIANGLE_WIDTH * (BRASS_TRIANGLE_OUTER_SCALE - 1);
   const BRASS_OUTER_OUTLINE_THICKNESS = 3;
+  const WARP_PIPE_OUTLINE_COLOR = WARP_BORDER_COLOR;
+  const WARP_TRIANGLE_OUTER_SCALE = BRASS_TRIANGLE_OUTER_SCALE;
+  const WARP_TRIANGLE_OUTER_HEIGHT_BONUS = PIPE_TRIANGLE_HEIGHT * (WARP_TRIANGLE_OUTER_SCALE - 1);
+  const WARP_TRIANGLE_OUTER_WIDTH_BONUS = PIPE_TRIANGLE_WIDTH * (WARP_TRIANGLE_OUTER_SCALE - 1);
+  const WARP_OUTER_OUTLINE_THICKNESS = BRASS_OUTER_OUTLINE_THICKNESS;
   const BUILDING_TRIANGLE_INITIAL_SCALE = 1.8; // >1 means newly placed triangles start this many times larger
   const BUILDING_TRIANGLE_SHRINK_DURATION = 0.8; // seconds for construction triangles to shrink back to normal size
   const MONEY_SPEND_COLOR = '#b87333';
   const MONEY_SPEND_STROKE = '#4e2a10';
   const MONEY_GAIN_COLOR = '#ffd700';
   const RESOURCE_EMOJIS = {
-    money: '$',
+    money: '',
     gem: {
       warp: '⭐',
       brass: '🟫',
@@ -400,6 +441,17 @@
     const normalized = value.trim().toLowerCase();
     if (!normalized) return null;
     return GEM_TYPE_ORDER.includes(normalized) ? normalized : null;
+  }
+
+  function normalizePipeType(value) {
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      if (normalized && ['normal', 'gold', 'rage', 'reverse'].includes(normalized)) {
+        return normalized;
+      }
+    }
+    if (value === 'gold') return 'gold';
+    return 'normal';
   }
 
   function createEmptyGemCounts() {
@@ -502,6 +554,22 @@
     return Math.round(clamped);
   }
 
+  function coerceGemCount(value, gemKey = 'warp') {
+    const numeric = Number(value);
+    const fallbackMap = {
+      warp: DEFAULT_MODE_SETTINGS.warpGemCount ?? 0,
+      brass: DEFAULT_MODE_SETTINGS.brassGemCount ?? 0,
+      rage: DEFAULT_MODE_SETTINGS.rageGemCount ?? 0,
+      reverse: DEFAULT_MODE_SETTINGS.reverseGemCount ?? 0,
+    };
+    const fallback = Object.prototype.hasOwnProperty.call(fallbackMap, gemKey)
+      ? fallbackMap[gemKey]
+      : 0;
+    if (!Number.isFinite(numeric)) return Math.round(fallback);
+    const clamped = Math.min(GEM_COUNT_MAX, Math.max(GEM_COUNT_MIN, numeric));
+    return Math.round(clamped);
+  }
+
   function normalizeWinCondition(value) {
     if (typeof value !== 'string') return 'dominate';
     return value.trim().toLowerCase() === 'king' ? 'king' : 'dominate';
@@ -510,6 +578,401 @@
   function normalizeResources(value) {
     if (typeof value !== 'string') return 'standard';
     return value.trim().toLowerCase() === 'gems' ? 'gems' : 'standard';
+  }
+
+  function isMagicResourceModeActive() {
+    return normalizeResources(currentResourceMode) === 'gems';
+  }
+
+  function setCurrentResourceMode(mode) {
+    currentResourceMode = normalizeResources(mode);
+    bridgePreviewWillBeBrass = computeInitialBrassPreviewState();
+    if (!isMagicResourceModeActive()) {
+      pendingBrassGemSpend = false;
+      setBrassGemModeActive(false);
+      pendingWarpGemSpend = false;
+      setWarpGemModeActive(false);
+    } else {
+      updateGemModeUi();
+      if (activeAbility === 'bridge1way' && bridgeFirstNode != null) {
+        const node = nodes.get(bridgeFirstNode);
+        const nextPreference = determineBridgeBrassPreference(node, bridgeIsBrass);
+        if (bridgeIsBrass !== nextPreference) {
+          bridgeIsBrass = nextPreference;
+        }
+        bridgePreviewWillBeBrass = computeInitialBrassPreviewState();
+        updateBrassPreviewIntersections();
+        redrawStatic();
+      }
+    }
+    updateModeOptionButtonStates();
+  }
+
+  function getMyGemCount(gemKey = 'brass') {
+    const normalized = normalizeGemKey(gemKey);
+    if (!normalized) return 0;
+    let targetId = Number.isFinite(myPlayerId) ? myPlayerId : null;
+    if (!Number.isFinite(targetId)) {
+      const storedRaw = localStorage.getItem('myPlayerId');
+      if (storedRaw != null) {
+        const storedValue = Number(storedRaw);
+        if (Number.isFinite(storedValue)) {
+          targetId = storedValue;
+        }
+      }
+    }
+    if (!Number.isFinite(targetId)) return 0;
+    const stats = ensurePlayerStats(targetId);
+    if (!stats || !stats.gems) return 0;
+    const value = Number(stats.gems[normalized]);
+    return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+  }
+
+  function canActivateBrassGemMode() {
+    if (!isMagicResourceModeActive()) return false;
+    return getMyGemCount('brass') > 0;
+  }
+
+  function canActivateWarpGemMode() {
+    if (!isMagicResourceModeActive()) return false;
+    return getMyGemCount('warp') > 0;
+  }
+
+  function canActivateRageGemMode() {
+    if (!isMagicResourceModeActive()) return false;
+    return getMyGemCount('rage') > 0;
+  }
+
+  function canActivateReverseGemMode() {
+    if (!isMagicResourceModeActive()) return false;
+    return getMyGemCount('reverse') > 0;
+  }
+
+  function isWarpWrapUnlocked() {
+    if (!isMagicResourceModeActive()) return true;
+    if (warpGemModeActive && canActivateWarpGemMode()) {
+      return true;
+    }
+    return autoWarpUnlockStillValid();
+  }
+
+  function determineBridgeBrassPreference(startNode, useBrassHint = false) {
+    if (isMagicResourceModeActive()) {
+      return brassGemModeActive && canActivateBrassGemMode();
+    }
+    if (isBrassModeActive()) {
+      return !!(startNode && startNode.isBrass);
+    }
+    if (isIntentionalBrassModeActive()) {
+      return !!useBrassHint;
+    }
+    return false;
+  }
+
+  function computeInitialBrassPreviewState() {
+    if (!bridgeIsBrass) return false;
+    if (isXbModeActive()) return false;
+    if (isMagicResourceModeActive()) return true;
+    return isCrossLikeModeActive();
+  }
+
+  function determinePipeTypeForBridge(useBrassPipe = false) {
+    if (isMagicResourceModeActive()) {
+      if (rageGemModeActive && canActivateRageGemMode()) return 'rage';
+      if (reverseGemModeActive && canActivateReverseGemMode()) return 'reverse';
+      if (brassGemModeActive && canActivateBrassGemMode()) return 'gold';
+    }
+    return useBrassPipe ? 'gold' : 'normal';
+  }
+
+  function setBrassGemModeActive(enabled, options = {}) {
+    const desired = Boolean(enabled) && isMagicResourceModeActive() && canActivateBrassGemMode();
+    if (desired) {
+      activePipeGemKey = 'brass';
+      if (rageGemModeActive) {
+        rageGemModeActive = false;
+        pendingRageGemSpend = false;
+      }
+      if (reverseGemModeActive) {
+        reverseGemModeActive = false;
+        pendingReverseGemSpend = false;
+      }
+    } else if (activePipeGemKey === 'brass') {
+      activePipeGemKey = null;
+    }
+    if (brassGemModeActive === desired) {
+      if (isMagicResourceModeActive()) {
+        bridgeIsBrass = brassGemModeActive && canActivateBrassGemMode();
+      }
+      updateGemModeUi();
+      return;
+    }
+    brassGemModeActive = desired;
+    const shouldClearPending = options.clearPending !== false;
+    if (!desired && shouldClearPending) {
+      pendingBrassGemSpend = false;
+    }
+    if (!desired && activePipeGemKey === 'brass') {
+      activePipeGemKey = null;
+    }
+    updateGemModeUi();
+    if (isMagicResourceModeActive()) {
+      bridgeIsBrass = brassGemModeActive && canActivateBrassGemMode();
+    }
+    if (activeAbility === 'bridge1way' && bridgeFirstNode != null) {
+      const node = nodes.get(bridgeFirstNode);
+      const nextPreference = determineBridgeBrassPreference(node, bridgeIsBrass);
+      if (bridgeIsBrass !== nextPreference) {
+        bridgeIsBrass = nextPreference;
+      }
+      bridgePreviewWillBeBrass = computeInitialBrassPreviewState();
+      updateBrassPreviewIntersections();
+      redrawStatic();
+    }
+  }
+
+  function setWarpGemModeActive(enabled, options = {}) {
+    const desired = Boolean(enabled) && isMagicResourceModeActive() && canActivateWarpGemMode();
+    if (warpGemModeActive === desired) {
+      updateGemModeUi();
+      return;
+    }
+    warpGemModeActive = desired;
+    resetAutoWarpGemUnlock();
+    const shouldClearPending = options.clearPending !== false;
+    if (!desired && shouldClearPending) {
+      pendingWarpGemSpend = false;
+    }
+    if (!desired) {
+      warpWrapUsed = false;
+      lastWarpAxis = null;
+      lastWarpDirection = null;
+    }
+    updateGemModeUi();
+    if (activeAbility === 'bridge1way') {
+      redrawStatic();
+    }
+  }
+
+  function setRageGemModeActive(enabled, options = {}) {
+    const desired = Boolean(enabled) && isMagicResourceModeActive() && canActivateRageGemMode();
+    if (desired) {
+      activePipeGemKey = 'rage';
+      if (brassGemModeActive) {
+        brassGemModeActive = false;
+        pendingBrassGemSpend = false;
+      }
+      if (reverseGemModeActive) {
+        reverseGemModeActive = false;
+        pendingReverseGemSpend = false;
+      }
+    } else if (activePipeGemKey === 'rage') {
+      activePipeGemKey = null;
+    }
+    if (rageGemModeActive === desired) {
+      if (desired) {
+        bridgeIsBrass = false;
+      } else if (isMagicResourceModeActive()) {
+        bridgeIsBrass = brassGemModeActive && canActivateBrassGemMode();
+      }
+      updateGemModeUi();
+      return;
+    }
+    rageGemModeActive = desired;
+    const shouldClearPending = options.clearPending !== false;
+    if (!desired && shouldClearPending) {
+      pendingRageGemSpend = false;
+    }
+    if (desired) {
+      bridgeIsBrass = false;
+    } else if (activePipeGemKey !== 'brass') {
+      bridgeIsBrass = brassGemModeActive && canActivateBrassGemMode();
+    }
+    updateGemModeUi();
+    if (activeAbility === 'bridge1way') {
+      bridgePreviewWillBeBrass = computeInitialBrassPreviewState();
+      updateBrassPreviewIntersections();
+      redrawStatic();
+    }
+  }
+
+  function setReverseGemModeActive(enabled, options = {}) {
+    const desired = Boolean(enabled) && isMagicResourceModeActive() && canActivateReverseGemMode();
+    if (desired) {
+      activePipeGemKey = 'reverse';
+      if (brassGemModeActive) {
+        brassGemModeActive = false;
+        pendingBrassGemSpend = false;
+      }
+      if (rageGemModeActive) {
+        rageGemModeActive = false;
+        pendingRageGemSpend = false;
+      }
+    } else if (activePipeGemKey === 'reverse') {
+      activePipeGemKey = null;
+    }
+    if (reverseGemModeActive === desired) {
+      if (desired) {
+        bridgeIsBrass = false;
+      } else if (isMagicResourceModeActive()) {
+        bridgeIsBrass = brassGemModeActive && canActivateBrassGemMode();
+      }
+      updateGemModeUi();
+      return;
+    }
+    reverseGemModeActive = desired;
+    const shouldClearPending = options.clearPending !== false;
+    if (!desired && shouldClearPending) {
+      pendingReverseGemSpend = false;
+    }
+    if (desired) {
+      bridgeIsBrass = false;
+    } else if (activePipeGemKey !== 'brass') {
+      bridgeIsBrass = brassGemModeActive && canActivateBrassGemMode();
+    }
+    updateGemModeUi();
+    if (activeAbility === 'bridge1way') {
+      bridgePreviewWillBeBrass = computeInitialBrassPreviewState();
+      updateBrassPreviewIntersections();
+      redrawStatic();
+    }
+  }
+
+  function updateGemModeUi() {
+    if (!gemCountsDisplay || !gemCountsDisplay.isConnected) return;
+    const interactive = isMagicResourceModeActive();
+    gemCountsDisplay.classList.toggle('interactive', interactive);
+
+    const brassContainer = gemCountsDisplay.querySelector('[data-gem="brass"]');
+    if (brassContainer) {
+      const canUseBrass = canActivateBrassGemMode();
+      brassContainer.classList.toggle('disabled', !canUseBrass);
+      brassContainer.classList.toggle('active', canUseBrass && brassGemModeActive);
+      brassContainer.setAttribute('aria-disabled', canUseBrass ? 'false' : 'true');
+    }
+
+    const rageContainer = gemCountsDisplay.querySelector('[data-gem="rage"]');
+    if (rageContainer) {
+      const canUseRage = canActivateRageGemMode();
+      rageContainer.classList.toggle('disabled', !canUseRage);
+      rageContainer.classList.toggle('active', canUseRage && rageGemModeActive);
+      rageContainer.setAttribute('aria-disabled', canUseRage ? 'false' : 'true');
+    }
+
+    const reverseContainer = gemCountsDisplay.querySelector('[data-gem="reverse"]');
+    if (reverseContainer) {
+      const canUseReverse = canActivateReverseGemMode();
+      reverseContainer.classList.toggle('disabled', !canUseReverse);
+      reverseContainer.classList.toggle('active', canUseReverse && reverseGemModeActive);
+      reverseContainer.setAttribute('aria-disabled', canUseReverse ? 'false' : 'true');
+    }
+
+    const warpContainer = gemCountsDisplay.querySelector('[data-gem="warp"]');
+    if (warpContainer) {
+      const canUseWarp = canActivateWarpGemMode();
+      warpContainer.classList.toggle('disabled', !canUseWarp);
+      warpContainer.classList.toggle('active', canUseWarp && warpGemModeActive);
+      warpContainer.setAttribute('aria-disabled', canUseWarp ? 'false' : 'true');
+    }
+  }
+
+  function handleGemCountsClick(ev) {
+    if (!isMagicResourceModeActive()) return;
+    const target = ev.target;
+    const container = target && typeof target.closest === 'function'
+      ? target.closest('.gem-count')
+      : null;
+    if (!container) return;
+    const gemData = container.dataset ? container.dataset.gem : null;
+    const gemKey = normalizeGemKey(gemData);
+    if (gemKey === 'brass') {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (!canActivateBrassGemMode()) {
+        showErrorMessage('No brass gems available', 'error');
+        return;
+      }
+      setBrassGemModeActive(!brassGemModeActive);
+      return;
+    }
+    if (gemKey === 'rage') {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (!canActivateRageGemMode()) {
+        showErrorMessage('No rage gems available', 'error');
+        return;
+      }
+      setRageGemModeActive(!rageGemModeActive);
+      return;
+    }
+    if (gemKey === 'reverse') {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (!canActivateReverseGemMode()) {
+        showErrorMessage('No reverse gems available', 'error');
+        return;
+      }
+      setReverseGemModeActive(!reverseGemModeActive);
+      return;
+    }
+    if (gemKey === 'warp') {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (!canActivateWarpGemMode()) {
+        showErrorMessage('No warp gems available', 'error');
+        return;
+      }
+      setWarpGemModeActive(!warpGemModeActive);
+    }
+  }
+
+  function notifyWarpGemRequired() {
+    const now = Date.now();
+    if (now - lastWarpGemErrorTime < 600) return;
+    lastWarpGemErrorTime = now;
+    showErrorMessage('Warp gem required to warp pipes', 'error');
+  }
+
+  function resetAutoWarpGemUnlock() {
+    warpGemAutoUnlockActive = false;
+  }
+
+  function autoWarpUnlockStillValid() {
+    if (!warpGemAutoUnlockActive) return false;
+    if (!canActivateWarpGemMode()) {
+      resetAutoWarpGemUnlock();
+      return false;
+    }
+    if (activeAbility !== 'bridge1way' || bridgeFirstNode == null) {
+      resetAutoWarpGemUnlock();
+      return false;
+    }
+    if (!isWarpFrontendActive()) {
+      resetAutoWarpGemUnlock();
+      return false;
+    }
+    return true;
+  }
+
+  function isPointerOutsideWarpBounds(screenX, screenY) {
+    if (!warpBoundsScreen) return false;
+    return (
+      screenX < warpBoundsScreen.minX
+      || screenX > warpBoundsScreen.maxX
+      || screenY < warpBoundsScreen.minY
+      || screenY > warpBoundsScreen.maxY
+    );
+  }
+
+  function maybeAutoUnlockWarpWrap(screenX, screenY) {
+    if (!isMagicResourceModeActive()) return false;
+    if (warpGemModeActive || warpGemAutoUnlockActive) return false;
+    if (activeAbility !== 'bridge1way' || bridgeFirstNode == null) return false;
+    if (!canActivateWarpGemMode()) return false;
+    if (!isWarpFrontendActive()) return false;
+    if (!isPointerOutsideWarpBounds(screenX, screenY)) return false;
+    warpGemAutoUnlockActive = true;
+    return true;
   }
 
   function normalizeNodeResourceType(value) {
@@ -542,6 +1005,11 @@
     if (!settings || typeof settings !== 'object') return 'flat';
     const screen = typeof settings.screen === 'string' ? settings.screen.toLowerCase() : 'flat';
     const brass = typeof settings.brass === 'string' ? settings.brass.toLowerCase() : 'cross';
+    if (brass === 'gem') {
+      if (screen === 'warp') return 'warp';
+      if (screen === 'semi') return 'semi';
+      return 'flat';
+    }
     if (screen === 'warp') {
       return brass.startsWith('right') ? 'i-warp' : 'warp';
     }
@@ -554,7 +1022,10 @@
   function formatModeSettingsSummary(settings = selectedSettings) {
     const screenValue = typeof settings.screen === 'string' ? settings.screen.toLowerCase() : 'flat';
     const screenLabel = screenValue === 'warp' ? 'Warp' : (screenValue === 'semi' ? 'Semi' : 'Flat');
-    const brassLabel = (settings.brass === 'right-click') ? 'Right-Click' : 'Cross';
+    const brassValue = typeof settings.brass === 'string' ? settings.brass.toLowerCase() : 'cross';
+    const brassLabel = brassValue === 'gem'
+      ? 'Gem'
+      : (brassValue === 'right-click' ? 'Right-Click' : 'Cross');
     const startLabel = (settings.brassStart === 'anywhere') ? 'Anywhere' : 'Owned';
     const startModeLabel = (settings.gameStart === 'hidden-split') ? 'Hidden' : 'Open';
     const costLabel = coerceBridgeCost(settings.bridgeCost).toFixed(1);
@@ -577,6 +1048,10 @@
     const currentGameStart = (selectedSettings.gameStart || DEFAULT_MODE_SETTINGS.gameStart).toLowerCase();
     const currentResources = normalizeResources(selectedSettings.resources);
     const hiddenAllowed = isHiddenStartAllowed();
+    const brassGroup = document.querySelector('.mode-option-group[data-setting-group="brass"]');
+    if (brassGroup) {
+      brassGroup.classList.toggle('gem-mode', currentResources === 'gems');
+    }
     modeOptionButtons.forEach((btn) => {
       const setting = btn?.dataset?.setting;
       const value = btn?.dataset?.value;
@@ -586,17 +1061,38 @@
       }
       btn.disabled = false;
       btn.classList.remove('disabled');
+      btn.title = '';
       let isActive = false;
       if (setting === 'screen') {
         isActive = value.toLowerCase() === currentScreen;
+        if (currentResources === 'gems') {
+          btn.disabled = true;
+          btn.classList.add('disabled');
+          btn.title = 'Gem mode requires the Warp screen';
+        }
       } else if (setting === 'brass') {
         const normalized = value.toLowerCase();
-        const target = currentBrass === 'right-click' ? 'right-click' : 'cross';
-        isActive = normalized === target;
+        if (currentResources === 'gems') {
+          btn.disabled = true;
+          btn.classList.add('disabled');
+          btn.classList.remove('active');
+          btn.title = 'Brass selection handled by gems';
+          isActive = false;
+        } else {
+          const target = currentBrass === 'right-click' ? 'right-click' : 'cross';
+          isActive = normalized === target;
+        }
       } else if (setting === 'brassStart') {
         const normalized = value.toLowerCase();
-        const target = currentStart === 'anywhere' ? 'anywhere' : 'owned';
-        isActive = normalized === target;
+        if (currentResources === 'gems') {
+          btn.disabled = true;
+          btn.classList.add('disabled');
+          btn.title = 'Gem mode requires starting from owned nodes';
+          isActive = normalized === 'owned';
+        } else {
+          const target = currentStart === 'anywhere' ? 'anywhere' : 'owned';
+          isActive = normalized === target;
+        }
       } else if (setting === 'gameStart') {
         const normalized = value.toLowerCase();
         const target = normalized.startsWith('hidden') ? 'hidden-split' : 'open';
@@ -654,7 +1150,11 @@
     }
     if (Object.prototype.hasOwnProperty.call(overrides, 'brass')) {
       const brass = typeof overrides.brass === 'string' ? overrides.brass.toLowerCase() : '';
-      next.brass = brass.startsWith('right') ? 'right-click' : 'cross';
+      if (brass === 'gem') {
+        next.brass = 'gem';
+      } else {
+        next.brass = brass.startsWith('right') ? 'right-click' : 'cross';
+      }
     }
     if (Object.prototype.hasOwnProperty.call(overrides, 'brassStart')) {
       const start = typeof overrides.brassStart === 'string' ? overrides.brassStart.toLowerCase() : '';
@@ -701,6 +1201,26 @@
     } else {
       next.kingCrownHealth = coerceKingCrownHealth(next.kingCrownHealth);
     }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'warpGemCount')) {
+      next.warpGemCount = coerceGemCount(overrides.warpGemCount, 'warp');
+    } else {
+      next.warpGemCount = coerceGemCount(next.warpGemCount, 'warp');
+    }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'brassGemCount')) {
+      next.brassGemCount = coerceGemCount(overrides.brassGemCount, 'brass');
+    } else {
+      next.brassGemCount = coerceGemCount(next.brassGemCount, 'brass');
+    }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'rageGemCount')) {
+      next.rageGemCount = coerceGemCount(overrides.rageGemCount, 'rage');
+    } else {
+      next.rageGemCount = coerceGemCount(next.rageGemCount, 'rage');
+    }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'reverseGemCount')) {
+      next.reverseGemCount = coerceGemCount(overrides.reverseGemCount, 'reverse');
+    } else {
+      next.reverseGemCount = coerceGemCount(next.reverseGemCount, 'reverse');
+    }
     if (Object.prototype.hasOwnProperty.call(overrides, 'winCondition')) {
       next.winCondition = normalizeWinCondition(overrides.winCondition);
     } else {
@@ -712,11 +1232,23 @@
       next.resources = normalizeResources(next.resources);
     }
 
+    if (next.resources === 'gems') {
+      next.brass = 'gem';
+      next.brassStart = 'owned';
+      next.screen = 'warp';
+    } else if (next.brass === 'gem') {
+      next.brass = 'cross';
+    } else {
+      const currentBrass = typeof next.brass === 'string' ? next.brass.toLowerCase() : 'cross';
+      next.brass = currentBrass.startsWith('right') ? 'right-click' : 'cross';
+    }
+
     if (next.gameStart === 'hidden-split' && !isHiddenStartAllowed()) {
       next.gameStart = 'open';
     }
 
     selectedSettings = next;
+    setCurrentResourceMode(selectedSettings.resources);
     kingCrownDefaultMax = coerceKingCrownHealth(selectedSettings.kingCrownHealth);
     selectedMode = deriveModeFromSettings(selectedSettings);
     updateModeOptionButtonStates();
@@ -727,6 +1259,7 @@
     syncRingPayoutSlider();
     syncStartingJuiceSlider();
     syncCrownHealthSlider();
+    syncGemCountSliders();
     updatePlayBotAvailability(true);
   }
 
@@ -743,6 +1276,10 @@
       ringJuiceToGoldRatio: coerceRingRatio(selectedSettings.ringJuiceToGoldRatio),
       ringPayoutGold: coerceRingPayout(selectedSettings.ringPayoutGold),
       kingCrownHealth: coerceKingCrownHealth(selectedSettings.kingCrownHealth),
+      warpGemCount: coerceGemCount(selectedSettings.warpGemCount, 'warp'),
+      brassGemCount: coerceGemCount(selectedSettings.brassGemCount, 'brass'),
+      rageGemCount: coerceGemCount(selectedSettings.rageGemCount, 'rage'),
+      reverseGemCount: coerceGemCount(selectedSettings.reverseGemCount, 'reverse'),
       baseMode: selectedMode,
       derivedMode: selectedMode,
       winCondition: selectedSettings.winCondition || 'dominate',
@@ -765,6 +1302,10 @@
     if (Object.prototype.hasOwnProperty.call(payload, 'ringJuiceToGoldRatio')) overrides.ringJuiceToGoldRatio = payload.ringJuiceToGoldRatio;
     if (Object.prototype.hasOwnProperty.call(payload, 'ringPayoutGold')) overrides.ringPayoutGold = payload.ringPayoutGold;
     if (Object.prototype.hasOwnProperty.call(payload, 'kingCrownHealth')) overrides.kingCrownHealth = payload.kingCrownHealth;
+    if (Object.prototype.hasOwnProperty.call(payload, 'warpGemCount')) overrides.warpGemCount = payload.warpGemCount;
+    if (Object.prototype.hasOwnProperty.call(payload, 'brassGemCount')) overrides.brassGemCount = payload.brassGemCount;
+    if (Object.prototype.hasOwnProperty.call(payload, 'rageGemCount')) overrides.rageGemCount = payload.rageGemCount;
+    if (Object.prototype.hasOwnProperty.call(payload, 'reverseGemCount')) overrides.reverseGemCount = payload.reverseGemCount;
     if (Object.prototype.hasOwnProperty.call(payload, 'winCondition')) overrides.winCondition = payload.winCondition;
     if (Object.prototype.hasOwnProperty.call(payload, 'resources')) overrides.resources = payload.resources;
     applySelectedSettings(overrides);
@@ -820,6 +1361,19 @@
     const value = coerceKingCrownHealth(selectedSettings.kingCrownHealth);
     crownHealthSlider.value = String(value);
     crownHealthValueLabel.textContent = String(value);
+  }
+
+  function syncGemCountSliderControl(sliderEl, labelEl, value) {
+    if (!sliderEl || !labelEl) return;
+    sliderEl.value = String(value);
+    labelEl.textContent = String(value);
+  }
+
+  function syncGemCountSliders() {
+    syncGemCountSliderControl(warpGemSlider, warpGemValueLabel, coerceGemCount(selectedSettings.warpGemCount, 'warp'));
+    syncGemCountSliderControl(brassGemSlider, brassGemValueLabel, coerceGemCount(selectedSettings.brassGemCount, 'brass'));
+    syncGemCountSliderControl(rageGemSlider, rageGemValueLabel, coerceGemCount(selectedSettings.rageGemCount, 'rage'));
+    syncGemCountSliderControl(reverseGemSlider, reverseGemValueLabel, coerceGemCount(selectedSettings.reverseGemCount, 'reverse'));
   }
 
   function pipeStartRequiresOwnership() {
@@ -1504,6 +2058,9 @@
   }
 
   function getActiveWarpPreference() {
+    if (!isWarpWrapUnlocked()) {
+      return { allowWarp: false, preferredWrapAxis: null, preferredWrapDirection: null };
+    }
     if (!warpWrapUsed) {
       return { allowWarp: false, preferredWrapAxis: null, preferredWrapDirection: null };
     }
@@ -1578,7 +2135,7 @@
 
     const EPS = 1e-6;
 
-    if (!allowWarp) {
+    if (!allowWarp || !isWarpWrapUnlocked()) {
       return best;
     }
 
@@ -1855,6 +2412,12 @@
       return [{ sx: sourceNode.x, sy: sourceNode.y, ex: targetNode.x, ey: targetNode.y }];
     }
     return [];
+  }
+
+  function edgeUsesWarp(edge) {
+    if (!edge) return false;
+    const axisRaw = typeof edge.warpAxis === 'string' ? edge.warpAxis.toLowerCase() : '';
+    return axisRaw === 'horizontal' || axisRaw === 'vertical' || axisRaw === 'mixed';
   }
 
   function toEdgeId(value) {
@@ -2148,6 +2711,7 @@
   }
 
   function brassPipesDoubleCost() {
+    if (isMagicResourceModeActive()) return false;
     if (isIntentionalBrassMode(gameMode)) return true;
     return isIntentionalBrassMode(selectedMode);
   }
@@ -2244,57 +2808,6 @@ function hideBridgeCostDisplay() {
   }
 }
 
-function updateReverseCostDisplay(edge) {
-  if (!sceneRef || !edge) return;
-
-  const sourceNode = nodes.get(edge.source);
-  const targetNode = nodes.get(edge.target);
-  if (!sourceNode || !targetNode) return;
-
-  const midPoint = getEdgeMidpointWorld(edge);
-  const midX = midPoint ? midPoint.x : (sourceNode.x + targetNode.x) / 2;
-  const midY = midPoint ? midPoint.y : (sourceNode.y + targetNode.y) / 2;
-  const [sx, sy] = worldToScreen(midX, midY);
-  
-  // Store the position for later use in cost indicator animation
-  lastReverseCostPosition = { x: midX, y: midY };
-
-  const cost = calculateBridgeCost(sourceNode, targetNode);
-  const canAfford = goldValue >= cost;
-  const text = `$${formatCost(cost)}`;
-
-  if (!reverseCostDisplay) {
-    reverseCostDisplay = sceneRef.add.text(sx, sy - 20, text, {
-      fontFamily: 'monospace',
-      fontSize: '20px',
-      fontStyle: 'normal',
-      color: canAfford ? MONEY_SPEND_COLOR : '#222222',
-      stroke: canAfford ? MONEY_SPEND_STROKE : 'rgba(255,255,255,0.85)',
-      strokeThickness: canAfford ? 1 : 0,
-    })
-    .setOrigin(0.5, 0.5)
-    .setDepth(1000);
-  } else {
-    reverseCostDisplay.setText(text);
-    reverseCostDisplay.setPosition(sx, sy - 20);
-    reverseCostDisplay.setVisible(true);
-  }
-
-  if (reverseCostDisplay) {
-    reverseCostDisplay.setColor(canAfford ? MONEY_SPEND_COLOR : '#222222');
-    reverseCostDisplay.setStroke(canAfford ? MONEY_SPEND_STROKE : 'rgba(255,255,255,0.85)', canAfford ? 1 : 0);
-  }
-}
-
-function hideReverseCostDisplay() {
-  if (reverseCostDisplay) {
-    reverseCostDisplay.destroy();
-    reverseCostDisplay = null;
-  }
-  // Clear stored position when hiding display
-  lastReverseCostPosition = null;
-}
-
 
 function clearBridgeSelection() {
   bridgeFirstNode = null;
@@ -2306,6 +2819,7 @@ function clearBridgeSelection() {
   lastDoubleWarpWarningTime = 0;
   lastWarpAxis = null;
   lastWarpDirection = null;
+  resetAutoWarpGemUnlock();
 }
 
 
@@ -2374,6 +2888,182 @@ function clearBridgeSelection() {
       }
       return true;
     });
+  }
+
+  function removeReverseButton(edgeId) {
+    const entry = reversePipeButtons.get(edgeId);
+    if (!entry) return;
+    const { text } = entry;
+    if (text) {
+      try {
+        text.removeAllListeners?.();
+        text.destroy();
+      } catch (err) {
+        text.setVisible(false);
+      }
+    }
+    reversePipeButtons.delete(edgeId);
+  }
+
+  function getReverseButtonScreenPosition(edgeRecord, midpointScreenX, midpointScreenY) {
+    if (!edgeRecord) {
+      return { x: midpointScreenX, y: midpointScreenY };
+    }
+
+    const normal = getEdgeScreenNormalAtMidpoint(edgeRecord);
+    if (!normal) {
+      return { x: midpointScreenX, y: midpointScreenY };
+    }
+
+    const offset = Number.isFinite(REVERSE_BUTTON_OFFSET_PX) ? REVERSE_BUTTON_OFFSET_PX : 0;
+    if (offset <= 0) {
+      return { x: midpointScreenX, y: midpointScreenY };
+    }
+
+    return {
+      x: midpointScreenX + normal.x * offset,
+      y: midpointScreenY + normal.y * offset,
+    };
+  }
+
+  function getEdgeScreenNormalAtMidpoint(edgeRecord) {
+    if (!edgeRecord) return null;
+
+    let segments = getEdgeWarpSegments(edgeRecord);
+    if (!segments || !segments.length) {
+      const sourceNode = nodes.get(edgeRecord.source);
+      const targetNode = nodes.get(edgeRecord.target);
+      if (!sourceNode || !targetNode) return null;
+      segments = [{
+        sx: Number(sourceNode.x),
+        sy: Number(sourceNode.y),
+        ex: Number(targetNode.x),
+        ey: Number(targetNode.y),
+      }];
+    }
+
+    const validSegments = segments
+      .map((seg) => {
+        const sx = Number(seg.sx);
+        const sy = Number(seg.sy);
+        const ex = Number(seg.ex);
+        const ey = Number(seg.ey);
+        const length = Math.hypot(ex - sx, ey - sy);
+        return Number.isFinite(length) && length > 0.0001 ? { sx, sy, ex, ey, length } : null;
+      })
+      .filter(Boolean);
+
+    if (!validSegments.length) return null;
+
+    const totalLength = validSegments.reduce((sum, seg) => sum + seg.length, 0);
+    if (!Number.isFinite(totalLength) || totalLength <= 0) return null;
+
+    const targetDistance = totalLength / 2;
+    let traversed = 0;
+    let chosenSegment = validSegments[validSegments.length - 1];
+
+    for (const seg of validSegments) {
+      if (traversed + seg.length >= targetDistance) {
+        chosenSegment = seg;
+        break;
+      }
+      traversed += seg.length;
+    }
+
+    const [screenSx, screenSy] = worldToScreen(chosenSegment.sx, chosenSegment.sy);
+    const [screenEx, screenEy] = worldToScreen(chosenSegment.ex, chosenSegment.ey);
+    const dx = screenEx - screenSx;
+    const dy = screenEy - screenSy;
+    const screenLength = Math.hypot(dx, dy);
+    if (!Number.isFinite(screenLength) || screenLength <= 0.0001) return null;
+
+    let nx = -dy / screenLength;
+    let ny = dx / screenLength;
+
+    if (ny > 0) {
+      nx = -nx;
+      ny = -ny;
+    }
+
+    return { x: nx, y: ny };
+  }
+
+  function updateReverseButton(edgeId, edgeRecord, screenX, screenY) {
+    if (!sceneRef) return;
+    if (!edgeRecord || edgeRecord.pipeType !== 'reverse') {
+      removeReverseButton(edgeId);
+      return;
+    }
+
+    const targetPosition = getReverseButtonScreenPosition(edgeRecord, screenX, screenY);
+    const symbolX = Number.isFinite(targetPosition.x) ? targetPosition.x : screenX;
+    const symbolY = Number.isFinite(targetPosition.y) ? targetPosition.y : screenY;
+
+    let entry = reversePipeButtons.get(edgeId);
+    if (!entry) {
+      const text = sceneRef.add.text(symbolX, symbolY, '⟳', {
+        fontFamily: 'sans-serif',
+        fontSize: '28px',
+        fontStyle: 'bold',
+        color: '#f4f4f4',
+        stroke: '#000000',
+        strokeThickness: 4,
+      });
+      text.setOrigin(0.5, 0.5);
+      text.setDepth(6);
+      text.setAlpha(0.9);
+      text.setData('edgeId', edgeId);
+      entry = { text, pulseStart: null };
+      reversePipeButtons.set(edgeId, entry);
+    }
+
+    const { text } = entry;
+    const canControl = canReverseEdge(edgeRecord) && !edgeRecord.building;
+    const sourceNode = nodes.get(edgeRecord.source);
+    const ownerColor = ownerToHexColor(sourceNode ? sourceNode.owner : null);
+
+    text.setPosition(symbolX, symbolY);
+    text.setColor(ownerColor);
+    text.setAlpha(canControl ? 1 : 0.5);
+    text.setVisible(true);
+
+    applyReverseButtonPulse(entry, text);
+  }
+
+  function applyReverseButtonPulse(entry, text) {
+    if (!entry || !text) return;
+    const start = entry.pulseStart;
+    if (start == null) {
+      if (text.scaleX !== 1 || text.scaleY !== 1) text.setScale(1);
+      if (text.rotation !== 0) text.setRotation(0);
+      return;
+    }
+
+    const duration = Math.max(0.1, entry.pulseDuration || 0.45);
+    const elapsed = Math.max(0, animationTime - start);
+    if (elapsed >= duration) {
+      entry.pulseStart = null;
+      text.setScale(1);
+      text.setRotation(0);
+      return;
+    }
+
+    const progress = Math.min(1, elapsed / duration);
+    const scaleBoost = entry.pulseScale ?? 0.35;
+    const eased = 1 - easeOutCubic(progress);
+    const scale = 1 + scaleBoost * eased;
+    const turns = entry.pulseTurns ?? 1;
+    text.setScale(scale);
+    text.setRotation(progress * turns * Math.PI * 2);
+  }
+
+  function triggerReverseButtonPulse(edgeId, options = {}) {
+    const entry = reversePipeButtons.get(edgeId);
+    if (!entry) return;
+    entry.pulseStart = animationTime;
+    entry.pulseDuration = options.duration ?? 0.45;
+    entry.pulseScale = options.scale ?? 0.35;
+    entry.pulseTurns = options.turns ?? 1.15;
   }
 
   // Called from redrawStatic(); now just toggles visibility if menu is open
@@ -2500,6 +3190,14 @@ function clearBridgeSelection() {
     startingJuiceValueLabel = document.getElementById('startingJuiceValue');
     crownHealthSlider = document.getElementById('crownHealthSlider');
     crownHealthValueLabel = document.getElementById('crownHealthValue');
+    warpGemSlider = document.getElementById('warpGemSlider');
+    warpGemValueLabel = document.getElementById('warpGemValue');
+    brassGemSlider = document.getElementById('brassGemSlider');
+    brassGemValueLabel = document.getElementById('brassGemValue');
+    rageGemSlider = document.getElementById('rageGemSlider');
+    rageGemValueLabel = document.getElementById('rageGemValue');
+    reverseGemSlider = document.getElementById('reverseGemSlider');
+    reverseGemValueLabel = document.getElementById('reverseGemValue');
 
     if (modeOptionButtons.length) {
       modeOptionButtons.forEach((btn) => {
@@ -2599,6 +3297,25 @@ function clearBridgeSelection() {
       crownHealthSlider.addEventListener('input', handler);
       crownHealthSlider.addEventListener('change', handler);
     }
+
+    const bindGemSlider = (sliderEl, changeKey) => {
+      if (!sliderEl) return null;
+      sliderEl.min = String(GEM_COUNT_MIN);
+      sliderEl.max = String(GEM_COUNT_MAX);
+      sliderEl.step = String(GEM_COUNT_STEP);
+      const handler = (event) => {
+        const sliderValue = Number(event.target.value);
+        applySelectedSettings({ [changeKey]: sliderValue });
+      };
+      sliderEl.addEventListener('input', handler);
+      sliderEl.addEventListener('change', handler);
+      return handler;
+    };
+
+    bindGemSlider(warpGemSlider, 'warpGemCount');
+    bindGemSlider(brassGemSlider, 'brassGemCount');
+    bindGemSlider(rageGemSlider, 'rageGemCount');
+    bindGemSlider(reverseGemSlider, 'reverseGemCount');
 
     const closeModePanel = () => {
       if (!modeOptionsPanel) return;
@@ -3130,6 +3847,10 @@ function clearBridgeSelection() {
     topUiBar = document.getElementById('topUiBar');
     bottomUiBar = document.getElementById('bottomUiBar');
     gemCountsDisplay = document.getElementById('gemCountsDisplay');
+    if (gemCountsDisplay && !gemCountsClickHandlerBound) {
+      gemCountsDisplay.addEventListener('click', handleGemCountsClick);
+      gemCountsClickHandlerBound = true;
+    }
     gemCountLabels.clear();
     if (gemCountsDisplay) {
       GEM_TYPE_ORDER.forEach((key) => {
@@ -3141,6 +3862,7 @@ function clearBridgeSelection() {
         }
       });
     }
+    updateGemModeUi();
     updateGemCountsDisplay();
     
     // Initialize timer display
@@ -3589,6 +4311,10 @@ function clearBridgeSelection() {
     kingCrownDefaultMax = coerceKingCrownHealth(selectedSettings.kingCrownHealth);
     clearKingSelection({ skipRedraw: true });
     edges.clear();
+    reversePipeButtons.forEach((entry, edgeId) => {
+      removeReverseButton(edgeId);
+    });
+    reversePipeButtons.clear();
     players.clear();
     playerStats.clear();
     eliminatedPlayers.clear();
@@ -3644,6 +4370,8 @@ function clearBridgeSelection() {
       selectedMode = deriveModeFromSettings(selectedSettings);
       setSelectedMode(selectedMode, { force: true });
     }
+    const initResourceMode = (msg.modeSettings && msg.modeSettings.resources) || selectedSettings.resources;
+    setCurrentResourceMode(initResourceMode);
 
     // Clear any lingering edge flow labels between games
     edgeFlowTexts.forEach(text => {
@@ -3654,7 +4382,6 @@ function clearBridgeSelection() {
     activeAbility = null;
     clearBridgeSelection();
     hideBridgeCostDisplay();
-    hideReverseCostDisplay();
 
     if (Array.isArray(msg.nodes)) {
       for (const arr of msg.nodes) {
@@ -3729,10 +4456,10 @@ function clearBridgeSelection() {
     const edgeWarpMap = msg.edgeWarp || {};
     if (Array.isArray(msg.edges)) {
       for (const arr of msg.edges) {
-        const [rawId, s, t, _forward, _always1, buildReq = 0, buildElap = 0, building = 0, goldFlag = 0] = arr;
+        const [rawId, s, t, _forward, _always1, buildReq = 0, buildElap = 0, building = 0, goldFlag = 0, pipeTypeRaw = 'normal'] = arr;
         const edgeId = toEdgeId(rawId);
         if (edgeId == null) continue;
-        const isGoldEdge = Number(goldFlag) === 1;
+        const normalizedPipeType = normalizePipeType(typeof pipeTypeRaw === 'string' ? pipeTypeRaw : (Number(goldFlag) === 1 ? 'gold' : 'normal'));
         const record = {
           source: s,
           target: t,
@@ -3748,7 +4475,7 @@ function clearBridgeSelection() {
           hammerHitIndex: 0,
           warpAxis: 'none',
           warpSegments: [],
-          pipeType: isGoldEdge ? 'gold' : 'normal',
+          pipeType: normalizedPipeType,
         };
         const warpPayload = edgeWarpMap[edgeId] ?? edgeWarpMap[rawId] ?? edgeWarpMap[String(rawId)];
         applyEdgeWarpData(record, warpPayload, nodes.get(s), nodes.get(t));
@@ -4108,6 +4835,8 @@ function clearBridgeSelection() {
     } else {
       setSelectedMode(mode, { force: true });
     }
+    const lobbyResourceMode = (msg.modeSettings && msg.modeSettings.resources) || selectedSettings.resources;
+    setCurrentResourceMode(lobbyResourceMode);
     const isBrassQueue = msg.mode === MODE_QUEUE_KEY || Boolean(msg.modeSettings);
     const lobbyLabel = isBrassQueue ? `Brass game · ${summaryText}` : `${formatModeText(mode)} game`;
     if (msg.status === 'waiting') {
@@ -4316,7 +5045,7 @@ function clearBridgeSelection() {
     if (Array.isArray(msg.edges)) {
       const seenEdgeIds = new Set();
       msg.edges.forEach((entry) => {
-        const [rawId, on, flowing, _forward, lastTransfer, buildReq = 0, buildElap = 0, building = 0, goldFlag = 0] = entry;
+        const [rawId, on, flowing, _forward, lastTransfer, buildReq = 0, buildElap = 0, building = 0, goldFlag = 0, pipeTypeRaw = 'normal'] = entry;
         const edgeId = toEdgeId(rawId);
         if (edgeId == null) return;
         seenEdgeIds.add(edgeId);
@@ -4330,7 +5059,8 @@ function clearBridgeSelection() {
         edge.buildTicksRequired = Number(buildReq || 0);
         const prevElapsed = Number(edge.buildTicksElapsed || 0);
         edge.buildTicksElapsed = Number(buildElap || 0);
-        edge.pipeType = Number(goldFlag) === 1 ? 'gold' : (edge.pipeType || 'normal');
+        const normalizedPipeType = normalizePipeType(typeof pipeTypeRaw === 'string' ? pipeTypeRaw : (Number(goldFlag) === 1 ? 'gold' : edge.pipeType));
+        edge.pipeType = normalizedPipeType;
         // Fixed-interval metronome: accumulate real time and play hits when threshold crossed
         edge.hammerAccumSec = edge.hammerAccumSec || 0;
         if (edge.building) {
@@ -4518,7 +5248,7 @@ function clearBridgeSelection() {
         builtByMe,
         warpAxis: 'none',
         warpSegments: [],
-        pipeType: edge.pipeType === 'gold' ? 'gold' : 'normal',
+        pipeType: normalizePipeType(edge.pipeType),
       };
       applyEdgeWarpData(record, edge.warp ?? edge, nodes.get(edge.source), nodes.get(edge.target));
       edges.set(edgeId, record);
@@ -4556,6 +5286,14 @@ function clearBridgeSelection() {
       activeAbility = null;
       clearBridgeSelection();
       hideBridgeCostDisplay();
+      pendingBrassGemSpend = false;
+      setBrassGemModeActive(false);
+      pendingWarpGemSpend = false;
+      setWarpGemModeActive(false);
+      pendingRageGemSpend = false;
+      setRageGemModeActive(false);
+      pendingReverseGemSpend = false;
+      setReverseGemModeActive(false);
     }
   }
 
@@ -4565,7 +5303,6 @@ function clearBridgeSelection() {
       const edge = msg.edge;
       const edgeId = toEdgeId(edge.id);
       if (edgeId == null) {
-        hideReverseCostDisplay();
         return;
       }
       const existingEdge = edges.get(edgeId);
@@ -4576,6 +5313,12 @@ function clearBridgeSelection() {
         const wasFlowing = existingEdge.flowing;
         existingEdge.on = edge.on;
         existingEdge.flowing = edge.flowing;
+        if (edge.pipeType) {
+          existingEdge.pipeType = normalizePipeType(edge.pipeType);
+        }
+        if (edge.pipeType) {
+          existingEdge.pipeType = normalizePipeType(edge.pipeType);
+        }
         applyEdgeWarpData(existingEdge, edge.warp ?? edge, nodes.get(existingEdge.source), nodes.get(existingEdge.target));
         
         // Track flow start time for initialization animation
@@ -4585,43 +5328,13 @@ function clearBridgeSelection() {
           existingEdge.flowStartTime = null;
         }
         
-        // Show cost indicator at the position where it was displayed during hover
-        if (msg.cost) {
-          let indicatorX, indicatorY;
-          
-          if (lastReverseCostPosition) {
-            // Use the position where the cost was shown during hover
-            indicatorX = lastReverseCostPosition.x;
-            indicatorY = lastReverseCostPosition.y;
-            lastReverseCostPosition = null; // Clear after use
-          } else {
-            // Fallback to mouse position if no hover position was stored
-            const offsetX = 5; // much smaller offset to the right of mouse
-            const offsetY = -5; // much smaller offset upward from mouse
-            indicatorX = mouseWorldX + offsetX;
-            indicatorY = mouseWorldY + offsetY;
-          }
-          
-          createMoneyIndicator(
-            indicatorX, 
-            indicatorY, 
-            `-$${msg.cost}`, 
-            MONEY_SPEND_COLOR,
-            2000 // 2 seconds
-          );
-        }
-        
         // Trigger reverse animation and sound (only if this action was mine)
         startEdgeReverseSpin(existingEdge);
-        if (msg.cost) {
-          playReverseShuffle();
-        }
+        triggerReverseButtonPulse(edgeId);
+        playReverseShuffle();
         redrawStatic();
       }
     }
-    
-    // Hide reverse cost indicator after server updates
-    hideReverseCostDisplay();
   }
 
   function handleEdgeUpdated(msg) {
@@ -4652,6 +5365,38 @@ function clearBridgeSelection() {
     const mapped = translateErrorMessage(msg.message, 'bridge');
     const variant = mapped.toLowerCase().includes('money') ? 'money' : 'error';
     showErrorMessage(mapped, variant);
+    if (pendingWarpGemSpend) {
+      pendingWarpGemSpend = false;
+      if (isMagicResourceModeActive()) {
+        setWarpGemModeActive(true);
+      } else {
+        setWarpGemModeActive(false);
+      }
+    }
+    if (pendingBrassGemSpend) {
+      pendingBrassGemSpend = false;
+      if (isMagicResourceModeActive()) {
+        setBrassGemModeActive(true);
+      } else {
+        setBrassGemModeActive(false);
+      }
+    }
+    if (pendingRageGemSpend) {
+      pendingRageGemSpend = false;
+      if (isMagicResourceModeActive()) {
+        setRageGemModeActive(true);
+      } else {
+        setRageGemModeActive(false);
+      }
+    }
+    if (pendingReverseGemSpend) {
+      pendingReverseGemSpend = false;
+      if (isMagicResourceModeActive()) {
+        setReverseGemModeActive(true);
+      } else {
+        setReverseGemModeActive(false);
+      }
+    }
   }
 
   function handleReverseEdgeError(msg) {
@@ -4686,11 +5431,11 @@ function forceRemoveEdge(edgeId) {
     label.destroy();
     edgeFlowTexts.delete(id);
   }
+  removeReverseButton(id);
   edges.delete(id);
   edgeRemovalAnimations.delete(id);
   if (hoveredEdgeId === id) {
     hoveredEdgeId = null;
-    hideReverseCostDisplay();
   }
 }
 
@@ -4945,7 +5690,6 @@ function beginEdgeRemoval(edgeId) {
 
   if (hoveredEdgeId === id) {
     hoveredEdgeId = null;
-    hideReverseCostDisplay();
   }
 
   edgeRemovalAnimations.set(id, removal);
@@ -5211,7 +5955,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
     activeAbility = null;
     clearBridgeSelection();
     hideBridgeCostDisplay();
-    hideReverseCostDisplay();
     edgeRemovalAnimations.clear();
     brassPreviewIntersections.clear();
     clearAllPrePipes('sandbox', { skipRedraw: true });
@@ -5408,6 +6151,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     const rewardTypeRaw = typeof msg.rewardType === 'string' ? msg.rewardType.trim().toLowerCase() : null;
     const rewardKeyRaw = typeof msg.rewardKey === 'string' ? msg.rewardKey : null;
     const normalizedRewardType = normalizeNodeResourceType(rewardTypeRaw === 'gem' ? 'gem' : 'money');
+    const neutralCaptureEnabled = coerceNeutralCaptureReward(selectedSettings.neutralCaptureGold) > 0;
 
     if (normalizedRewardType === 'gem') {
       const normalizedKey = normalizeNodeResourceKey(rewardKeyRaw);
@@ -5425,6 +6169,10 @@ function fallbackRemoveEdgesForNode(nodeId) {
         { strokeColor: '#264a2a' }
       );
       playCaptureDing();
+      return;
+    }
+
+    if (!neutralCaptureEnabled) {
       return;
     }
 
@@ -5519,6 +6267,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     if (lower.includes('intersect')) return 'No overlapping pipes';
     if (lower.includes('only golden pipes can cross')) return 'Only brass pipes can cross';
     if (lower.includes('cannot cross golden pipe')) return 'Brass pipes cannot be crossed';
+    if (lower.includes('warp gem')) return 'Warp gem required to warp pipes';
     if (
       lower.includes('must control brass pipes') ||
       lower.includes('must control pipe start') ||
@@ -6022,6 +6771,9 @@ function fallbackRemoveEdgesForNode(nodeId) {
       nodeResourceTexts.forEach((text) => {
         if (text) text.setVisible(false);
       });
+      reversePipeButtons.forEach((entry) => {
+        if (entry?.text) entry.text.setVisible(false);
+      });
       return; // Do not draw game under menu
     }
 
@@ -6064,6 +6816,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
       const midX = midPoint ? midPoint.x : (s.x + t.x) / 2;
       const midY = midPoint ? midPoint.y : (s.y + t.y) / 2;
       const [sx, sy] = worldToScreen(midX, midY);
+      updateReverseButton(id, e, sx, sy);
       let textObj = edgeFlowTexts.get(id);
       if (persistentEdgeFlow && (e.lastTransfer || 0) > 0) {
         const perSecond = (e.lastTransfer || 0) / Math.max(1e-6, tickIntervalSec);
@@ -6089,6 +6842,12 @@ function fallbackRemoveEdgesForNode(nodeId) {
         if (textObj) textObj.setVisible(false);
       }
     }
+
+    reversePipeButtons.forEach((entry, edgeId) => {
+      if (!edges.has(edgeId)) {
+        removeReverseButton(edgeId);
+      }
+    });
 
     drawPrePipes();
 
@@ -6142,39 +6901,35 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
       const numberOffset = canShowEmoji ? -Math.min(r * 0.55, 12) : 0;
 
-      // Show juice text if toggle is enabled
-      if (persistentNumbers) {
+      const shouldShowJuiceText = persistentNumbers && n.owner != null;
+      if (shouldShowJuiceText) {
         const juiceValue = Math.floor(n.size || 0); // No decimals
         let juiceText = nodeJuiceTexts.get(id);
-        
+
         if (!juiceText) {
           // Create new text object (world-space; camera handles positioning)
           juiceText = sceneRef.add.text(nx, ny + numberOffset, juiceValue.toString(), {
             font: '12px monospace',
-            color: n.owner === null ? '#ffffff' : '#000000', // White for neutrals, black for owned
+            color: '#000000',
             align: 'center'
           });
           juiceText.setOrigin(0.5, 0.5); // Center the text
           nodeJuiceTexts.set(id, juiceText);
-          // Cache last owner to avoid unnecessary color updates
           juiceText._lastOwner = n.owner;
         } else {
           // Always re-center text to the node's current screen position
           juiceText.setPosition(nx, ny + numberOffset);
-          // Update only when changed to reduce per-frame overhead
           const newTextValue = juiceValue.toString();
           if (juiceText.text !== newTextValue) {
             juiceText.setText(newTextValue);
           }
-          const desiredColor = (n.owner === null ? '#ffffff' : '#000000');
           if (juiceText._lastOwner !== n.owner) {
-            juiceText.setColor(desiredColor);
+            juiceText.setColor('#000000');
             juiceText._lastOwner = n.owner;
           }
           if (!juiceText.visible) juiceText.setVisible(true);
         }
       } else {
-        // Hide juice text if toggle is disabled
         const juiceText = nodeJuiceTexts.get(id);
         if (juiceText) {
           juiceText.setVisible(false);
@@ -6657,6 +7412,14 @@ function fallbackRemoveEdgesForNode(nodeId) {
     return hexToInt(entry?.color);
   }
 
+  function ownerToHexColor(ownerId, fallback = '#f4f4f4') {
+    if (ownerId == null) return fallback;
+    const entry = players.get(ownerId);
+    const raw = typeof entry?.color === 'string' ? entry.color.trim() : '';
+    if (!raw) return fallback;
+    return raw.startsWith('#') ? raw : `#${raw}`;
+  }
+
   function ownerToSecondaryColor(ownerId) {
     if (ownerId == null) return 0x000000;
     const entry = players.get(ownerId);
@@ -6671,19 +7434,12 @@ function fallbackRemoveEdgesForNode(nodeId) {
   function canReverseEdge(edge) {
     if (!edge) return false;
 
-    if (isNukeLikeModeActive()) return false;
+    if (edge.pipeType !== 'reverse') return false;
     
     const sourceNode = nodes.get(edge.source);
     if (!sourceNode) return false;
     
-    const sourceOwner = sourceNode.owner;
-    
-    // Updated rule: the giving node must be neutral or owned by the player
-    if (sourceOwner != null && sourceOwner !== myPlayerId) {
-      return false;
-    }
-
-    return true;
+    return sourceNode.owner === myPlayerId;
   }
 
   function playerControlsEdge(edge) {
@@ -6854,8 +7610,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
       const edge = edges.get(edgeId);
       if (edge) {
         if (!canReverseEdge(edge)) {
-          if (isNukeLikeModeActive()) {
-            showErrorMessage('Edge reversal disabled in this mode');
+          if (edge.pipeType !== 'reverse') {
+            showErrorMessage('Edge is not reversible');
           } else {
             const sourceNode = nodes.get(edge.source);
             if (sourceNode && sourceNode.owner != null && sourceNode.owner !== myPlayerId) {
@@ -6863,17 +7619,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
             }
           }
         } else {
-          const sourceNode = nodes.get(edge.source);
-          const targetNode = nodes.get(edge.target);
-          if (sourceNode && targetNode) {
-            const cost = calculateBridgeCost(sourceNode, targetNode);
-            if (goldValue >= cost) {
-              const token = localStorage.getItem('token');
-              ws.send(JSON.stringify({ type: 'reverseEdge', edgeId, cost, token }));
-            } else {
-              showErrorMessage('Not enough money', 'money');
-            }
-          }
+          const token = localStorage.getItem('token');
+          ws.send(JSON.stringify({ type: 'reverseEdge', edgeId, token }));
         }
       }
     }
@@ -6893,6 +7640,19 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
   function applyWarpWrapToScreen(x, y) {
     if (!shouldWarpCursor()) return { x, y };
+    if (!isWarpWrapUnlocked()) {
+      maybeAutoUnlockWarpWrap(x, y);
+    }
+    if (!isWarpWrapUnlocked()) {
+      const clamped = clampCursorToWarpBounds(x, y);
+      if (
+        activeAbility === 'bridge1way'
+        && (Math.abs(clamped.x - x) > 1e-3 || Math.abs(clamped.y - y) > 1e-3)
+      ) {
+        notifyWarpGemRequired();
+      }
+      return clamped;
+    }
     const bounds = warpBoundsScreen;
     const width = bounds.maxX - bounds.minX;
     const height = bounds.maxY - bounds.minY;
@@ -7037,6 +7797,13 @@ function fallbackRemoveEdgesForNode(nodeId) {
     const toggle = element.closest ? element.closest('.toggle-switch') : null;
     if (toggle) return toggle;
 
+    if (element.closest) {
+      const gemTarget = element.closest('.gem-count');
+      if (gemTarget && gemCountsDisplay && gemCountsDisplay.contains(gemTarget)) {
+        return gemTarget;
+      }
+    }
+
     const button = element.closest ? element.closest('button') : null;
     if (button) return button;
 
@@ -7116,6 +7883,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
       lastDoubleWarpWarningTime = 0;
       lastWarpAxis = null;
       lastWarpDirection = null;
+      resetAutoWarpGemUnlock();
     }
     updateMouseWorldFromVirtualCursor();
   }
@@ -7209,15 +7977,19 @@ function fallbackRemoveEdgesForNode(nodeId) {
     if (!node) return false;
     brassActivationDenied = false;
 
-    const brassMode = isBrassModeActive();
-    const intentionalBrassMode = isIntentionalBrassModeActive();
-    const xbMode = isXbModeActive();
+    const magicBrassMode = isMagicResourceModeActive();
 
-    let wantBrass = false;
-    if (brassMode) {
-      wantBrass = !!node.isBrass;
-    } else if (intentionalBrassMode) {
-      wantBrass = !!useBrass;
+    let wantBrass = determineBridgeBrassPreference(node, useBrass);
+    if (magicBrassMode) {
+      if (rageGemModeActive && canActivateRageGemMode()) {
+        wantBrass = false;
+      } else if (reverseGemModeActive && canActivateReverseGemMode()) {
+        wantBrass = false;
+      } else if (brassGemModeActive && canActivateBrassGemMode()) {
+        wantBrass = true;
+      } else if (!canActivateBrassGemMode()) {
+        wantBrass = false;
+      }
     }
 
     const ownershipRequired = pipeStartRequiresOwnership();
@@ -7230,15 +8002,16 @@ function fallbackRemoveEdgesForNode(nodeId) {
     activeAbility = 'bridge1way';
     bridgeFirstNode = nodeId;
     bridgeIsBrass = wantBrass;
-    bridgePreviewWillBeBrass = wantBrass && !xbMode;
+    bridgePreviewWillBeBrass = computeInitialBrassPreviewState();
     xbPreviewBlockedByBrass = false;
     brassPreviewIntersections.clear();
     warpWrapUsed = false;
     lastDoubleWarpWarningTime = 0;
     lastWarpAxis = null;
     lastWarpDirection = null;
-    hideReverseCostDisplay();
+    resetAutoWarpGemUnlock();
     hideBridgeCostDisplay();
+    updateBrassPreviewIntersections();
     return true;
   }
 
@@ -7264,6 +8037,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
           lastDoubleWarpWarningTime = 0;
           lastWarpAxis = null;
           lastWarpDirection = null;
+          resetAutoWarpGemUnlock();
           return true; // Handled
         } else if (bridgeFirstNode !== nodeId) {
           // Complete bridge building - second node can be any node
@@ -7274,7 +8048,9 @@ function fallbackRemoveEdgesForNode(nodeId) {
             return true;
           }
           const modeIsXb = isXbModeActive();
-          const applyBrassCost = bridgePreviewWillBeBrass && brassPipesDoubleCost();
+          const useBrassPipe = bridgePreviewWillBeBrass && (isMagicResourceModeActive() || isCrossLikeModeActive());
+          const pipeType = determinePipeTypeForBridge(useBrassPipe);
+          const applyBrassCost = pipeType === 'gold' && brassPipesDoubleCost();
           if (modeIsXb && xbPreviewBlockedByBrass) {
             showErrorMessage('Cannot cross brass pipe');
             return true;
@@ -7282,7 +8058,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
           const ownershipRequired = pipeStartRequiresOwnership();
           const firstOwner = firstNode.owner;
           const lacksOwnership = ownershipRequired && firstOwner !== myPlayerId;
-          const useBrassPipe = bridgePreviewWillBeBrass && isCrossLikeModeActive();
           const warpPreference = getActiveWarpPreference();
           const cost = calculateBridgeCost(firstNode, node, applyBrassCost, warpPreference);
           const hasFunds = sandboxModeEnabled() || goldValue >= cost;
@@ -7303,8 +8078,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
                 : []
             } : null;
 
-            const pipeType = useBrassPipe ? 'gold' : 'normal';
-
             const buildBridgePayload = {
               type: 'buildBridge',
               fromNodeId: bridgeFirstNode,
@@ -7315,6 +8088,25 @@ function fallbackRemoveEdgesForNode(nodeId) {
               pipeType,
             };
 
+            const usesWarpGem = isMagicResourceModeActive()
+              && warpInfoPayload
+              && typeof warpInfoPayload.axis === 'string'
+              && warpInfoPayload.axis !== 'none';
+
+            if (usesWarpGem) {
+              setWarpGemModeActive(false, { clearPending: false });
+              pendingWarpGemSpend = true;
+            }
+            if (isMagicResourceModeActive() && useBrassPipe) {
+              setBrassGemModeActive(false, { clearPending: false });
+              pendingBrassGemSpend = true;
+            } else if (isMagicResourceModeActive() && pipeType === 'rage' && rageGemModeActive) {
+              setRageGemModeActive(false, { clearPending: false });
+              pendingRageGemSpend = true;
+            } else if (isMagicResourceModeActive() && pipeType === 'reverse' && reverseGemModeActive) {
+              setReverseGemModeActive(false, { clearPending: false });
+              pendingReverseGemSpend = true;
+            }
             ws.send(JSON.stringify(buildBridgePayload));
             // Don't reset bridge building state here - wait for server response
             return true; // Handled
@@ -7323,7 +8115,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
           if (shouldQueuePrePipe) {
             queuePrePipe(bridgeFirstNode, nodeId, {
               warpPreference,
-              pipeType: useBrassPipe ? 'gold' : 'normal',
+              pipeType,
               waitingForOwnership: lacksOwnership,
               waitingForGold: !sandboxModeEnabled() && !hasFunds,
               estimatedCost: cost,
@@ -7331,7 +8123,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
             activeAbility = null;
             clearBridgeSelection();
             hideBridgeCostDisplay();
-            hideReverseCostDisplay();
             return true;
           }
 
@@ -7357,7 +8148,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
     activeAbility = null;
     clearBridgeSelection();
     hideBridgeCostDisplay();
-    hideReverseCostDisplay();
     return true; // Handled
   }
 
@@ -7603,7 +8393,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
         activeAbility = null;
         clearBridgeSelection();
         hideBridgeCostDisplay();
-        hideReverseCostDisplay();
       }
       if (pointerLockActive) {
         releaseVirtualCursor();
@@ -7641,7 +8430,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
       if (hoveredNodeId !== null || hoveredEdgeId !== null) {
         hoveredNodeId = null;
         hoveredEdgeId = null;
-        hideReverseCostDisplay();
         redrawStatic();
       }
       return;
@@ -7704,16 +8492,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
     } else if (!kingSelectionActive && kingMoveTargetHoveredId !== null) {
       kingMoveTargetHoveredId = null;
       needsRedraw = true;
-    }
-
-    const hoveredEdge = (hoveredEdgeId != null) ? edges.get(hoveredEdgeId) : null;
-    // Show reverse cost only if edge can be reversed AND player doesn't already control it
-    const shouldShowReverseCost = Boolean(hoveredEdge && canReverseEdge(hoveredEdge) && !playerControlsEdge(hoveredEdge));
-
-    if (shouldShowReverseCost) {
-      updateReverseCostDisplay(hoveredEdge);
-    } else {
-      hideReverseCostDisplay();
     }
 
     // Avoid excessive redraws when numbers & targeting overlays are off and nothing changed
@@ -7816,18 +8594,15 @@ function fallbackRemoveEdgesForNode(nodeId) {
       activeAbility = null;
       clearBridgeSelection();
       hideBridgeCostDisplay();
-      hideReverseCostDisplay();
     } else if (abilityName === 'bridge1way') {
       // Activate bridge building
       activeAbility = abilityName;
       clearBridgeSelection();
-      hideReverseCostDisplay();
     } else if (abilityName === 'destroy') {
       // Activate destroy mode
       activeAbility = abilityName;
       clearBridgeSelection(); // reuse for destroy node selection
       hideBridgeCostDisplay();
-      hideReverseCostDisplay();
     }
     // Placeholder abilities do nothing for now
   }
@@ -7880,6 +8655,10 @@ function fallbackRemoveEdgesForNode(nodeId) {
   function updateGemCountsDisplay() {
     if (!gemCountsDisplay || gemCountLabels.size === 0) {
       gemCountsDisplay = document.getElementById('gemCountsDisplay');
+      if (gemCountsDisplay && !gemCountsClickHandlerBound) {
+        gemCountsDisplay.addEventListener('click', handleGemCountsClick);
+        gemCountsClickHandlerBound = true;
+      }
       gemCountLabels.clear();
       if (gemCountsDisplay) {
         GEM_TYPE_ORDER.forEach((key) => {
@@ -7921,6 +8700,26 @@ function fallbackRemoveEdgesForNode(nodeId) {
       const numeric = Number(counts[key]) || 0;
       label.textContent = String(Math.max(0, Math.floor(numeric)));
     });
+    let uiUpdated = false;
+    if (brassGemModeActive && !canActivateBrassGemMode()) {
+      setBrassGemModeActive(false);
+      uiUpdated = true;
+    }
+    if (rageGemModeActive && !canActivateRageGemMode()) {
+      setRageGemModeActive(false);
+      uiUpdated = true;
+    }
+    if (reverseGemModeActive && !canActivateReverseGemMode()) {
+      setReverseGemModeActive(false);
+      uiUpdated = true;
+    }
+    if (warpGemModeActive && !canActivateWarpGemMode()) {
+      setWarpGemModeActive(false);
+      uiUpdated = true;
+    }
+    if (!uiUpdated) {
+      updateGemModeUi();
+    }
   }
 
 
@@ -8267,7 +9066,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
     activeAbility = null;
     clearBridgeSelection();
     hideBridgeCostDisplay();
-    hideReverseCostDisplay();
     clearMoneyIndicators();
 
     gameEnded = false;
@@ -8486,7 +9284,10 @@ function fallbackRemoveEdgesForNode(nodeId) {
       : null;
     const waitingForOwnership = !!options.waitingForOwnership;
     const waitingForGold = !!options.waitingForGold;
-    const pipeType = options.pipeType === 'gold' ? 'gold' : 'normal';
+    const normalizedPipeType = typeof options.pipeType === 'string'
+      ? options.pipeType.trim().toLowerCase()
+      : 'normal';
+    const pipeType = ['gold', 'rage', 'reverse'].includes(normalizedPipeType) ? normalizedPipeType : 'normal';
     const basePlayerColor = ownerToColor(myPlayerId) || 0xffffff;
     const baseColorCss = toCssColor(basePlayerColor);
     const outlineCss = lightenColor(baseColorCss, 0.75);
@@ -8531,9 +9332,11 @@ function fallbackRemoveEdgesForNode(nodeId) {
     const toNode = nodes.get(prePipe.toNodeId);
     if (!fromNode || !toNode) return [];
     const path = computeWarpBridgeSegments(fromNode, toNode, prePipe.warpPreference || {});
+    const isWarpPath = path && typeof path.wrapAxis === 'string' && path.wrapAxis !== 'none';
     const segments = [];
     if (!path || !Array.isArray(path.segments) || !path.segments.length) {
       const entry = { sx: fromNode.x, sy: fromNode.y, ex: toNode.x, ey: toNode.y };
+      entry.isWarp = isWarpPath;
       if (includeMeta) {
         entry.startNode = fromNode;
         entry.endNode = toNode;
@@ -8548,7 +9351,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
       const ex = Number(segment.end.x);
       const ey = Number(segment.end.y);
       if (![sx, sy, ex, ey].every((value) => Number.isFinite(value))) return;
-      const entry = { sx, sy, ex, ey };
+      const entry = { sx, sy, ex, ey, isWarp: isWarpPath };
       if (includeMeta) {
         entry.startNode = segment.start.node || null;
         entry.endNode = segment.end.node || null;
@@ -8697,7 +9500,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
     const triH = PIPE_TRIANGLE_HEIGHT;
     const triW = PIPE_TRIANGLE_WIDTH;
-    const spacing = triH;
+    const pipeType = prePipe?.pipeType || 'normal';
+    const spacing = Math.max(1, pipeSpacingForType(pipeType));
     const count = Math.max(1, Math.floor(len / spacing));
     const actualSpacing = len / count;
     const angle = Math.atan2(uy, ux);
@@ -8706,6 +9510,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     const outlineColor = Number.isFinite(prePipe.outlineColor) ? prePipe.outlineColor : PRE_PIPE_OUTLINE_COLOR;
     const outlineAlpha = waitingOwnership ? 0.8 : (waitingGold ? 0.55 : 0.3);
     const wave = Math.sin(animationTime * PRE_PIPE_SHAKE_SPEED);
+    const isWarpSegment = !!segment.isWarp;
 
     for (let i = 0; i < count; i++) {
       const alternatingSign = (i % 2 === 0) ? 1 : -1;
@@ -8714,14 +9519,22 @@ function fallbackRemoveEdgesForNode(nodeId) {
       const offsetY = normalY * sway;
       const cx = sx + (i + 0.5) * actualSpacing * ux + offsetX;
       const cy = sy + (i + 0.5) * actualSpacing * uy + offsetY;
-      drawPrePipeTriangle(cx, cy, triW, triH, angle, outlineColor, outlineAlpha);
+      drawPrePipeTriangle(cx, cy, triW, triH, angle, outlineColor, outlineAlpha, pipeType, isWarpSegment);
     }
   }
 
-  function drawPrePipeTriangle(cx, cy, baseW, height, angle, outlineColor, outlineAlpha) {
-    const [p1, p2, p3] = computeTrianglePoints(cx, cy, baseW, height, angle);
-    graphicsEdges.lineStyle(1.4, outlineColor, outlineAlpha);
-    graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
+  function drawPrePipeTriangle(cx, cy, baseW, height, angle, outlineColor, outlineAlpha, pipeType = 'normal', isWarpSegment = false) {
+    const drawInstance = (centerX, centerY) => {
+      const shape = createPipeShape(centerX, centerY, baseW, height, angle, pipeType);
+      strokePipeShape(shape, 1.4, outlineColor, outlineAlpha);
+      if (isWarpSegment && shape.type !== 'droplet') {
+        strokeWarpOuterTriangle(centerX, centerY, baseW, height, angle, 0.92);
+      }
+    };
+
+    forEachPipeOffset(pipeType, angle, (dx, dy) => {
+      drawInstance(cx + dx, cy + dy);
+    });
   }
 
   function pickPrePipeNear(wx, wy, maxDist) {
@@ -8828,26 +9641,30 @@ function fallbackRemoveEdgesForNode(nodeId) {
     }
 
     const useBrassPipe = bridgePreviewWillBeBrass;
-    const cost = calculateBridgeCost(sNode, tNode, bridgePreviewWillBeBrass && brassPipesDoubleCost(), warpPreference);
+    const pipeType = determinePipeTypeForBridge(useBrassPipe);
+    const cost = calculateBridgeCost(sNode, tNode, pipeType === 'gold' && brassPipesDoubleCost(), warpPreference);
     const canAfford = goldValue >= cost;
     let previewColor;
-    if (useBrassPipe) {
+    if (pipeType === 'gold') {
       previewColor = canAfford ? BRASS_PIPE_COLOR : BRASS_PIPE_DIM_COLOR;
+    } else if (pipeType === 'reverse') {
+      previewColor = canAfford ? REVERSE_PIPE_COLOR : REVERSE_PIPE_DIM_COLOR;
     } else {
       previewColor = canAfford ? ownerToSecondaryColor(myPlayerId) : 0x000000;
     }
 
-    for (const segment of path.segments) {
-      drawBridgePreviewSegment(segment, previewColor, baseScale, useBrassPipe);
-    }
+  const isWarpBridge = typeof path.wrapAxis === 'string' && path.wrapAxis !== 'none';
+  for (const segment of path.segments) {
+    drawBridgePreviewSegment(segment, previewColor, baseScale, pipeType, isWarpBridge);
   }
+}
 
   function endpointRadius(endpoint, baseScale) {
     if (!endpoint || !endpoint.node) return 0;
     return Math.max(1, calculateNodeRadius(endpoint.node, baseScale)) + 1;
   }
 
-function drawBridgePreviewSegment(segment, color, baseScale, useBrass = false) {
+function drawBridgePreviewSegment(segment, color, baseScale, pipeType = 'normal', showWarpOutline = false) {
   if (!segment) return;
   const start = segment.start;
   const end = segment.end;
@@ -8880,35 +9697,40 @@ function drawBridgePreviewSegment(segment, color, baseScale, useBrass = false) {
 
     const triH = PIPE_TRIANGLE_HEIGHT;
     const triW = PIPE_TRIANGLE_WIDTH;
-    const packedSpacing = triH;
+    const packedSpacing = Math.max(1, pipeSpacingForType(pipeType));
     const packedCount = Math.max(1, Math.floor(len / packedSpacing));
     const actualSpacing = len / packedCount;
 
     for (let i = 0; i < packedCount; i++) {
       const cx = sx + (i + 0.5) * actualSpacing * ux;
       const cy = sy + (i + 0.5) * actualSpacing * uy;
-    drawPreviewTriangle(cx, cy, triW, triH, angle, color, useBrass);
-  }
+      const useBrass = pipeType === 'gold';
+      drawPreviewTriangle(cx, cy, triW, triH, angle, color, useBrass, pipeType, showWarpOutline);
+    }
 }
 
 function updateBrassPreviewIntersections() {
   brassPreviewIntersections.clear();
   xbPreviewBlockedByBrass = false;
 
-  const modeIsCrossLike = isCrossLikeModeActive();
-  const modeIsCross = isTrueCrossModeActive();
+  const gemMode = isMagicResourceModeActive();
   const modeIsXb = isXbModeActive();
+  const modeIsCrossLike = isCrossLikeModeActive();
+
+  const setDefaultPreviewState = () => {
+    bridgePreviewWillBeBrass = gemMode ? bridgeIsBrass : (bridgeIsBrass && modeIsCrossLike);
+  };
+
+  setDefaultPreviewState();
 
   if (activeAbility !== 'bridge1way' || bridgeFirstNode == null) {
-    bridgePreviewWillBeBrass = bridgeIsBrass && modeIsCrossLike;
     return;
   }
 
   const firstNode = nodes.get(bridgeFirstNode);
   if (!firstNode) return;
 
-  const shouldCheck = modeIsXb || (bridgeIsBrass && modeIsCrossLike);
-  bridgePreviewWillBeBrass = bridgeIsBrass && modeIsCrossLike;
+  const shouldCheck = modeIsXb || (bridgeIsBrass && (modeIsCrossLike || gemMode));
   if (!shouldCheck) return;
 
   let previewTarget = null;
@@ -8978,6 +9800,11 @@ function updateBrassPreviewIntersections() {
   if (modeIsXb) {
     bridgePreviewWillBeBrass = willCross;
     xbPreviewBlockedByBrass = blockedByBrass;
+  } else if (gemMode) {
+    if (!bridgeIsBrass) {
+      brassPreviewIntersections.clear();
+    }
+    bridgePreviewWillBeBrass = bridgeIsBrass;
   } else if (modeIsCrossLike) {
     if (!bridgeIsBrass) {
       brassPreviewIntersections.clear();
@@ -8994,25 +9821,166 @@ function computeTrianglePoints(cx, cy, baseW, height, angle) {
   return [tip, baseLeft, baseRight];
 }
 
-function drawPreviewTriangle(cx, cy, baseW, height, angle, color, useBrass = false) {
-  const [p1, p2, p3] = computeTrianglePoints(cx, cy, baseW, height, angle);
+function pipeSpacingForType(pipeType) {
+  if (pipeType === 'reverse') {
+    return PIPE_TRIANGLE_HEIGHT * REVERSE_PIPE_SPACING_MULTIPLIER;
+  }
+  return PIPE_TRIANGLE_HEIGHT;
+}
 
-  if (useBrass) {
-    const [bp1, bp2, bp3] = computeTrianglePoints(
-      cx,
-      cy,
-      baseW + BRASS_TRIANGLE_OUTER_WIDTH_BONUS,
-      height + BRASS_TRIANGLE_OUTER_HEIGHT_BONUS,
-      angle,
-    );
-    graphicsEdges.lineStyle(BRASS_OUTER_OUTLINE_THICKNESS, BRASS_PIPE_OUTLINE_COLOR, 0.9);
-    graphicsEdges.strokeTriangle(bp1[0], bp1[1], bp2[0], bp2[1], bp3[0], bp3[1]);
+function computeDropletOutlinePoints(cx, cy, baseW, height, angle) {
+  if (!Number.isFinite(baseW) || !Number.isFinite(height) || baseW <= 0 || height <= 0) {
+    return computeTrianglePoints(cx, cy, baseW, height, angle);
   }
 
-  const outlineAlpha = useBrass ? 0.95 : 0.9;
-  const outlineColor = color;
-  graphicsEdges.lineStyle(2, outlineColor, outlineAlpha);
+  const halfBase = baseW / 2;
+  const tipForward = height / 2;
+  const baseX = -height / 2;
+  const arcSegments = 16;
+
+  const tip = [tipForward, 0];
+  const baseRight = [baseX, halfBase];
+  const baseLeft = [baseX, -halfBase];
+  const centerX = baseX;
+  const centerY = 0;
+  const radius = halfBase;
+
+  const localPoints = [];
+  localPoints.push(tip);
+  localPoints.push(baseRight);
+
+  if (radius > 0 && arcSegments > 1) {
+    const thetaStart = Math.PI / 2;
+    const thetaEnd = (3 * Math.PI) / 2;
+    for (let i = 1; i < arcSegments; i++) {
+      const t = i / arcSegments;
+      const theta = thetaStart + (thetaEnd - thetaStart) * t;
+      const lx = centerX + radius * Math.cos(theta);
+      const ly = centerY + radius * Math.sin(theta);
+      localPoints.push([lx, ly]);
+    }
+  }
+
+  localPoints.push(baseLeft);
+
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  return localPoints.map(([lx, ly]) => [
+    cx + lx * cos - ly * sin,
+    cy + lx * sin + ly * cos,
+  ]);
+}
+
+function createPipeShape(cx, cy, baseW, height, angle, pipeType = 'normal') {
+  if (pipeType === 'reverse') {
+    return { type: 'droplet', points: computeDropletOutlinePoints(cx, cy, baseW, height, angle) };
+  }
+  return { type: 'triangle', points: computeTrianglePoints(cx, cy, baseW, height, angle) };
+}
+
+function strokeClosedShape(points) {
+  if (!Array.isArray(points) || !points.length) return;
+  graphicsEdges.beginPath();
+  graphicsEdges.moveTo(points[0][0], points[0][1]);
+  for (let i = 1; i < points.length; i++) {
+    graphicsEdges.lineTo(points[i][0], points[i][1]);
+  }
+  graphicsEdges.closePath();
+  graphicsEdges.strokePath();
+}
+
+function fillClosedShape(points) {
+  if (!Array.isArray(points) || !points.length) return;
+  graphicsEdges.beginPath();
+  graphicsEdges.moveTo(points[0][0], points[0][1]);
+  for (let i = 1; i < points.length; i++) {
+    graphicsEdges.lineTo(points[i][0], points[i][1]);
+  }
+  graphicsEdges.closePath();
+  graphicsEdges.fillPath();
+}
+
+function strokePipeShape(shape, lineWidth, color, alpha) {
+  if (!shape || !Array.isArray(shape.points)) return;
+  graphicsEdges.lineStyle(lineWidth, color, alpha);
+  if (shape.type === 'droplet') {
+    strokeClosedShape(shape.points);
+    return;
+  }
+  const [p1, p2, p3] = shape.points;
   graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
+}
+
+function fillPipeShape(shape, color, alpha) {
+  if (!shape || !Array.isArray(shape.points)) return;
+  graphicsEdges.fillStyle(color, alpha);
+  if (shape.type === 'droplet') {
+    fillClosedShape(shape.points);
+    return;
+  }
+  const [p1, p2, p3] = shape.points;
+  graphicsEdges.fillTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
+}
+
+function strokeWarpOuterTriangle(cx, cy, baseW, height, angle, alpha = 0.95) {
+  if (!graphicsEdges) return;
+  if (!Number.isFinite(baseW) || !Number.isFinite(height)) return;
+  const expandedPoints = computeTrianglePoints(
+    cx,
+    cy,
+    baseW + WARP_TRIANGLE_OUTER_WIDTH_BONUS,
+    height + WARP_TRIANGLE_OUTER_HEIGHT_BONUS,
+    angle,
+  );
+  graphicsEdges.lineStyle(WARP_OUTER_OUTLINE_THICKNESS, WARP_PIPE_OUTLINE_COLOR, alpha);
+  graphicsEdges.strokeTriangle(
+    expandedPoints[0][0], expandedPoints[0][1],
+    expandedPoints[1][0], expandedPoints[1][1],
+    expandedPoints[2][0], expandedPoints[2][1],
+  );
+}
+
+function forEachPipeOffset(pipeType, angle, callback) {
+  const shouldSplit = pipeType === 'rage' && Number.isFinite(RAGE_PIPE_OFFSET) && RAGE_PIPE_OFFSET > 0;
+  if (!shouldSplit) {
+    callback(0, 0);
+    return;
+  }
+
+  const normalX = -Math.sin(angle);
+  const normalY = Math.cos(angle);
+  const offsetX = normalX * RAGE_PIPE_OFFSET;
+  const offsetY = normalY * RAGE_PIPE_OFFSET;
+  callback(-offsetX, -offsetY);
+  callback(offsetX, offsetY);
+}
+
+function drawPreviewTriangle(cx, cy, baseW, height, angle, color, useBrass = false, pipeType = 'normal', showWarpOutline = false) {
+  const drawInstance = (centerX, centerY) => {
+    const shape = createPipeShape(centerX, centerY, baseW, height, angle, pipeType);
+
+    if (useBrass && shape.type !== 'droplet') {
+      const [bp1, bp2, bp3] = computeTrianglePoints(
+        centerX,
+        centerY,
+        baseW + BRASS_TRIANGLE_OUTER_WIDTH_BONUS,
+        height + BRASS_TRIANGLE_OUTER_HEIGHT_BONUS,
+        angle,
+      );
+      graphicsEdges.lineStyle(BRASS_OUTER_OUTLINE_THICKNESS, BRASS_PIPE_OUTLINE_COLOR, 0.9);
+      graphicsEdges.strokeTriangle(bp1[0], bp1[1], bp2[0], bp2[1], bp3[0], bp3[1]);
+    }
+
+    const outlineAlpha = useBrass ? 0.95 : 0.9;
+    strokePipeShape(shape, 2, color, outlineAlpha);
+    if (showWarpOutline && shape.type !== 'droplet') {
+      strokeWarpOuterTriangle(centerX, centerY, baseW, height, angle, 0.92);
+    }
+  };
+
+  forEachPipeOffset(pipeType, angle, (dx, dy) => {
+    drawInstance(cx + dx, cy + dy);
+  });
 }
 
   function drawEdge(e, sNode, tNode, edgeId) {
@@ -9033,7 +10001,8 @@ function drawPreviewTriangle(cx, cy, baseW, height, angle, color, useBrass = fal
     // All edges are single direction: chain of triangles along the path
     const triH = PIPE_TRIANGLE_HEIGHT;
     const triW = PIPE_TRIANGLE_WIDTH;
-    const packedCount = Math.max(1, Math.floor(totalLength / triH));
+    const spacing = Math.max(1, pipeSpacingForType(e?.pipeType || 'normal'));
+    const packedCount = Math.max(1, Math.floor(totalLength / spacing));
     const actualSpacing = totalLength / packedCount;
     
     const removal = e.removing || null;
@@ -9060,7 +10029,7 @@ function drawPreviewTriangle(cx, cy, baseW, height, angle, color, useBrass = fal
     const removalHighlight = (!removal &&
       activeAbility === 'bridge1way' &&
       bridgePreviewWillBeBrass &&
-      isCrossLikeModeActive() &&
+      (isCrossLikeModeActive() || isMagicResourceModeActive()) &&
       brassPreviewIntersections.has(edgeId)
     );
 
@@ -9155,6 +10124,7 @@ function drawRemovalExplosion(edge, removal, fromNode) {
     const fadeEndTime = fadeStartTime + (Number(removal.fadeDuration) || 0);
     const pipeType = edge?.pipeType || 'normal';
     const outlineColor = pipeType === 'gold' ? BRASS_PIPE_OUTLINE_COLOR : 0x000000;
+    const showWarpOutline = edgeUsesWarp(edge);
     const driftAlphaStart = Number.isFinite(removal.driftAlphaStart) ? removal.driftAlphaStart : 0.6;
     const driftAlphaEnd = Number.isFinite(removal.driftAlphaEnd) ? removal.driftAlphaEnd : 0.95;
     const restAlpha = Number.isFinite(removal.restAlpha) ? removal.restAlpha : 0.65;
@@ -9197,7 +10167,7 @@ function drawRemovalExplosion(edge, removal, fromNode) {
       const [screenX, screenY] = worldToScreen(currentX, currentY);
       const triWidth = Number(particle.triWidth) || PIPE_TRIANGLE_WIDTH;
       const triHeight = Number(particle.triHeight) || PIPE_TRIANGLE_HEIGHT;
-      drawExplosionTriangle(screenX, screenY, triWidth, triHeight, angle, color, alpha, outlineColor, pipeType);
+      drawExplosionTriangle(screenX, screenY, triWidth, triHeight, angle, color, alpha, outlineColor, pipeType, showWarpOutline);
     }
 
     if (fadeEndTime > fadeStartTime && now >= fadeEndTime) {
@@ -9212,104 +10182,110 @@ function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, 
     const isRemovalOutline = !!removalOutline;
     const color = (overrideColor != null) ? overrideColor : edgeColor(e, fromNode);
 
-    let finalAngle = angle;
-    if (e._spin) {
-      const elapsed = Math.max(0, animationTime - e._spin.spinStartTime);
-      const perIndexDelay = EDGE_SPIN_PER_TRIANGLE_SEC;
-      const local = Math.max(0, elapsed - (triangleIndex || 0) * perIndexDelay);
-      const spinPhase = Math.min(1, local / 0.24); // 180deg over ~0.24s (slower)
-      // Start from previous orientation (new angle + PI) and settle on new angle
-      finalAngle = angle + Math.PI * (1 - spinPhase);
-    }
+    const drawInstance = (centerX, centerY) => {
+      let finalAngle = angle;
+      if (e._spin) {
+        const elapsed = Math.max(0, animationTime - e._spin.spinStartTime);
+        const perIndexDelay = EDGE_SPIN_PER_TRIANGLE_SEC;
+        const local = Math.max(0, elapsed - (triangleIndex || 0) * perIndexDelay);
+        const spinPhase = Math.min(1, local / 0.24); // 180deg over ~0.24s (slower)
+        // Start from previous orientation (new angle + PI) and settle on new angle
+        finalAngle = angle + Math.PI * (1 - spinPhase);
+      }
 
-    const scaledBaseW = baseW * Math.max(scaleOverride, 0.01);
-    const scaledHeight = height * Math.max(scaleOverride, 0.01);
-    const [p1, p2, p3] = computeTrianglePoints(cx, cy, scaledBaseW, scaledHeight, finalAngle);
-    const brassPoints = (isBrass && !isRemovalOutline)
-      ? computeTrianglePoints(
-          cx,
-          cy,
-          scaledBaseW + BRASS_TRIANGLE_OUTER_WIDTH_BONUS,
-          scaledHeight + BRASS_TRIANGLE_OUTER_HEIGHT_BONUS,
-          finalAngle,
-        )
-      : null;
-    let brassFilled = false;
-    const fillBrass = () => {
-      if (!brassPoints || brassFilled) return;
-      graphicsEdges.fillStyle(BRASS_PIPE_COLOR, 1);
-      graphicsEdges.fillTriangle(
-        brassPoints[0][0], brassPoints[0][1],
-        brassPoints[1][0], brassPoints[1][1],
-        brassPoints[2][0], brassPoints[2][1],
-      );
-      brassFilled = true;
+      const scaledBaseW = baseW * Math.max(scaleOverride, 0.01);
+      const scaledHeight = height * Math.max(scaleOverride, 0.01);
+      const shape = createPipeShape(centerX, centerY, scaledBaseW, scaledHeight, finalAngle, pipeType);
+      const isDroplet = shape.type === 'droplet';
+      const trianglePoints = !isDroplet ? shape.points : null;
+      const showWarpOutline = !isDroplet && !isRemovalOutline && edgeUsesWarp(e);
+      const brassPoints = (!isDroplet && isBrass && !isRemovalOutline)
+        ? computeTrianglePoints(
+            centerX,
+            centerY,
+            scaledBaseW + BRASS_TRIANGLE_OUTER_WIDTH_BONUS,
+            scaledHeight + BRASS_TRIANGLE_OUTER_HEIGHT_BONUS,
+            finalAngle,
+          )
+        : null;
+      let brassFilled = false;
+      const fillBrass = () => {
+        if (!brassPoints || brassFilled) return;
+        graphicsEdges.fillStyle(BRASS_PIPE_COLOR, 1);
+        graphicsEdges.fillTriangle(
+          brassPoints[0][0], brassPoints[0][1],
+          brassPoints[1][0], brassPoints[1][1],
+          brassPoints[2][0], brassPoints[2][1],
+        );
+        brassFilled = true;
+      };
+
+      if (e.flowing) {
+        // Animated juice flow effect - filled triangles
+        const animatedColor = getAnimatedJuiceColor(color, triangleIndex || 0, totalTriangles || 1, e.flowStartTime);
+
+        if (animatedColor === null) {
+          // Triangle not yet filled - show outline (same as non-flowing)
+          if (!isRemovalOutline) {
+            strokePipeShape(shape, 2, inactiveColor, 1);
+          }
+        } else {
+          // Triangle is filled - overlay animated color core atop brass shell
+          if (!isRemovalOutline) {
+            fillBrass();
+          }
+          fillPipeShape(shape, animatedColor.color, animatedColor.alpha);
+        }
+      } else if (e.on && ENABLE_IDLE_EDGE_ANIMATION) {
+        // Edge is on but not flowing - show hollow triangles with same animation pattern
+        const animatedColor = getAnimatedJuiceColor(color, triangleIndex || 0, totalTriangles || 1, e.flowStartTime);
+        
+        if (animatedColor === null) {
+          // Triangle not yet reached in animation - show outline
+          if (!isRemovalOutline) {
+            strokePipeShape(shape, 2, inactiveColor, 1);
+          }
+        } else {
+          // Triangle is in animation cycle - show hollow triangle with animated color outline
+          strokePipeShape(shape, 3, animatedColor.color, animatedColor.alpha);
+        }
+      } else {
+        // Edge is not on - show outline
+        if (!isRemovalOutline) {
+          strokePipeShape(shape, 2, inactiveColor, 1);
+        }
+      }
+
+      if (isRemovalOutline) {
+        strokePipeShape(shape, 3, 0x000000, 1);
+        return;
+      }
+
+      if (brassPoints) {
+        graphicsEdges.lineStyle(BRASS_OUTER_OUTLINE_THICKNESS, BRASS_PIPE_OUTLINE_COLOR, 0.95);
+        graphicsEdges.strokeTriangle(
+          brassPoints[0][0], brassPoints[0][1],
+          brassPoints[1][0], brassPoints[1][1],
+          brassPoints[2][0], brassPoints[2][1],
+        );
+      }
+
+      if (showWarpOutline) {
+        strokeWarpOuterTriangle(centerX, centerY, scaledBaseW, scaledHeight, finalAngle, 0.95);
+      }
+
+      // Add hover border using the same color
+      if (isHovered) {
+        strokePipeShape(shape, 2, color, 1);
+      }
     };
 
-    if (e.flowing) {
-      // Animated juice flow effect - filled triangles
-      const animatedColor = getAnimatedJuiceColor(color, triangleIndex || 0, totalTriangles || 1, e.flowStartTime);
-
-      if (animatedColor === null) {
-        // Triangle not yet filled - show outline (same as non-flowing)
-        if (!isRemovalOutline) {
-          graphicsEdges.lineStyle(2, inactiveColor, 1);
-          graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
-        }
-      } else {
-        // Triangle is filled - overlay animated color core atop brass shell
-        if (!isRemovalOutline) {
-          fillBrass();
-        }
-        graphicsEdges.fillStyle(animatedColor.color, animatedColor.alpha);
-        graphicsEdges.fillTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
-      }
-    } else if (e.on && ENABLE_IDLE_EDGE_ANIMATION) {
-      // Edge is on but not flowing - show hollow triangles with same animation pattern
-      const animatedColor = getAnimatedJuiceColor(color, triangleIndex || 0, totalTriangles || 1, e.flowStartTime);
-      
-      if (animatedColor === null) {
-        // Triangle not yet reached in animation - show outline
-        if (!isRemovalOutline) {
-          graphicsEdges.lineStyle(2, inactiveColor, 1);
-          graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
-        }
-      } else {
-        // Triangle is in animation cycle - show hollow triangle with animated color outline
-        graphicsEdges.lineStyle(3, animatedColor.color, animatedColor.alpha);
-        graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
-      }
-    } else {
-      // Edge is not on - show outline
-      if (!isRemovalOutline) {
-        graphicsEdges.lineStyle(2, inactiveColor, 1);
-        graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
-      }
-    }
-
-    if (isRemovalOutline) {
-      graphicsEdges.lineStyle(3, 0x000000, 1);
-      graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
-      return;
-    }
-
-    if (brassPoints) {
-      graphicsEdges.lineStyle(BRASS_OUTER_OUTLINE_THICKNESS, BRASS_PIPE_OUTLINE_COLOR, 0.95);
-      graphicsEdges.strokeTriangle(
-        brassPoints[0][0], brassPoints[0][1],
-        brassPoints[1][0], brassPoints[1][1],
-        brassPoints[2][0], brassPoints[2][1],
-      );
-    }
-
-    // Add hover border using the same color
-    if (isHovered) {
-      graphicsEdges.lineStyle(2, color, 1);
-      graphicsEdges.strokeTriangle(p1[0], p1[1], p2[0], p2[1], p3[0], p3[1]);
-    }
+    forEachPipeOffset(pipeType, angle, (dx, dy) => {
+      drawInstance(cx + dx, cy + dy);
+    });
   }
 
-  function drawExplosionTriangle(cx, cy, baseW, height, angle, color, alpha, outlineColor, pipeType) {
+function drawExplosionTriangle(cx, cy, baseW, height, angle, color, alpha, outlineColor, pipeType, showWarpOutline = false) {
     const [p1, p2, p3] = computeTrianglePoints(cx, cy, baseW, height, angle);
     const isBrass = pipeType === 'gold';
 
@@ -9325,6 +10301,10 @@ function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, 
       graphicsEdges.fillTriangle(bp1[0], bp1[1], bp2[0], bp2[1], bp3[0], bp3[1]);
       graphicsEdges.lineStyle(BRASS_OUTER_OUTLINE_THICKNESS, BRASS_PIPE_OUTLINE_COLOR, Math.max(0, Math.min(1, alpha * 0.95)));
       graphicsEdges.strokeTriangle(bp1[0], bp1[1], bp2[0], bp2[1], bp3[0], bp3[1]);
+    }
+
+    if (showWarpOutline) {
+      strokeWarpOuterTriangle(cx, cy, baseW, height, angle, Math.max(0, Math.min(1, alpha * 0.95)));
     }
 
     graphicsEdges.fillStyle(color, Math.max(0, Math.min(1, alpha)));
@@ -9352,6 +10332,13 @@ function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, 
     const g = Math.round(aG + (bG - aG) * clamped);
     const b = Math.round(aB + (bB - aB) * clamped);
     return (r << 16) | (g << 8) | b;
+  }
+
+  function lerpPoint(a, b, t) {
+    return [
+      a[0] + (b[0] - a[0]) * t,
+      a[1] + (b[1] - a[1]) * t,
+    ];
   }
 
   function edgeColor(e, fromNodeOrNull) {

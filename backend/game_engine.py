@@ -11,6 +11,7 @@ from .constants import (
     BRIDGE_BASE_COST,
     BRIDGE_COST_PER_UNIT_DISTANCE,
     BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE,
+    DEFAULT_GEM_COUNTS,
     DEFAULT_GAME_MODE,
     OVERFLOW_PENDING_GOLD_PAYOUT,
     PRODUCTION_RATE_PER_NODE,
@@ -154,7 +155,10 @@ class GameEngine:
             screen_variant = "flat"
         auto_brass_on_cross = normalized_mode in {"warp", "semi", "flat"}
         manual_brass_selection = normalized_mode in {"i-warp", "i-semi", "i-flat", "cross"}
-        brass_double_cost = manual_brass_selection or normalized_mode == "cross"
+        if resource_mode == "gems":
+            brass_double_cost = False
+        else:
+            brass_double_cost = manual_brass_selection or normalized_mode == "cross"
         allow_pipe_start_anywhere = False
         bridge_cost_override: Optional[float] = None
         game_start_mode = "open"
@@ -166,6 +170,24 @@ class GameEngine:
         starting_node_juice_overridden = False
         win_condition = "dominate"
         crown_health_value = KING_CROWN_MAX_HEALTH
+        gem_counts = {
+            "warp": int(DEFAULT_GEM_COUNTS.get("warp", 3)),
+            "brass": int(DEFAULT_GEM_COUNTS.get("brass", 7)),
+            "rage": int(DEFAULT_GEM_COUNTS.get("rage", 4)),
+            "reverse": int(DEFAULT_GEM_COUNTS.get("reverse", 6)),
+        }
+
+        def sanitize_gem_count(raw_value: Any, fallback: int) -> int:
+            if isinstance(raw_value, str):
+                raw_value = raw_value.strip()
+            try:
+                parsed = float(raw_value)
+            except (TypeError, ValueError):
+                return fallback
+            if math.isnan(parsed):
+                return fallback
+            clamped = max(0.0, min(10.0, parsed))
+            return int(round(clamped))
 
         if isinstance(options, dict):
             screen_option = str(options.get("screen", "")).strip().lower()
@@ -176,6 +198,9 @@ class GameEngine:
             if brass_option in {"cross", "right-click", "rightclick", "right_click"}:
                 manual_brass_selection = brass_option in {"right-click", "rightclick", "right_click"}
                 auto_brass_on_cross = brass_option == "cross"
+            elif brass_option == "gem":
+                manual_brass_selection = True
+                auto_brass_on_cross = False
 
             pipe_start_raw = options.get("pipeStart", options.get("brassStart", ""))
             pipe_start_option = str(pipe_start_raw).strip().lower()
@@ -272,6 +297,17 @@ class GameEngine:
             elif resources_option == "standard":
                 resource_mode = "standard"
 
+            gem_counts["warp"] = sanitize_gem_count(options.get("warpGemCount", gem_counts["warp"]), gem_counts["warp"])
+            gem_counts["brass"] = sanitize_gem_count(options.get("brassGemCount", gem_counts["brass"]), gem_counts["brass"])
+            gem_counts["rage"] = sanitize_gem_count(options.get("rageGemCount", gem_counts["rage"]), gem_counts["rage"])
+            gem_counts["reverse"] = sanitize_gem_count(options.get("reverseGemCount", gem_counts["reverse"]), gem_counts["reverse"])
+
+        if resource_mode == "gems":
+            auto_brass_on_cross = False
+            manual_brass_selection = True
+            brass_double_cost = False
+            screen_variant = "warp"
+
         if normalized_mode == "basic":
             auto_brass_on_cross = False
             manual_brass_selection = False
@@ -290,9 +326,12 @@ class GameEngine:
 
         self.state.starting_node_juice = starting_node_juice_value
 
-        brass_double_cost = manual_brass_selection or normalized_mode == "cross"
+        if resource_mode == "gems":
+            brass_double_cost = False
+        else:
+            brass_double_cost = manual_brass_selection or normalized_mode == "cross"
 
-        self._apply_resource_distribution(resource_mode)
+        self._apply_resource_distribution(resource_mode, gem_counts)
 
         sanitized_options: Dict[str, Any] = {
             "screen": screen_variant,
@@ -306,10 +345,17 @@ class GameEngine:
             "neutralCaptureGold": neutral_capture_reward,
             "ringJuiceToGoldRatio": overflow_ratio,
             "ringPayoutGold": overflow_payout,
+            "warpGemCount": gem_counts["warp"],
+            "brassGemCount": gem_counts["brass"],
+            "rageGemCount": gem_counts["rage"],
+            "reverseGemCount": gem_counts["reverse"],
             "winCondition": win_condition,
             "kingCrownHealth": crown_health_value,
             "resources": resource_mode,
         }
+        if resource_mode == "gems":
+            sanitized_options["brass"] = "gem"
+            sanitized_options["brassStart"] = "owned"
         sanitized_options["pipeStart"] = sanitized_options["brassStart"]
         if isinstance(options, dict):
             base_mode = options.get("baseMode")
@@ -333,7 +379,7 @@ class GameEngine:
 
         return sanitized_options
 
-    def _apply_resource_distribution(self, resource_mode: str) -> None:
+    def _apply_resource_distribution(self, resource_mode: str, gem_counts: Optional[Dict[str, int]] = None) -> None:
         if not self.state:
             return
 
@@ -356,11 +402,28 @@ class GameEngine:
         if normalized != "gems":
             return
 
+        plan_source: Dict[str, Any] = DEFAULT_GEM_COUNTS
+        if isinstance(gem_counts, dict):
+            plan_source = gem_counts
+
+        def resolve_gem_target(key: str) -> int:
+            raw_value = plan_source.get(key, DEFAULT_GEM_COUNTS.get(key, 0))
+            if isinstance(raw_value, str):
+                raw_value = raw_value.strip()
+            try:
+                numeric = float(raw_value)
+            except (TypeError, ValueError):
+                numeric = float(DEFAULT_GEM_COUNTS.get(key, 0))
+            if math.isnan(numeric):
+                numeric = float(DEFAULT_GEM_COUNTS.get(key, 0))
+            clamped = max(0.0, min(10.0, numeric))
+            return int(round(clamped))
+
         gem_plan = [
-            ("warp", 3),
-            ("brass", 7),
-            ("rage", 4),
-            ("reverse", 6),
+            ("warp", resolve_gem_target("warp")),
+            ("brass", resolve_gem_target("brass")),
+            ("rage", resolve_gem_target("rage")),
+            ("reverse", resolve_gem_target("reverse")),
         ]
 
         seed_basis = 0
@@ -932,7 +995,7 @@ class GameEngine:
         except GameValidationError:
             return False
     
-    def handle_reverse_edge(self, token: str, edge_id: int, cost: float = 1.0) -> bool:
+    def handle_reverse_edge(self, token: str, edge_id: int, cost: Optional[float] = None) -> bool:
         """
         Handle reversing an edge direction.
         Returns True if the action was successful.
@@ -944,27 +1007,18 @@ class GameEngine:
             # Allow reverse edge if player has picked starting node
             self.validate_player_can_act(player_id)
 
-            current_mode = normalize_game_mode(getattr(self.state, "mode", DEFAULT_GAME_MODE))
-            if current_mode in {"nuke", "cross", "brass-old", "go", "warp", "flat", "i-warp", "i-flat"}:
-                raise GameValidationError("Edge reversal disabled in this mode")
-
             edge = self.validate_edge_exists(edge_id)
+            if getattr(edge, "pipe_type", "normal") != "reverse":
+                raise GameValidationError("Edge is not reversible")
             
             # Get both nodes
             source_node = self.validate_node_exists(edge.source_node_id)
             target_node = self.validate_node_exists(edge.target_node_id)
 
-            # Updated eligibility rules: source node must be neutral or owned by the player
+            # Only the player who controls the source node may reverse the pipe
             source_owner = source_node.owner
-            if source_owner is not None and source_owner != player_id:
+            if source_owner != player_id:
                 raise GameValidationError("Pipe controlled by opponent")
-            
-            
-            # Calculate the actual reversal cost based on edge length
-            actual_cost = self.calculate_bridge_cost(source_node, target_node)
-
-            # Validate gold using the server-side calculation
-            self.validate_sufficient_gold(player_id, actual_cost)
             
             # Reverse the edge by swapping source and target
             edge.source_node_id, edge.target_node_id = edge.target_node_id, edge.source_node_id
@@ -978,15 +1032,6 @@ class GameEngine:
                 edge.on = False
 
             self._apply_edge_warp_geometry(edge)
-
-            # Deduct gold using verified cost
-            self.state.player_gold[player_id] = max(0.0, self.state.player_gold[player_id] - actual_cost)
-
-            # Store the edge reversal event for frontend notification
-            self.state.pending_edge_reversal = {
-                'edgeId': edge_id,
-                'cost': actual_cost
-            }
 
             return True
 
@@ -1305,6 +1350,48 @@ class GameEngine:
         for edge in self.state.edges.values():
             self._apply_edge_warp_geometry(edge)
 
+    def _finalize_auto_reversed_edges(self) -> None:
+        if not self.state:
+            return
+
+        pending_ids = list(getattr(self.state, "pending_auto_reversed_edge_ids", []) or [])
+        self.state.pending_edge_reversal_events = []
+        if not pending_ids:
+            return
+
+        events: List[Dict[str, Any]] = []
+        for edge_id in pending_ids:
+            edge = self.state.edges.get(edge_id)
+            if not edge:
+                continue
+            self._apply_edge_warp_geometry(edge)
+            warp_payload = {
+                "axis": edge.warp_axis,
+                "segments": [
+                    [sx, sy, ex, ey]
+                    for sx, sy, ex, ey in (edge.warp_segments or [])
+                ],
+            }
+            events.append({
+                "type": "edgeReversed",
+                "edge": {
+                    "id": edge.id,
+                    "source": edge.source_node_id,
+                    "target": edge.target_node_id,
+                    "bidirectional": False,
+                    "forward": True,
+                    "on": edge.on,
+                    "flowing": edge.flowing,
+                    "pipeType": getattr(edge, "pipe_type", "normal"),
+                    "warp": warp_payload,
+                    "warpAxis": warp_payload["axis"],
+                    "warpSegments": warp_payload["segments"],
+                },
+            })
+
+        self.state.pending_edge_reversal_events = events
+        self.state.pending_auto_reversed_edge_ids = []
+
     def calculate_bridge_cost(
         self,
         from_node: Node,
@@ -1372,12 +1459,29 @@ class GameEngine:
             from_node = self.validate_node_exists(from_node_id)
             to_node = self.validate_node_exists(to_node_id)
 
-            if is_brass_mode:
+            resource_mode = str(getattr(self.state, "resource_mode", "standard") or "standard").strip().lower()
+
+            allowed_pipe_types = {"normal", "gold", "rage", "reverse"}
+            requested_pipe_type = (pipe_type or "").strip().lower()
+            if resource_mode != "gems" and requested_pipe_type in {"rage", "reverse"}:
+                requested_pipe_type = "normal"
+            if requested_pipe_type not in allowed_pipe_types:
+                requested_pipe_type = "normal"
+
+            if requested_pipe_type in {"rage", "reverse"}:
+                normalized_pipe_type = requested_pipe_type
+            elif is_brass_mode:
                 normalized_pipe_type = "gold" if getattr(from_node, "node_type", "normal") == "brass" else "normal"
             elif is_cross_mode or manual_brass_selection:
-                normalized_pipe_type = "gold" if (pipe_type or "").lower() == "gold" else "normal"
+                normalized_pipe_type = "gold" if requested_pipe_type == "gold" else "normal"
             else:
                 normalized_pipe_type = "normal"
+
+            requires_brass_gem = resource_mode == "gems" and normalized_pipe_type == "gold"
+            requires_rage_gem = resource_mode == "gems" and normalized_pipe_type == "rage"
+            requires_reverse_gem = resource_mode == "gems" and normalized_pipe_type == "reverse"
+            requires_warp_gem = False
+
 
             allow_pipe_anywhere = bool(getattr(self.state, "allow_pipe_start_anywhere", False))
 
@@ -1412,6 +1516,12 @@ class GameEngine:
                 raise GameValidationError("No double warping")
             if warp_axis != "none" and len(candidate_segments) != 2:
                 raise GameValidationError("Warp bridges must include entry and exit segments")
+
+            if resource_mode == "gems" and warp_axis != "none":
+                requires_warp_gem = True
+                available_warp_gems = self.state.get_player_gem_count(player_id, "warp") if self.state else 0
+                if available_warp_gems <= 0:
+                    raise GameValidationError("Warp gem required to warp pipes")
 
             # Calculate and validate gold using server-side formula
             actual_cost = self.calculate_bridge_cost(from_node, to_node, segments_override=candidate_segments)
@@ -1513,6 +1623,23 @@ class GameEngine:
                         # Should not happen because blocking_edges would have triggered, but guard anyway
                         raise GameValidationError("Only golden pipes can cross others")
 
+            requires_brass_gem = resource_mode == "gems" and normalized_pipe_type == "gold"
+            requires_rage_gem = resource_mode == "gems" and normalized_pipe_type == "rage"
+            requires_reverse_gem = resource_mode == "gems" and normalized_pipe_type == "reverse"
+
+            if requires_rage_gem:
+                available_rage = self.state.get_player_gem_count(player_id, "rage") if self.state else 0
+                if available_rage <= 0:
+                    raise GameValidationError("No rage gems available")
+            if requires_reverse_gem:
+                available_reverse = self.state.get_player_gem_count(player_id, "reverse") if self.state else 0
+                if available_reverse <= 0:
+                    raise GameValidationError("No reverse gems available")
+            if requires_brass_gem:
+                available_brass = self.state.get_player_gem_count(player_id, "brass") if self.state else 0
+                if available_brass <= 0:
+                    raise GameValidationError("No brass gems available")
+
             if (
                 from_node.owner != player_id
                 and not allow_pipe_anywhere
@@ -1577,6 +1704,24 @@ class GameEngine:
             self.state.edges[new_edge_id] = new_edge
             from_node.attached_edge_ids.append(new_edge_id)
             to_node.attached_edge_ids.append(new_edge_id)
+
+            if requires_warp_gem and self.state:
+                gem_consumed = self.state.consume_player_gem(player_id, "warp")
+                if not gem_consumed:
+                    raise GameValidationError("Warp gem required to warp pipes")
+
+            if requires_brass_gem and self.state:
+                gem_consumed = self.state.consume_player_gem(player_id, "brass")
+                if not gem_consumed:
+                    raise GameValidationError("No brass gems available")
+            if requires_rage_gem and self.state:
+                gem_consumed = self.state.consume_player_gem(player_id, "rage")
+                if not gem_consumed:
+                    raise GameValidationError("No rage gems available")
+            if requires_reverse_gem and self.state:
+                gem_consumed = self.state.consume_player_gem(player_id, "reverse")
+                if not gem_consumed:
+                    raise GameValidationError("No reverse gems available")
 
             # Deduct gold using verified cost
             self.state.player_gold[player_id] = max(0.0, self.state.player_gold[player_id] - actual_cost)
@@ -1842,6 +1987,7 @@ class GameEngine:
             return None
 
         self.state.simulate_tick(tick_interval_seconds)
+        self._finalize_auto_reversed_edges()
 
         for eliminated_id in list(self.state.eliminated_players):
             self._deactivate_player_edges(eliminated_id)
@@ -2080,8 +2226,6 @@ class GameEngine:
             self.state.pending_auto_attack_nodes = {}
             if hasattr(self.state, "pending_node_captures"):
                 self.state.pending_node_captures = []
-            if hasattr(self.state, "pending_edge_reversal"):
-                self.state.pending_edge_reversal = None
             self.state.player_king_nodes.clear()
             self.state.gem_nodes = {}
 

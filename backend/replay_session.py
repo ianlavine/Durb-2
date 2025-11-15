@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import time
 from dataclasses import dataclass
@@ -353,6 +354,7 @@ class ReplaySession:
             await self._send_json(tick_message)
             await self._flush_pending_captures()
             await self._flush_pending_overflow_payouts()
+            await self._flush_pending_edge_reversals()
 
             if winner is not None:
                 await self._announce_winner(winner)
@@ -412,6 +414,7 @@ class ReplaySession:
                                 "forward": True,
                                 "on": edge.on,
                                 "flowing": edge.flowing,
+                                "pipeType": getattr(edge, "pipe_type", "normal"),
                                 "warp": warp_payload,
                                 "warpAxis": warp_payload["axis"],
                                 "warpSegments": warp_payload["segments"],
@@ -419,8 +422,6 @@ class ReplaySession:
                             "replay": True,
                         }
                         await self._send_json(message)
-                    if hasattr(state, "pending_edge_reversal"):
-                        state.pending_edge_reversal = None
         elif event_type == "buildBridge":
             from_node = _coerce_int(payload.get("fromNodeId"), -1)
             to_node = _coerce_int(payload.get("toNodeId"), -1)
@@ -594,6 +595,7 @@ class ReplaySession:
 
         await self._flush_pending_captures()
         await self._flush_pending_overflow_payouts()
+        await self._flush_pending_edge_reversals()
 
     async def _flush_pending_captures(self) -> None:
         state = self.engine.state
@@ -632,6 +634,19 @@ class ReplaySession:
             }
             await self._send_json(message)
         state.pending_overflow_payouts = []
+
+    async def _flush_pending_edge_reversals(self) -> None:
+        state = self.engine.state
+        if not state:
+            return
+        events = getattr(state, "pending_edge_reversal_events", None)
+        if not events:
+            return
+        for event in list(events):
+            message = copy.deepcopy(event)
+            message["replay"] = True
+            await self._send_json(message)
+        state.pending_edge_reversal_events = []
 
     async def _send_init(self) -> None:
         state = self.engine.state

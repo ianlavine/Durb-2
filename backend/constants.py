@@ -67,6 +67,14 @@ STARTING_NODE_JUICE: float = 150.0
 # King mode
 KING_CROWN_MAX_HEALTH: float = 150.0  # extra damage buffer before the king node itself is vulnerable
 
+# Gem distribution defaults (counts per gem type when resources == 'gems')
+DEFAULT_GEM_COUNTS: Dict[str, int] = {
+    "warp": 3,
+    "brass": 7,
+    "rage": 4,
+    "reverse": 6,
+}
+
 # Classic (OG Durb) tuning
 CLASSIC_STARTING_NODE_JUICE: float = 50.0
 CLASSIC_PRODUCTION_RATE_PER_NODE: float = 0.7

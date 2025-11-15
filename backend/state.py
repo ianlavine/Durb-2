@@ -84,6 +84,8 @@ class GraphState:
         # Replay helpers
         self.tick_count: int = 0
         self.pending_edge_removals: List[Dict[str, Any]] = []
+        self.pending_auto_reversed_edge_ids: List[int] = []
+        self.pending_edge_reversal_events: List[Dict[str, Any]] = []
 
         # Economy overrides
         self.passive_income_per_second: float = 0.0
@@ -170,6 +172,38 @@ class GraphState:
                 serialized[normalized_key] = count_value
             payload.append([int(pid), serialized])
         return payload
+
+    def get_player_gem_count(self, player_id: int, gem_key: Any) -> int:
+        """Return the number of gems of the specified type the player currently has."""
+        try:
+            normalized_key = str(gem_key).strip().lower()
+        except Exception:
+            return 0
+        if not normalized_key:
+            return 0
+        counts = self.player_gem_counts.setdefault(int(player_id), {})
+        try:
+            return max(0, int(counts.get(normalized_key, 0)))
+        except (TypeError, ValueError):
+            return 0
+
+    def consume_player_gem(self, player_id: int, gem_key: Any) -> bool:
+        """Attempt to spend a gem of the specified type for the player."""
+        try:
+            normalized_key = str(gem_key).strip().lower()
+        except Exception:
+            return False
+        if not normalized_key:
+            return False
+        counts = self.player_gem_counts.setdefault(int(player_id), {})
+        try:
+            current = int(counts.get(normalized_key, 0))
+        except (TypeError, ValueError):
+            current = 0
+        if current <= 0:
+            return False
+        counts[normalized_key] = current - 1
+        return True
 
     def get_player_node_counts(self) -> Dict[int, int]:
         """Return a mapping of player id to number of nodes they currently own."""
@@ -429,6 +463,7 @@ class GraphState:
                 int(getattr(e, 'build_ticks_elapsed', 0)),
                 1 if getattr(e, 'building', False) else 0,
                 1 if getattr(e, 'pipe_type', 'normal') == 'gold' else 0,
+                str(getattr(e, "pipe_type", "normal") or "normal"),
             ]
             for eid, e in self.edges.items()
         ]
@@ -530,6 +565,7 @@ class GraphState:
             int(getattr(e, 'build_ticks_elapsed', 0)),
             1 if getattr(e, 'building', False) else 0,
             1 if getattr(e, 'pipe_type', 'normal') == 'gold' else 0,
+            str(getattr(e, "pipe_type", "normal") or "normal"),
         ] for eid, e in self.edges.items()]  # Always forward now
         nodes_arr = [
             [
@@ -812,6 +848,9 @@ class GraphState:
             if from_node is None or to_node is None:
                 continue
 
+            pipe_type = getattr(edge, "pipe_type", "normal") or "normal"
+            pipe_multiplier = 2.0 if pipe_type == "rage" else 1.0
+
             remaining = remaining_transfer.get(from_id, amount)
             if remaining <= 0:
                 continue
@@ -827,22 +866,25 @@ class GraphState:
                     if available_capacity <= 0:
                         actual_transfer = 0.0
                     else:
-                        actual_transfer = min(actual_transfer, available_capacity)
+                        max_source_amount = available_capacity / max(pipe_multiplier, 1.0)
+                        actual_transfer = min(actual_transfer, max_source_amount)
 
             if actual_transfer <= 0:
                 continue
+
+            delivered_amount = actual_transfer * pipe_multiplier
 
             size_delta[from_id] -= actual_transfer
             remaining_transfer[from_id] = max(0.0, remaining - actual_transfer)
 
             # Record the actual amount that flowed on this edge for UI display
-            edge.last_transfer = actual_transfer
+            edge.last_transfer = delivered_amount
 
             if is_friendly_flow:
-                intake_tracking[to_id] += actual_transfer
-                size_delta[to_id] += actual_transfer
+                intake_tracking[to_id] += delivered_amount
+                size_delta[to_id] += delivered_amount
             elif to_node.owner is None or (from_node.owner is not None and to_node.owner != from_node.owner):
-                remaining_attack = actual_transfer
+                remaining_attack = delivered_amount
                 crown_owner_id = getattr(to_node, "king_owner_id", None)
                 if (
                     crown_owner_id is not None
@@ -867,7 +909,7 @@ class GraphState:
                     if projected <= NODE_MIN_JUICE and from_node.owner is not None:
                         pending_ownership[to_id] = from_node.owner
             else:
-                size_delta[to_id] += actual_transfer
+                size_delta[to_id] += delivered_amount
 
         # Update cur_intake for all nodes
         for nid, intake in intake_tracking.items():
@@ -964,6 +1006,13 @@ class GraphState:
                         'rewardKey': reward_key,
                         'player_id': new_owner
                     })
+
+                if (
+                    new_owner is not None
+                    and previous_owner is not None
+                    and new_owner != previous_owner
+                ):
+                    self._auto_reverse_edges_from_node_loss(nid, previous_owner)
 
                 node.owner = new_owner
 
@@ -1118,6 +1167,27 @@ class GraphState:
 
             edge.on = True
 
+    def _auto_reverse_edges_from_node_loss(self, node_id: int, previous_owner: Optional[int]) -> None:
+        if previous_owner is None:
+            return
+        node = self.nodes.get(node_id)
+        if not node:
+            return
+
+        for edge_id in list(node.attached_edge_ids):
+            edge = self.edges.get(edge_id)
+            if not edge or getattr(edge, "pipe_type", "normal") != "reverse":
+                continue
+            if edge.source_node_id != node_id:
+                continue
+            target_node = self.nodes.get(edge.target_node_id)
+            if not target_node or target_node.owner != previous_owner:
+                continue
+
+            edge.source_node_id, edge.target_node_id = edge.target_node_id, edge.source_node_id
+            if edge_id not in self.pending_auto_reversed_edge_ids:
+                self.pending_auto_reversed_edge_ids.append(edge_id)
+
     def toggle_auto_expand(self, player_id: int) -> bool:
         """
         Toggle the auto-expand setting for a player.
@@ -1266,8 +1336,10 @@ def load_graph(graph_path: Path) -> Tuple[GraphState, Dict[str, int]]:
         warp_segments = e.get("warpSegments") if isinstance(e, dict) else None
         edge = Edge(id=e["id"], source_node_id=e["source"], target_node_id=e["target"])
         pipe_type = e.get("pipeType") if isinstance(e, dict) else None
-        if isinstance(pipe_type, str) and pipe_type.lower() == "gold":
-            edge.pipe_type = "gold"
+        if isinstance(pipe_type, str):
+            normalized_pipe_type = pipe_type.strip().lower()
+            if normalized_pipe_type in {"normal", "gold", "rage", "reverse"}:
+                edge.pipe_type = normalized_pipe_type
         if isinstance(warp_axis, str):
             edge.warp_axis = warp_axis
         if isinstance(warp_segments, list):
@@ -1313,7 +1385,9 @@ def build_state_from_dict(data: Dict) -> Tuple[GraphState, Dict[str, int]]:
     for e in edges_raw:
         edge = Edge(id=e["id"], source_node_id=e["source"], target_node_id=e["target"])
         pipe_type = e.get("pipeType") if isinstance(e, dict) else None
-        if isinstance(pipe_type, str) and pipe_type.lower() == "gold":
-            edge.pipe_type = "gold"
+        if isinstance(pipe_type, str):
+            normalized_pipe_type = pipe_type.strip().lower()
+            if normalized_pipe_type in {"normal", "gold", "rage", "reverse"}:
+                edge.pipe_type = normalized_pipe_type
         edges.append(edge)
     return GraphState(nodes, edges), screen
