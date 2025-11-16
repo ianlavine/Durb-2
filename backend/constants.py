@@ -37,6 +37,10 @@ GAME_MODES: Tuple[str, ...] = (
 )
 DEFAULT_GAME_MODE: str = "sparse"
 
+# Map layout tuning
+NODE_POSITION_LAYOUTS: Tuple[str, ...] = ("grid", "random")
+NODE_POSITION_LAYOUT: str = "random"  # change to "random" to scatter nodes uniformly
+
 
 # Gameplay flow tuning
 NODE_MIN_JUICE: float = 0.0
