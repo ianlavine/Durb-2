@@ -216,6 +216,36 @@
     });
   }
 
+  function playCrownAttackHorn() {
+    if (!soundEnabled) return;
+    ensureAudio();
+    if (!audioCtx) return;
+    const now = audioCtx.currentTime;
+
+    const hornOsc = audioCtx.createOscillator();
+    const hornGain = audioCtx.createGain();
+    hornOsc.type = 'sawtooth';
+    hornOsc.frequency.setValueAtTime(220, now);
+    hornOsc.frequency.exponentialRampToValueAtTime(90, now + 0.45);
+    hornGain.gain.setValueAtTime(0.0001, now);
+    hornGain.gain.exponentialRampToValueAtTime(0.38, now + 0.06);
+    hornGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.9);
+    hornOsc.connect(hornGain);
+    hornGain.connect(globalGain);
+    hornOsc.start(now);
+    hornOsc.stop(now + 0.95);
+
+    playNoiseBurst({
+      duration: 0.5,
+      volume: 0.22,
+      filterType: 'lowpass',
+      filterFreq: 520,
+      q: 0.9,
+      attack: 0.01,
+      decay: 0.5,
+    });
+  }
+
   function playReverseShuffle() {
     if (!soundEnabled) return;
     ensureAudio();
@@ -259,6 +289,7 @@
     playCaptureDing,
     playEnemyCaptureDing,
     playChaChing,
+    playCrownAttackHorn,
     playLoseNodeWarning,
     playBridgeHammerHit,
     playBridgeExplosion,

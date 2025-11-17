@@ -39,7 +39,7 @@ DEFAULT_GAME_MODE: str = "sparse"
 
 # Map layout tuning
 NODE_POSITION_LAYOUTS: Tuple[str, ...] = ("grid", "random")
-NODE_POSITION_LAYOUT: str = "random"  # change to "random" to scatter nodes uniformly
+NODE_POSITION_LAYOUT: str = "grid"  # change to "random" to scatter nodes uniformly
 
 
 # Gameplay flow tuning
@@ -108,6 +108,7 @@ BRIDGE_COST_PER_UNIT_DISTANCE_BY_MODE: Dict[str, float] = {
     "sandbox": 0.0,
 }
 BRIDGE_COST_PER_UNIT_DISTANCE: float = BRIDGE_COST_PER_UNIT_DISTANCE_BY_MODE[DEFAULT_GAME_MODE]
+BRASS_INTENTIONAL_COST_MULTIPLIER: float = 1.5
 
 # Bridge build timing (ticks required per unit world distance)
 BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE: float = 0.6
