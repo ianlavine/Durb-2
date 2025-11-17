@@ -11,6 +11,7 @@ from .constants import (
     BRIDGE_BASE_COST,
     BRIDGE_COST_PER_UNIT_DISTANCE,
     BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE,
+    BRASS_INTENTIONAL_COST_MULTIPLIER,
     DEFAULT_GEM_COUNTS,
     DEFAULT_GAME_MODE,
     OVERFLOW_PENDING_GOLD_PAYOUT,
@@ -160,9 +161,10 @@ class GameEngine:
         else:
             brass_double_cost = manual_brass_selection or normalized_mode == "cross"
         allow_pipe_start_anywhere = False
+        pipe_break_mode = "any"
         bridge_cost_override: Optional[float] = None
         game_start_mode = "open"
-        passive_income_per_second = 0.0
+        passive_income_per_second = 1.0
         neutral_capture_reward = get_neutral_capture_reward(normalized_mode)
         overflow_ratio = get_overflow_juice_to_gold_ratio(normalized_mode)
         overflow_payout = OVERFLOW_PENDING_GOLD_PAYOUT
@@ -207,6 +209,11 @@ class GameEngine:
             if pipe_start_option in {"owned", "anywhere"}:
                 allow_pipe_start_anywhere = pipe_start_option == "anywhere"
 
+            pipe_break_raw = options.get("breakMode", options.get("pipeBreakMode", options.get("break", "")))
+            pipe_break_option = str(pipe_break_raw).strip().lower()
+            if pipe_break_option in {"brass", "any"}:
+                pipe_break_mode = "any" if pipe_break_option == "any" else "brass"
+
             game_start_option = str(options.get("gameStart", "")).strip().lower()
             if game_start_option in {"hidden", "hidden-split", "hidden_split", "hidden split"}:
                 game_start_mode = "hidden-split"
@@ -230,7 +237,7 @@ class GameEngine:
                 parsed_passive = None
             if parsed_passive is not None and parsed_passive >= 0:
                 snapped = round(parsed_passive * 20.0) / 20.0
-                passive_income_per_second = round(max(0.0, min(1.0, snapped)), 2)
+                passive_income_per_second = round(max(0.0, min(2.0, snapped)), 2)
 
             neutral_value = options.get("neutralCaptureGold")
             if isinstance(neutral_value, str):
@@ -337,6 +344,7 @@ class GameEngine:
             "screen": screen_variant,
             "brass": "right-click" if manual_brass_selection else "cross",
             "brassStart": "anywhere" if allow_pipe_start_anywhere else "owned",
+            "breakMode": pipe_break_mode,
             "bridgeCost": self.state.bridge_cost_per_unit,
             "derivedMode": normalized_mode,
             "gameStart": game_start_mode,
@@ -366,6 +374,7 @@ class GameEngine:
         self.state.auto_brass_on_cross = auto_brass_on_cross
         self.state.manual_brass_selection = manual_brass_selection
         self.state.brass_double_cost = brass_double_cost
+        self.state.pipe_break_mode = pipe_break_mode
         self.state.allow_pipe_start_anywhere = allow_pipe_start_anywhere
         self.state.mode_settings = sanitized_options
         self.state.passive_income_per_second = passive_income_per_second
@@ -1526,7 +1535,7 @@ class GameEngine:
             # Calculate and validate gold using server-side formula
             actual_cost = self.calculate_bridge_cost(from_node, to_node, segments_override=candidate_segments)
             if normalized_pipe_type == "gold" and brass_double_cost:
-                actual_cost *= 2
+                actual_cost = int(round(actual_cost * BRASS_INTENTIONAL_COST_MULTIPLIER))
             self.validate_sufficient_gold(player_id, actual_cost)
 
             # Check if edge already exists
@@ -1554,6 +1563,9 @@ class GameEngine:
 
                 removed_edges.extend(self._remove_edges(removable_between))
 
+            pipe_break_setting = str(getattr(self.state, "pipe_break_mode", "brass") or "brass").strip().lower()
+            allow_pipe_breaks_without_brass = pipe_break_setting == "any"
+
             # Check for intersections (cross mode converts them into removals)
             intersecting_edges = self._find_intersecting_edges(from_node, to_node, candidate_segments)
             if intersecting_edges:
@@ -1571,55 +1583,62 @@ class GameEngine:
                     if blocked_edges:
                         raise GameValidationError("Cannot cross brass pipe")
 
+                    can_current_pipe_break = normalized_pipe_type == "gold" or allow_pipe_breaks_without_brass
                     if delayed_cross_removals:
-                        if normalized_pipe_type == "gold":
-                            pass
-                        elif auto_brass_on_cross:
-                            normalized_pipe_type = "gold"
-                        else:
-                            raise GameValidationError("Only brass pipes can cross others")
+                        if not can_current_pipe_break:
+                            if auto_brass_on_cross:
+                                normalized_pipe_type = "gold"
+                                can_current_pipe_break = True
+                            else:
+                                raise GameValidationError("Only brass pipes can cross others")
                     else:
-                        if not is_cross_like_mode and normalized_pipe_type != "gold":
+                        if not is_cross_like_mode and not can_current_pipe_break:
                             raise GameValidationError("Bridge would intersect existing edge")
 
                         blocking_edges: List[int] = []
                         for intersect_id in intersecting_edges:
                             existing_edge = self.state.edges.get(intersect_id) if self.state else None
                             existing_type = getattr(existing_edge, "pipe_type", "normal") if existing_edge else "normal"
-                            if normalized_pipe_type == "gold" and existing_type != "gold":
+                            if existing_type == "gold":
+                                blocking_edges.append(intersect_id)
+                                continue
+                            if can_current_pipe_break:
                                 distance = self._distance_to_first_intersection(candidate_segments, existing_edge) or 0.0
                                 delayed_cross_removals.append((intersect_id, max(0.0, distance)))
                             else:
                                 blocking_edges.append(intersect_id)
 
                         if blocking_edges:
-                            if normalized_pipe_type == "gold":
-                                raise GameValidationError("Cannot cross golden pipe")
-                            raise GameValidationError("Only golden pipes can cross others")
+                            raise GameValidationError("Cannot cross golden pipe")
 
-                        if delayed_cross_removals and normalized_pipe_type != "gold":
+                        if delayed_cross_removals and not can_current_pipe_break:
                             # Should not happen because blocking_edges would have triggered, but guard anyway
                             raise GameValidationError("Only golden pipes can cross others")
                 else:
-                    if not is_cross_like_mode and normalized_pipe_type != "gold":
+                    can_current_pipe_break = normalized_pipe_type == "gold" or allow_pipe_breaks_without_brass
+                    if not is_cross_like_mode:
                         raise GameValidationError("Bridge would intersect existing edge")
 
-                    blocking_edges: List[int] = []
+                    brass_blocking_edges: List[int] = []
+                    type_blocking_edges: List[int] = []
                     for intersect_id in intersecting_edges:
                         existing_edge = self.state.edges.get(intersect_id) if self.state else None
                         existing_type = getattr(existing_edge, "pipe_type", "normal") if existing_edge else "normal"
-                        if normalized_pipe_type == "gold" and existing_type != "gold":
+                        if existing_type == "gold":
+                            brass_blocking_edges.append(intersect_id)
+                            continue
+                        if can_current_pipe_break:
                             distance = self._distance_to_first_intersection(candidate_segments, existing_edge) or 0.0
                             delayed_cross_removals.append((intersect_id, max(0.0, distance)))
                         else:
-                            blocking_edges.append(intersect_id)
+                            type_blocking_edges.append(intersect_id)
 
-                    if blocking_edges:
-                        if normalized_pipe_type == "gold":
-                            raise GameValidationError("Cannot cross golden pipe")
+                    if brass_blocking_edges:
+                        raise GameValidationError("Cannot cross golden pipe")
+                    if type_blocking_edges:
                         raise GameValidationError("Only golden pipes can cross others")
 
-                    if delayed_cross_removals and normalized_pipe_type != "gold":
+                    if delayed_cross_removals and not can_current_pipe_break:
                         # Should not happen because blocking_edges would have triggered, but guard anyway
                         raise GameValidationError("Only golden pipes can cross others")
 

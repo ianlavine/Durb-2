@@ -60,6 +60,7 @@
   let myPlayerId = null;
   let phase = 'picking';
   let currentResourceMode = 'standard';
+  let currentBreakMode = 'any';
   let brassGemModeActive = false;
   let pendingBrassGemSpend = false;
   let rageGemModeActive = false;
@@ -89,6 +90,7 @@
   let brassPreviewIntersections = new Set(); // edges that would be removed by the current brass preview
   let brassActivationDenied = false;
   let bridgePreviewWillBeBrass = false; // dynamic flag for previewing brass outcome
+  let bridgePreviewWillBreakPipes = false;
   let xbPreviewBlockedByBrass = false;
   let mouseWorldX = 0; // current mouse position in world coordinates
   let mouseWorldY = 0;
@@ -96,6 +98,11 @@
   let crownHealthDisplays = new Map(); // crown health text displays for king mode, keyed by node ID
   let reversePipeButtons = new Map();
   const REVERSE_BUTTON_OFFSET_PX = 24;
+  let kingAttackAlertActive = false;
+  let kingAttackAlertStartTime = 0;
+  let kingAttackLastDamageTime = -Infinity;
+  let kingAttackNodeId = null;
+  let kingAttackWasActive = false;
 
   function destroyCrownHealthDisplay(nodeId) {
     if (nodeId == null) return;
@@ -152,6 +159,7 @@
   // Bridge costs - dynamically loaded from backend settings
   let BRIDGE_BASE_COST = 0;
   let BRIDGE_COST_PER_UNIT = 1.5;
+  const BRASS_INTENTIONAL_COST_MULTIPLIER = 1.5;
 
   // Progress bar for node count victory
   let progressBar = null;
@@ -185,6 +193,11 @@
   const KING_CROWN_FILL_COLOR = 0xffd700;
   const KING_CROWN_DEFAULT_HEALTH = 300;
   let kingCrownDefaultMax = KING_CROWN_DEFAULT_HEALTH;
+  const KING_ATTACK_ALERT_LINGER_SEC = 2.5;
+  const KING_ATTACK_WAVE_PERIOD_SEC = 1.1;
+  const KING_ATTACK_WAVE_SPREAD = 120;
+  const KING_ATTACK_WAVE_BASE_OFFSET = 14;
+  const KING_ATTACK_WAVE_COUNT = 3;
 
   function computeStandardKingNodeRadius(baseScale = 1) {
     const scale = Math.max(0.0001, Number(baseScale) || 1);
@@ -288,6 +301,7 @@
         screen: 'flat',
         brass: 'cross',
         brassStart: 'owned',
+        breakMode: 'brass',
         bridgeCost: 0.9,
         gameStart: 'open',
         startingNodeJuice: 300,
@@ -307,8 +321,9 @@
       }
     : {
         screen: 'warp',
-        brass: 'gem',
+        brass: 'right-click',
         brassStart: 'owned',
+        breakMode: 'any',
         bridgeCost: 1.0,
         gameStart: 'open',
         startingNodeJuice: 300,
@@ -322,7 +337,7 @@
         reverseGemCount: 6,
         winCondition: 'king',
         kingCrownHealth: KING_CROWN_DEFAULT_HEALTH,
-        resources: 'gems',
+        resources: 'standard',
       };
 
   const INITIAL_MODE = LEGACY_DEFAULT_MODE || (IS_LEGACY_CLIENT ? 'basic' : 'flat');
@@ -331,6 +346,7 @@
   let selectedMode = INITIAL_MODE;
   let gameMode = INITIAL_MODE;
   let selectedSettings = { ...DEFAULT_MODE_SETTINGS };
+  currentBreakMode = normalizeBreakMode(selectedSettings.breakMode);
   let modeOptionsButton = null;
   let modeOptionsPanel = null;
   let modeSelectorContainer = null;
@@ -362,7 +378,7 @@
   const BRIDGE_COST_MAX = 1.0;
   const BRIDGE_COST_STEP = 0.1;
   const PASSIVE_INCOME_MIN = 0;
-  const PASSIVE_INCOME_MAX = 1;
+  const PASSIVE_INCOME_MAX = 2;
   const PASSIVE_INCOME_STEP = 0.05;
   const NEUTRAL_CAPTURE_MIN = 0;
   const NEUTRAL_CAPTURE_MAX = 20;
@@ -580,6 +596,11 @@
     return value.trim().toLowerCase() === 'gems' ? 'gems' : 'standard';
   }
 
+  function normalizeBreakMode(value) {
+    if (typeof value !== 'string') return 'brass';
+    return value.trim().toLowerCase() === 'any' ? 'any' : 'brass';
+  }
+
   function isMagicResourceModeActive() {
     return normalizeResources(currentResourceMode) === 'gems';
   }
@@ -606,6 +627,20 @@
       }
     }
     updateModeOptionButtonStates();
+  }
+
+  function setCurrentBreakMode(mode) {
+    const normalized = normalizeBreakMode(mode);
+    if (currentBreakMode === normalized) return;
+    currentBreakMode = normalized;
+    if (activeAbility === 'bridge1way') {
+      updateBrassPreviewIntersections();
+      redrawStatic();
+    }
+  }
+
+  function isAnyPipeBreakModeActive() {
+    return currentBreakMode === 'any';
   }
 
   function getMyGemCount(gemKey = 'brass') {
@@ -1026,6 +1061,7 @@
     const brassLabel = brassValue === 'gem'
       ? 'Gem'
       : (brassValue === 'right-click' ? 'Right-Click' : 'Cross');
+    const breakLabel = normalizeBreakMode(settings.breakMode) === 'any' ? 'Any' : 'Brass';
     const startLabel = (settings.brassStart === 'anywhere') ? 'Anywhere' : 'Owned';
     const startModeLabel = (settings.gameStart === 'hidden-split') ? 'Hidden' : 'Open';
     const costLabel = coerceBridgeCost(settings.bridgeCost).toFixed(1);
@@ -1036,7 +1072,7 @@
     const startJuiceLabel = coerceStartingNodeJuice(settings.startingNodeJuice);
     const winConLabel = normalizeWinCondition(settings.winCondition) === 'king' ? 'King' : 'Dominate';
     const resourcesLabel = normalizeResources(settings.resources) === 'gems' ? 'Gems' : 'Standard';
-    return `Resources ${resourcesLabel} · Win-Con ${winConLabel} · ${screenLabel} · ${brassLabel} · ${startLabel} · ${startModeLabel} · ${costLabel} · Passive ${passiveLabel} · Neutral ${neutralLabel} · Ring ${ringRatioLabel}:${ringPayoutLabel} · Start ${startJuiceLabel}`;
+    return `Resources ${resourcesLabel} · Win-Con ${winConLabel} · ${screenLabel} · ${brassLabel} · Break ${breakLabel} · ${startLabel} · ${startModeLabel} · ${costLabel} · Passive ${passiveLabel} · Neutral ${neutralLabel} · Ring ${ringRatioLabel}:${ringPayoutLabel} · Start ${startJuiceLabel}`;
   }
 
   function updateModeOptionButtonStates() {
@@ -1044,6 +1080,7 @@
     const currentScreen = (selectedSettings.screen || 'flat').toLowerCase();
     const currentBrass = (selectedSettings.brass || 'cross').toLowerCase();
     const currentStart = (selectedSettings.brassStart || DEFAULT_MODE_SETTINGS.brassStart).toLowerCase();
+    const currentBreakMode = normalizeBreakMode(selectedSettings.breakMode || DEFAULT_MODE_SETTINGS.breakMode);
     const currentCost = Number(coerceBridgeCost(selectedSettings.bridgeCost));
     const currentGameStart = (selectedSettings.gameStart || DEFAULT_MODE_SETTINGS.gameStart).toLowerCase();
     const currentResources = normalizeResources(selectedSettings.resources);
@@ -1093,6 +1130,9 @@
           const target = currentStart === 'anywhere' ? 'anywhere' : 'owned';
           isActive = normalized === target;
         }
+      } else if (setting === 'breakMode') {
+        const normalized = normalizeBreakMode(value);
+        isActive = normalized === currentBreakMode;
       } else if (setting === 'gameStart') {
         const normalized = value.toLowerCase();
         const target = normalized.startsWith('hidden') ? 'hidden-split' : 'open';
@@ -1159,6 +1199,11 @@
     if (Object.prototype.hasOwnProperty.call(overrides, 'brassStart')) {
       const start = typeof overrides.brassStart === 'string' ? overrides.brassStart.toLowerCase() : '';
       next.brassStart = start === 'anywhere' ? 'anywhere' : 'owned';
+    }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'breakMode')) {
+      next.breakMode = normalizeBreakMode(overrides.breakMode);
+    } else {
+      next.breakMode = normalizeBreakMode(next.breakMode);
     }
     if (Object.prototype.hasOwnProperty.call(overrides, 'gameStart')) {
       const startMode = typeof overrides.gameStart === 'string' ? overrides.gameStart.toLowerCase() : '';
@@ -1268,6 +1313,7 @@
       screen: selectedSettings.screen,
       brass: selectedSettings.brass,
       brassStart: selectedSettings.brassStart,
+      breakMode: normalizeBreakMode(selectedSettings.breakMode),
       bridgeCost: Number(coerceBridgeCost(selectedSettings.bridgeCost).toFixed(1)),
       gameStart: selectedSettings.gameStart,
       startingNodeJuice: coerceStartingNodeJuice(selectedSettings.startingNodeJuice),
@@ -1294,6 +1340,12 @@
     if (typeof payload.brass === 'string') overrides.brass = payload.brass;
     if (typeof payload.pipeStart === 'string') overrides.brassStart = payload.pipeStart;
     else if (typeof payload.brassStart === 'string') overrides.brassStart = payload.brassStart;
+    const breakModePayload = (typeof payload.breakMode === 'string')
+      ? payload.breakMode
+      : (typeof payload.pipeBreakMode === 'string' ? payload.pipeBreakMode : payload.break);
+    if (typeof breakModePayload === 'string') {
+      overrides.breakMode = breakModePayload;
+    }
     if (typeof payload.gameStart === 'string') overrides.gameStart = payload.gameStart;
     if (Object.prototype.hasOwnProperty.call(payload, 'startingNodeJuice')) overrides.startingNodeJuice = payload.startingNodeJuice;
     if (Object.prototype.hasOwnProperty.call(payload, 'bridgeCost')) overrides.bridgeCost = payload.bridgeCost;
@@ -1472,6 +1524,7 @@
     playCaptureDing: noop,
     playEnemyCaptureDing: noop,
     playChaChing: noop,
+    playCrownAttackHorn: noop,
     playLoseNodeWarning: noop,
     playBridgeHammerHit: noop,
     playBridgeExplosion: noop,
@@ -1488,6 +1541,7 @@
     playCaptureDing,
     playEnemyCaptureDing,
     playChaChing,
+    playCrownAttackHorn,
     playLoseNodeWarning,
     playBridgeHammerHit,
     playBridgeExplosion,
@@ -2269,8 +2323,8 @@
     if (normalizedDistance === 0) return 0;
 
     const baseCost = Math.round(BRIDGE_BASE_COST + normalizedDistance * BRIDGE_COST_PER_UNIT);
-    const doubleCost = isBrass && brassPipesDoubleCost();
-    return doubleCost ? baseCost * 2 : baseCost;
+    const applyBrassMultiplier = isBrass && brassPipesDoubleCost();
+    return applyBrassMultiplier ? Math.round(baseCost * BRASS_INTENTIONAL_COST_MULTIPLIER) : baseCost;
   }
 
   function normalizeWarpSegmentList(rawSegments, sourceNode, targetNode) {
@@ -2814,6 +2868,7 @@ function clearBridgeSelection() {
   bridgeIsBrass = false;
   brassPreviewIntersections.clear();
   bridgePreviewWillBeBrass = false;
+  bridgePreviewWillBreakPipes = false;
   xbPreviewBlockedByBrass = false;
   warpWrapUsed = false;
   lastDoubleWarpWarningTime = 0;
@@ -4132,9 +4187,12 @@ function clearBridgeSelection() {
     
     const kingTargetsAnimating = kingSelectionActive && kingMoveTargetsList.length > 0;
     const kingSelectionPending = kingSelectionActive && kingMoveOptionsPending;
-    if (hasFlowingEdges || anySpinning || removalAnimating || moneyIndicators.length > 0 || (persistentTargeting && currentTargetNodeId !== null) || nodesAnimating || prePipesAnimating || prePipeStateChanged || kingTargetsAnimating || kingSelectionPending) {
+    const kingAlertActive = refreshKingAttackAlertState();
+    const redrawForKingAlert = kingAlertActive || kingAttackWasActive;
+    if (hasFlowingEdges || anySpinning || removalAnimating || moneyIndicators.length > 0 || (persistentTargeting && currentTargetNodeId !== null) || nodesAnimating || prePipesAnimating || prePipeStateChanged || kingTargetsAnimating || kingSelectionPending || redrawForKingAlert) {
       redrawStatic();
     }
+    kingAttackWasActive = kingAlertActive;
   }
 
   // Edge reversal spin animation state helpers
@@ -4308,6 +4366,8 @@ function clearBridgeSelection() {
     }
     nodes.clear();
     kingNodesByPlayer.clear();
+    clearKingAttackAlert();
+    kingAttackWasActive = false;
     kingCrownDefaultMax = coerceKingCrownHealth(selectedSettings.kingCrownHealth);
     clearKingSelection({ skipRedraw: true });
     edges.clear();
@@ -4370,6 +4430,8 @@ function clearBridgeSelection() {
       selectedMode = deriveModeFromSettings(selectedSettings);
       setSelectedMode(selectedMode, { force: true });
     }
+    const initBreakMode = (msg.modeSettings && msg.modeSettings.breakMode) || selectedSettings.breakMode;
+    setCurrentBreakMode(initBreakMode);
     const initResourceMode = (msg.modeSettings && msg.modeSettings.resources) || selectedSettings.resources;
     setCurrentResourceMode(initResourceMode);
 
@@ -4877,6 +4939,8 @@ function clearBridgeSelection() {
     gameEnded = true;
     releaseVirtualCursor();
     clearAllPrePipes('gameOver');
+    clearKingAttackAlert();
+    kingAttackWasActive = false;
     if (!viewingReplay) {
       myEliminated = msg.winnerId !== myId;
     }
@@ -4949,6 +5013,50 @@ function clearBridgeSelection() {
     });
   }
 
+  function clearKingAttackAlert() {
+    kingAttackAlertActive = false;
+    kingAttackNodeId = null;
+    kingAttackAlertStartTime = 0;
+    kingAttackLastDamageTime = -Infinity;
+  }
+
+  function refreshKingAttackAlertState() {
+    if (!kingAttackAlertActive) return false;
+    const sinceHit = animationTime - kingAttackLastDamageTime;
+    if (!Number.isFinite(sinceHit) || sinceHit > KING_ATTACK_ALERT_LINGER_SEC) {
+      clearKingAttackAlert();
+      return false;
+    }
+    return true;
+  }
+
+  function triggerKingAttackAlert(nodeId) {
+    kingAttackNodeId = nodeId;
+    kingAttackAlertStartTime = animationTime;
+    kingAttackLastDamageTime = animationTime;
+    if (!kingAttackAlertActive) {
+      kingAttackAlertActive = true;
+      playCrownAttackHorn();
+    }
+  }
+
+  function trackKingUnderAttack(nodeId, prevHealth, nextOwnerId, nextHealth) {
+    const nodeIsMyKing = Number.isFinite(nextOwnerId) && nextOwnerId === myPlayerId;
+    if (!nodeIsMyKing) {
+      if (kingAttackAlertActive && kingAttackNodeId === nodeId) {
+        clearKingAttackAlert();
+      }
+      return;
+    }
+
+    const prev = Number(prevHealth);
+    const curr = Number(nextHealth);
+    const healthDropped = Number.isFinite(prev) && Number.isFinite(curr) && curr < prev - 1e-6;
+    if (healthDropped) {
+      triggerKingAttackAlert(nodeId);
+    }
+  }
+
   function handleTick(msg) {
     applyNodeMovements(msg.nodeMovements);
     updateHiddenStartState(msg.hiddenStart);
@@ -4983,6 +5091,7 @@ function clearBridgeSelection() {
         const node = nodes.get(id);
         if (node) {
           const oldOwner = node.owner;
+          const prevCrownHealth = Number(node.kingCrownHealth);
           node.size = size;
           node.owner = owner;
           node.pendingGold = Number(pendingGold) || 0;
@@ -5020,6 +5129,7 @@ function clearBridgeSelection() {
           }
           node.kingCrownMax = Number.isFinite(crownMax) ? Math.max(0, crownMax) : 0;
           node.kingCrownHealth = Number.isFinite(crownHealth) ? Math.max(0, crownHealth) : (node.kingCrownMax || 0);
+          trackKingUnderAttack(id, prevCrownHealth, kingOwnerId, node.kingCrownHealth);
           if (oldOwner !== owner) {
             // Enemy capture sound: you captured from someone else
             if (owner === myPlayerId && oldOwner != null && oldOwner !== myPlayerId) {
@@ -5948,6 +6058,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
     edges.clear();
     nodes.clear();
     kingNodesByPlayer.clear();
+    clearKingAttackAlert();
+    kingAttackWasActive = false;
     hoveredNodeId = null;
     hoveredEdgeId = null;
     currentTargetNodeId = null;
@@ -5957,6 +6069,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     hideBridgeCostDisplay();
     edgeRemovalAnimations.clear();
     brassPreviewIntersections.clear();
+    bridgePreviewWillBreakPipes = false;
     clearAllPrePipes('sandbox', { skipRedraw: true });
     moneyIndicators = [];
     playerStats.forEach((stats) => {
@@ -6453,6 +6566,21 @@ function fallbackRemoveEdgesForNode(nodeId) {
   function isPointWithinRect(px, py, rect) {
     if (!rect) return false;
     return px >= rect.left && px <= rect.right && py >= rect.top && py <= rect.bottom;
+  }
+
+  function drawKingDistressWaves(nx, ny, baseRadius, ownerColor) {
+    if (!graphicsNodes || !kingAttackAlertActive) return;
+    const waveColor = Number.isFinite(ownerColor) ? ownerColor : 0xffffff;
+    const elapsed = Math.max(0, animationTime - kingAttackAlertStartTime);
+    const period = Math.max(0.01, KING_ATTACK_WAVE_PERIOD_SEC);
+    for (let i = 0; i < KING_ATTACK_WAVE_COUNT; i += 1) {
+      const phaseOffset = (period / KING_ATTACK_WAVE_COUNT) * i;
+      const waveT = ((elapsed + phaseOffset) % period) / period;
+      const radius = baseRadius + KING_ATTACK_WAVE_BASE_OFFSET + waveT * KING_ATTACK_WAVE_SPREAD;
+      const alpha = Math.max(0, 1 - waveT) * 0.6;
+      graphicsNodes.lineStyle(3, waveColor, alpha);
+      graphicsNodes.strokeCircle(nx, ny, radius);
+    }
   }
 
   function drawKingCrown(nx, ny, radius, ownerColor, options = {}) {
@@ -6982,6 +7110,9 @@ function fallbackRemoveEdgesForNode(nodeId) {
           const isSelectedKing = kingSelectionActive && kingSelectedNodeId === id;
           const selectionColor = ownerToSecondaryColor(myPlayerId) || ownerToColor(myPlayerId) || crownColor || 0x000000;
           const kingCrownRadius = computeStandardKingCrownRadius(baseScale);
+          if (kingAttackAlertActive && kingAttackNodeId === id) {
+            drawKingDistressWaves(nx, ny, kingCrownRadius, crownColor);
+          }
           drawKingCrown(nx, ny, kingCrownRadius, crownColor, {
             highlighted: isSelectedKing,
             highlightColor: selectionColor,
@@ -8003,6 +8134,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     bridgeFirstNode = nodeId;
     bridgeIsBrass = wantBrass;
     bridgePreviewWillBeBrass = computeInitialBrassPreviewState();
+    bridgePreviewWillBreakPipes = false;
     xbPreviewBlockedByBrass = false;
     brassPreviewIntersections.clear();
     warpWrapUsed = false;
@@ -8986,6 +9118,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
     }
     releaseVirtualCursor();
     clearAllPrePipes('menu');
+    clearKingAttackAlert();
+    kingAttackWasActive = false;
     kingNodesByPlayer.clear();
     replayMode = false;
     replayStartPending = false;
@@ -9712,13 +9846,16 @@ function drawBridgePreviewSegment(segment, color, baseScale, pipeType = 'normal'
 function updateBrassPreviewIntersections() {
   brassPreviewIntersections.clear();
   xbPreviewBlockedByBrass = false;
+  bridgePreviewWillBreakPipes = false;
 
   const gemMode = isMagicResourceModeActive();
   const modeIsXb = isXbModeActive();
   const modeIsCrossLike = isCrossLikeModeActive();
+  const breakModeAnyActive = isAnyPipeBreakModeActive();
 
   const setDefaultPreviewState = () => {
     bridgePreviewWillBeBrass = gemMode ? bridgeIsBrass : (bridgeIsBrass && modeIsCrossLike);
+    bridgePreviewWillBreakPipes = false;
   };
 
   setDefaultPreviewState();
@@ -9730,7 +9867,7 @@ function updateBrassPreviewIntersections() {
   const firstNode = nodes.get(bridgeFirstNode);
   if (!firstNode) return;
 
-  const shouldCheck = modeIsXb || (bridgeIsBrass && (modeIsCrossLike || gemMode));
+  const shouldCheck = modeIsXb || ((modeIsCrossLike || gemMode) && (bridgeIsBrass || breakModeAnyActive));
   if (!shouldCheck) return;
 
   let previewTarget = null;
@@ -9798,15 +9935,14 @@ function updateBrassPreviewIntersections() {
   });
 
   if (modeIsXb) {
-    bridgePreviewWillBeBrass = willCross;
-    xbPreviewBlockedByBrass = blockedByBrass;
-  } else if (gemMode) {
-    if (!bridgeIsBrass) {
-      brassPreviewIntersections.clear();
+    bridgePreviewWillBreakPipes = willCross;
+    if (!breakModeAnyActive) {
+      bridgePreviewWillBeBrass = willCross;
     }
-    bridgePreviewWillBeBrass = bridgeIsBrass;
-  } else if (modeIsCrossLike) {
-    if (!bridgeIsBrass) {
+    xbPreviewBlockedByBrass = blockedByBrass;
+  } else if (gemMode || modeIsCrossLike) {
+    bridgePreviewWillBreakPipes = willCross && (bridgeIsBrass || breakModeAnyActive);
+    if (!bridgeIsBrass && !breakModeAnyActive) {
       brassPreviewIntersections.clear();
     }
     bridgePreviewWillBeBrass = bridgeIsBrass;
@@ -10028,8 +10164,7 @@ function drawPreviewTriangle(cx, cy, baseW, height, angle, color, useBrass = fal
 
     const removalHighlight = (!removal &&
       activeAbility === 'bridge1way' &&
-      bridgePreviewWillBeBrass &&
-      (isCrossLikeModeActive() || isMagicResourceModeActive()) &&
+      bridgePreviewWillBreakPipes &&
       brassPreviewIntersections.has(edgeId)
     );
 

@@ -838,8 +838,8 @@
           <div class="mode-option-group" data-setting-group="brass">
             <span class="selector-label">Brass</span>
             <div class="mode-option-buttons">
-              <button class="mode-option-button active" data-setting="brass" data-value="cross">Cross</button>
-              <button class="mode-option-button" data-setting="brass" data-value="right-click">Right-Click</button>
+              <button class="mode-option-button" data-setting="brass" data-value="cross">Cross</button>
+              <button class="mode-option-button active" data-setting="brass" data-value="right-click">Right-Click</button>
             </div>
           </div>
           <div class="mode-option-group" data-setting-group="brassStart">
@@ -847,6 +847,13 @@
             <div class="mode-option-buttons">
               <button class="mode-option-button active" data-setting="brassStart" data-value="owned">Owned</button>
               <button class="mode-option-button" data-setting="brassStart" data-value="anywhere">Anywhere</button>
+            </div>
+          </div>
+          <div class="mode-option-group" data-setting-group="breakMode">
+            <span class="selector-label">Break</span>
+            <div class="mode-option-buttons">
+              <button class="mode-option-button" data-setting="breakMode" data-value="brass">Brass</button>
+              <button class="mode-option-button active" data-setting="breakMode" data-value="any">Any</button>
             </div>
           </div>
           <div class="mode-option-group" data-setting-group="gameStart">
@@ -866,8 +873,8 @@
           <div class="mode-option-group" data-setting-group="resources">
             <span class="selector-label">Resources</span>
             <div class="mode-option-buttons">
-              <button class="mode-option-button" data-setting="resources" data-value="standard">Standard</button>
-              <button class="mode-option-button active" data-setting="resources" data-value="gems">Gems</button>
+              <button class="mode-option-button active" data-setting="resources" data-value="standard">Standard</button>
+              <button class="mode-option-button" data-setting="resources" data-value="gems">Gems</button>
             </div>
           </div>
           <div class="mode-option-group hidden-setting" data-setting-group="startingJuice">
@@ -894,7 +901,7 @@
           <div class="mode-option-group" data-setting-group="passiveIncome">
             <span class="selector-label">Passive Income</span>
             <div class="mode-slider">
-              <input type="range" id="passiveIncomeSlider" min="0" max="1" step="0.05" value="1" aria-label="Passive income per second" />
+              <input type="range" id="passiveIncomeSlider" min="0" max="2" step="0.05" value="1" aria-label="Passive income per second" />
               <span id="passiveIncomeValue">1.00/s</span>
             </div>
           </div>

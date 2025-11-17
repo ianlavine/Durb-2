@@ -199,13 +199,14 @@ class MessageRouter:
 
     def _sanitize_mode_settings(self, payload: Any) -> Dict[str, Any]:
         settings: Dict[str, Any] = {
-            "screen": "flat",
-            "brass": "cross",
+            "screen": "warp",
+            "brass": "right-click",
             "brassStart": "owned",
-            "bridgeCost": 0.9,
-            "gameStart": "hidden-split",
-            "passiveIncome": 0.0,
-            "neutralCaptureGold": 10.0,
+            "breakMode": "any",
+            "bridgeCost": 1.0,
+            "gameStart": "open",
+            "passiveIncome": 1.0,
+            "neutralCaptureGold": 0.0,
             "ringJuiceToGoldRatio": 30.0,
             "ringPayoutGold": 10.0,
             "warpGemCount": DEFAULT_GEM_COUNTS.get("warp", 3),
@@ -246,6 +247,12 @@ class MessageRouter:
         if brass_start_option in {"owned", "anywhere"}:
             settings["brassStart"] = "anywhere" if brass_start_option == "anywhere" else "owned"
 
+        break_mode_option = payload.get("breakMode", payload.get("pipeBreakMode", payload.get("break", settings["breakMode"])))
+        if isinstance(break_mode_option, str) and break_mode_option.strip().lower() == "any":
+            settings["breakMode"] = "any"
+        else:
+            settings["breakMode"] = "brass"
+
         game_start_option = str(payload.get("gameStart", settings["gameStart"])).strip().lower()
         if game_start_option in {"open", "hidden", "hidden-split", "hidden_split", "hidden split"}:
             settings["gameStart"] = "hidden-split" if game_start_option.startswith("hidden") else "open"
@@ -272,13 +279,13 @@ class MessageRouter:
         passive_value = payload.get("passiveIncome", settings["passiveIncome"])
         if isinstance(passive_value, str):
             passive_value = passive_value.strip()
-        try:
-            parsed_passive = float(passive_value)
-        except (TypeError, ValueError):
-            parsed_passive = None
-        if parsed_passive is not None and parsed_passive >= 0:
-            snapped = round(parsed_passive * 20.0) / 20.0
-            settings["passiveIncome"] = round(max(0.0, min(1.0, snapped)), 2)
+            try:
+                parsed_passive = float(passive_value)
+            except (TypeError, ValueError):
+                parsed_passive = None
+            if parsed_passive is not None and parsed_passive >= 0:
+                snapped = round(parsed_passive * 20.0) / 20.0
+                settings["passiveIncome"] = round(max(0.0, min(2.0, snapped)), 2)
 
         neutral_value = payload.get("neutralCaptureGold", settings["neutralCaptureGold"])
         if isinstance(neutral_value, str):

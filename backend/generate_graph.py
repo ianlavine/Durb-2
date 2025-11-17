@@ -4,6 +4,8 @@ import random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Set
+
+from .constants import NODE_POSITION_LAYOUT, NODE_POSITION_LAYOUTS
 from .models import Node, Edge
 
 
@@ -33,7 +35,8 @@ def try_get_screen_size() -> Tuple[int, int]:
     return 1920, 1080
 
 
-def generate_node_positions(num_nodes: int, width: float, height: float, margin: int) -> List[Node]:
+
+def _generate_grid_node_positions(num_nodes: int, width: float, height: float, margin: int) -> List[Node]:
     usable_w = max(1, width - 2 * margin)
     usable_h = max(1, height - 2 * margin)
     aspect = usable_w / usable_h
@@ -42,22 +45,41 @@ def generate_node_positions(num_nodes: int, width: float, height: float, margin:
     cell_w = usable_w / cols
     cell_h = usable_h / rows
     nodes: List[Node] = []
-    index = 0
+    cells = [(r, c) for r in range(rows) for c in range(cols)]
+    random.shuffle(cells)
     random_jitter_w = cell_w * 0.3
     random_jitter_h = cell_h * 0.3
-    for r in range(rows):
-        for c in range(cols):
-            if index >= num_nodes:
-                break
-            cx = margin + (c + 0.5) * cell_w
-            cy = margin + (r + 0.5) * cell_h
-            x = cx + random.uniform(-random_jitter_w, random_jitter_w)
-            y = cy + random.uniform(-random_jitter_h, random_jitter_h)
-            nodes.append(Node(id=index, x=x, y=y, juice=8.0, cur_intake=0.0))
-            index += 1
-        if index >= num_nodes:
-            break
+    for index, (r, c) in enumerate(cells[:num_nodes]):
+        cx = margin + (c + 0.5) * cell_w
+        cy = margin + (r + 0.5) * cell_h
+        x = cx + random.uniform(-random_jitter_w, random_jitter_w)
+        y = cy + random.uniform(-random_jitter_h, random_jitter_h)
+        nodes.append(Node(id=index, x=x, y=y, juice=8.0, cur_intake=0.0))
     return nodes
+
+
+def _generate_random_node_positions(num_nodes: int, width: float, height: float, margin: int) -> List[Node]:
+    usable_w = max(1, width - 2 * margin)
+    usable_h = max(1, height - 2 * margin)
+    min_x = margin
+    min_y = margin
+    max_x = margin + usable_w
+    max_y = margin + usable_h
+    nodes: List[Node] = []
+    for index in range(num_nodes):
+        x = random.uniform(min_x, max_x)
+        y = random.uniform(min_y, max_y)
+        nodes.append(Node(id=index, x=x, y=y, juice=8.0, cur_intake=0.0))
+    return nodes
+
+
+def generate_node_positions(num_nodes: int, width: float, height: float, margin: int) -> List[Node]:
+    layout = (NODE_POSITION_LAYOUT or "grid").strip().lower()
+    if layout not in NODE_POSITION_LAYOUTS:
+        layout = "grid"
+    if layout == "random":
+        return _generate_random_node_positions(num_nodes, width, height, margin)
+    return _generate_grid_node_positions(num_nodes, width, height, margin)
 
 
 def _orientation(ax: float, ay: float, bx: float, by: float, cx: float, cy: float) -> int:
