@@ -60,7 +60,7 @@
   let myPlayerId = null;
   let phase = 'picking';
   let currentResourceMode = 'standard';
-  let currentBreakMode = 'any';
+  let currentBreakMode = 'flowing';
   let brassGemModeActive = false;
   let pendingBrassGemSpend = false;
   let rageGemModeActive = false;
@@ -91,7 +91,7 @@
   let brassActivationDenied = false;
   let bridgePreviewWillBeBrass = false; // dynamic flag for previewing brass outcome
   let bridgePreviewWillBreakPipes = false;
-  let xbPreviewBlockedByBrass = false;
+  let xbPreviewBlockReason = null; // 'brass' | 'inactive' | null
   let mouseWorldX = 0; // current mouse position in world coordinates
   let mouseWorldY = 0;
   let bridgeCostDisplay = null; // current bridge cost display text object
@@ -181,6 +181,7 @@
   const kingMoveTargetRenderInfo = new Map();
   let kingMoveTargetHoveredId = null;
   let kingMovePendingDestinationId = null;
+  const kingMoveSuppressedNodes = new Set();
 
   const KING_STANDARD_NODE_SIZE = 80;
   const KING_STANDARD_RADIUS_BASE = 0.15 * Math.pow(KING_STANDARD_NODE_SIZE, 0.6);
@@ -198,6 +199,7 @@
   const KING_ATTACK_WAVE_SPREAD = 120;
   const KING_ATTACK_WAVE_BASE_OFFSET = 14;
   const KING_ATTACK_WAVE_COUNT = 3;
+  const KING_ATTACK_HEALTH_EPSILON = 0.05;
 
   function computeStandardKingNodeRadius(baseScale = 1) {
     const scale = Math.max(0.0001, Number(baseScale) || 1);
@@ -323,12 +325,12 @@
         screen: 'warp',
         brass: 'right-click',
         brassStart: 'owned',
-        breakMode: 'any',
+        breakMode: 'flowing',
         bridgeCost: 1.0,
         gameStart: 'open',
         startingNodeJuice: 300,
         passiveIncome: 1,
-        neutralCaptureGold: 0,
+        neutralCaptureGold: 5,
         ringJuiceToGoldRatio: 30,
         ringPayoutGold: 10,
         warpGemCount: 3,
@@ -598,7 +600,9 @@
 
   function normalizeBreakMode(value) {
     if (typeof value !== 'string') return 'brass';
-    return value.trim().toLowerCase() === 'any' ? 'any' : 'brass';
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'any' || normalized === 'flowing') return normalized;
+    return 'brass';
   }
 
   function isMagicResourceModeActive() {
@@ -639,8 +643,12 @@
     }
   }
 
-  function isAnyPipeBreakModeActive() {
-    return currentBreakMode === 'any';
+  function doesBreakModeAllowNormalBreaks() {
+    return currentBreakMode === 'any' || currentBreakMode === 'flowing';
+  }
+
+  function isFlowingBreakModeActive() {
+    return currentBreakMode === 'flowing';
   }
 
   function getMyGemCount(gemKey = 'brass') {
@@ -1061,7 +1069,10 @@
     const brassLabel = brassValue === 'gem'
       ? 'Gem'
       : (brassValue === 'right-click' ? 'Right-Click' : 'Cross');
-    const breakLabel = normalizeBreakMode(settings.breakMode) === 'any' ? 'Any' : 'Brass';
+    const normalizedBreak = normalizeBreakMode(settings.breakMode);
+    const breakLabel = normalizedBreak === 'any'
+      ? 'Any'
+      : (normalizedBreak === 'flowing' ? 'Flowing' : 'Brass');
     const startLabel = (settings.brassStart === 'anywhere') ? 'Anywhere' : 'Owned';
     const startModeLabel = (settings.gameStart === 'hidden-split') ? 'Hidden' : 'Open';
     const costLabel = coerceBridgeCost(settings.bridgeCost).toFixed(1);
@@ -2869,7 +2880,7 @@ function clearBridgeSelection() {
   brassPreviewIntersections.clear();
   bridgePreviewWillBeBrass = false;
   bridgePreviewWillBreakPipes = false;
-  xbPreviewBlockedByBrass = false;
+  xbPreviewBlockReason = null;
   warpWrapUsed = false;
   lastDoubleWarpWarningTime = 0;
   lastWarpAxis = null;
@@ -5040,7 +5051,14 @@ function clearBridgeSelection() {
     }
   }
 
-  function trackKingUnderAttack(nodeId, prevHealth, nextOwnerId, nextHealth) {
+  function trackKingUnderAttack(nodeId, prevOwnerId, prevHealth, nextOwnerId, nextHealth) {
+    if (kingMoveSuppressedNodes.has(nodeId)) {
+      kingMoveSuppressedNodes.delete(nodeId);
+      if (kingAttackAlertActive && kingAttackNodeId === nodeId && (!Number.isFinite(nextOwnerId) || nextOwnerId !== myPlayerId)) {
+        clearKingAttackAlert();
+      }
+      return;
+    }
     const nodeIsMyKing = Number.isFinite(nextOwnerId) && nextOwnerId === myPlayerId;
     if (!nodeIsMyKing) {
       if (kingAttackAlertActive && kingAttackNodeId === nodeId) {
@@ -5049,9 +5067,14 @@ function clearBridgeSelection() {
       return;
     }
 
+    const nodeWasMyKing = Number.isFinite(prevOwnerId) && prevOwnerId === myPlayerId;
+    if (!nodeWasMyKing) {
+      return;
+    }
+
     const prev = Number(prevHealth);
     const curr = Number(nextHealth);
-    const healthDropped = Number.isFinite(prev) && Number.isFinite(curr) && curr < prev - 1e-6;
+    const healthDropped = Number.isFinite(prev) && Number.isFinite(curr) && curr < prev - KING_ATTACK_HEALTH_EPSILON;
     if (healthDropped) {
       triggerKingAttackAlert(nodeId);
     }
@@ -5091,6 +5114,7 @@ function clearBridgeSelection() {
         const node = nodes.get(id);
         if (node) {
           const oldOwner = node.owner;
+          const prevKingOwnerId = Number.isFinite(node.kingOwnerId) ? node.kingOwnerId : null;
           const prevCrownHealth = Number(node.kingCrownHealth);
           node.size = size;
           node.owner = owner;
@@ -5129,7 +5153,7 @@ function clearBridgeSelection() {
           }
           node.kingCrownMax = Number.isFinite(crownMax) ? Math.max(0, crownMax) : 0;
           node.kingCrownHealth = Number.isFinite(crownHealth) ? Math.max(0, crownHealth) : (node.kingCrownMax || 0);
-          trackKingUnderAttack(id, prevCrownHealth, kingOwnerId, node.kingCrownHealth);
+          trackKingUnderAttack(id, prevKingOwnerId, prevCrownHealth, kingOwnerId, node.kingCrownHealth);
           if (oldOwner !== owner) {
             // Enemy capture sound: you captured from someone else
             if (owner === myPlayerId && oldOwner != null && oldOwner !== myPlayerId) {
@@ -6202,6 +6226,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     }
 
     if (Number.isFinite(fromNodeId)) {
+      kingMoveSuppressedNodes.add(fromNodeId);
       const sourceNode = nodes.get(fromNodeId);
       if (sourceNode) {
         sourceNode.kingOwnerId = null;
@@ -6213,6 +6238,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
     const targetNode = nodes.get(toNodeId);
     if (targetNode) {
+      kingMoveSuppressedNodes.add(toNodeId);
       targetNode.kingOwnerId = playerId;
       targetNode.isKing = true;
       let resolvedCrownMax = crownMax;
@@ -8135,7 +8161,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     bridgeIsBrass = wantBrass;
     bridgePreviewWillBeBrass = computeInitialBrassPreviewState();
     bridgePreviewWillBreakPipes = false;
-    xbPreviewBlockedByBrass = false;
+    xbPreviewBlockReason = null;
     brassPreviewIntersections.clear();
     warpWrapUsed = false;
     lastDoubleWarpWarningTime = 0;
@@ -8183,8 +8209,11 @@ function fallbackRemoveEdgesForNode(nodeId) {
           const useBrassPipe = bridgePreviewWillBeBrass && (isMagicResourceModeActive() || isCrossLikeModeActive());
           const pipeType = determinePipeTypeForBridge(useBrassPipe);
           const applyBrassCost = pipeType === 'gold' && brassPipesDoubleCost();
-          if (modeIsXb && xbPreviewBlockedByBrass) {
-            showErrorMessage('Cannot cross brass pipe');
+          if (modeIsXb && xbPreviewBlockReason) {
+            const message = xbPreviewBlockReason === 'inactive'
+              ? 'Cannot cross inactive pipe'
+              : 'Cannot cross brass pipe';
+            showErrorMessage(message);
             return true;
           }
           const ownershipRequired = pipeStartRequiresOwnership();
@@ -9845,13 +9874,14 @@ function drawBridgePreviewSegment(segment, color, baseScale, pipeType = 'normal'
 
 function updateBrassPreviewIntersections() {
   brassPreviewIntersections.clear();
-  xbPreviewBlockedByBrass = false;
+  xbPreviewBlockReason = null;
   bridgePreviewWillBreakPipes = false;
 
   const gemMode = isMagicResourceModeActive();
   const modeIsXb = isXbModeActive();
   const modeIsCrossLike = isCrossLikeModeActive();
-  const breakModeAnyActive = isAnyPipeBreakModeActive();
+  const breakModeAllowsNormalBreaks = doesBreakModeAllowNormalBreaks();
+  const breakModeRequiresFlowingTargets = isFlowingBreakModeActive();
 
   const setDefaultPreviewState = () => {
     bridgePreviewWillBeBrass = gemMode ? bridgeIsBrass : (bridgeIsBrass && modeIsCrossLike);
@@ -9867,7 +9897,7 @@ function updateBrassPreviewIntersections() {
   const firstNode = nodes.get(bridgeFirstNode);
   if (!firstNode) return;
 
-  const shouldCheck = modeIsXb || ((modeIsCrossLike || gemMode) && (bridgeIsBrass || breakModeAnyActive));
+  const shouldCheck = modeIsXb || ((modeIsCrossLike || gemMode) && (bridgeIsBrass || breakModeAllowsNormalBreaks));
   if (!shouldCheck) return;
 
   let previewTarget = null;
@@ -9905,6 +9935,7 @@ function updateBrassPreviewIntersections() {
 
   let willCross = false;
   let blockedByBrass = false;
+  let blockedByInactive = false;
 
   edges.forEach((edge, edgeId) => {
     if (!edge) return;
@@ -9914,6 +9945,7 @@ function updateBrassPreviewIntersections() {
 
     const existingSegments = getEdgeWarpSegments(edge);
     if (!existingSegments.length) return;
+    const edgeFlowing = Boolean(edge.flowing);
 
     for (const candidate of candidateSegments) {
       for (const existing of existingSegments) {
@@ -9924,6 +9956,8 @@ function updateBrassPreviewIntersections() {
         ) {
           if (edge.pipeType === 'gold') {
             blockedByBrass = true;
+          } else if (breakModeRequiresFlowingTargets && !edgeFlowing) {
+            blockedByInactive = true;
           } else {
             brassPreviewIntersections.add(edgeId);
             willCross = true;
@@ -9936,13 +9970,17 @@ function updateBrassPreviewIntersections() {
 
   if (modeIsXb) {
     bridgePreviewWillBreakPipes = willCross;
-    if (!breakModeAnyActive) {
+    if (!breakModeAllowsNormalBreaks) {
       bridgePreviewWillBeBrass = willCross;
     }
-    xbPreviewBlockedByBrass = blockedByBrass;
+    if (blockedByBrass) {
+      xbPreviewBlockReason = 'brass';
+    } else if (blockedByInactive) {
+      xbPreviewBlockReason = 'inactive';
+    }
   } else if (gemMode || modeIsCrossLike) {
-    bridgePreviewWillBreakPipes = willCross && (bridgeIsBrass || breakModeAnyActive);
-    if (!bridgeIsBrass && !breakModeAnyActive) {
+    bridgePreviewWillBreakPipes = willCross && (bridgeIsBrass || breakModeAllowsNormalBreaks);
+    if (!bridgeIsBrass && !breakModeAllowsNormalBreaks) {
       brassPreviewIntersections.clear();
     }
     bridgePreviewWillBeBrass = bridgeIsBrass;

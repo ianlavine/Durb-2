@@ -77,7 +77,7 @@ class GraphState:
         self.manual_brass_selection: bool = False
         self.brass_double_cost: bool = False
         self.allow_pipe_start_anywhere: bool = False
-        self.pipe_break_mode: str = "any"
+        self.pipe_break_mode: str = "flowing"
         self.mode_settings: Dict[str, Any] = {}
         self.resource_mode: str = "standard"
         self.gem_nodes: Dict[int, str] = {}

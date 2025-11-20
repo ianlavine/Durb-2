@@ -202,11 +202,11 @@ class MessageRouter:
             "screen": "warp",
             "brass": "right-click",
             "brassStart": "owned",
-            "breakMode": "any",
+            "breakMode": "flowing",
             "bridgeCost": 1.0,
             "gameStart": "open",
             "passiveIncome": 1.0,
-            "neutralCaptureGold": 0.0,
+            "neutralCaptureGold": 5.0,
             "ringJuiceToGoldRatio": 30.0,
             "ringPayoutGold": 10.0,
             "warpGemCount": DEFAULT_GEM_COUNTS.get("warp", 3),
@@ -248,8 +248,12 @@ class MessageRouter:
             settings["brassStart"] = "anywhere" if brass_start_option == "anywhere" else "owned"
 
         break_mode_option = payload.get("breakMode", payload.get("pipeBreakMode", payload.get("break", settings["breakMode"])))
-        if isinstance(break_mode_option, str) and break_mode_option.strip().lower() == "any":
-            settings["breakMode"] = "any"
+        if isinstance(break_mode_option, str):
+            normalized_break = break_mode_option.strip().lower()
+            if normalized_break in {"any", "flowing"}:
+                settings["breakMode"] = normalized_break
+            else:
+                settings["breakMode"] = "brass"
         else:
             settings["breakMode"] = "brass"
 
@@ -279,13 +283,13 @@ class MessageRouter:
         passive_value = payload.get("passiveIncome", settings["passiveIncome"])
         if isinstance(passive_value, str):
             passive_value = passive_value.strip()
-            try:
-                parsed_passive = float(passive_value)
-            except (TypeError, ValueError):
-                parsed_passive = None
-            if parsed_passive is not None and parsed_passive >= 0:
-                snapped = round(parsed_passive * 20.0) / 20.0
-                settings["passiveIncome"] = round(max(0.0, min(2.0, snapped)), 2)
+        try:
+            parsed_passive = float(passive_value)
+        except (TypeError, ValueError):
+            parsed_passive = None
+        if parsed_passive is not None and not math.isnan(parsed_passive) and parsed_passive >= 0:
+            snapped = round(parsed_passive * 20.0) / 20.0
+            settings["passiveIncome"] = round(max(0.0, min(2.0, snapped)), 2)
 
         neutral_value = payload.get("neutralCaptureGold", settings["neutralCaptureGold"])
         if isinstance(neutral_value, str):

@@ -221,29 +221,49 @@
     ensureAudio();
     if (!audioCtx) return;
     const now = audioCtx.currentTime;
+    const hornDuration = 2.2;
 
     const hornOsc = audioCtx.createOscillator();
     const hornGain = audioCtx.createGain();
     hornOsc.type = 'sawtooth';
-    hornOsc.frequency.setValueAtTime(220, now);
-    hornOsc.frequency.exponentialRampToValueAtTime(90, now + 0.45);
+    hornOsc.frequency.setValueAtTime(260, now);
+    hornOsc.frequency.exponentialRampToValueAtTime(110, now + 1.2);
     hornGain.gain.setValueAtTime(0.0001, now);
-    hornGain.gain.exponentialRampToValueAtTime(0.38, now + 0.06);
-    hornGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.9);
+    hornGain.gain.exponentialRampToValueAtTime(0.6, now + 0.08);
+    hornGain.gain.exponentialRampToValueAtTime(0.22, now + 1.5);
+    hornGain.gain.exponentialRampToValueAtTime(0.0001, now + hornDuration);
     hornOsc.connect(hornGain);
     hornGain.connect(globalGain);
     hornOsc.start(now);
-    hornOsc.stop(now + 0.95);
+    hornOsc.stop(now + hornDuration);
 
-    playNoiseBurst({
-      duration: 0.5,
-      volume: 0.22,
-      filterType: 'lowpass',
-      filterFreq: 520,
-      q: 0.9,
-      attack: 0.01,
-      decay: 0.5,
-    });
+    const dissonantOsc = audioCtx.createOscillator();
+    const dissonantGain = audioCtx.createGain();
+    dissonantOsc.type = 'triangle';
+    dissonantOsc.frequency.setValueAtTime(420, now + 0.12);
+    dissonantOsc.frequency.exponentialRampToValueAtTime(160, now + 1.6);
+    dissonantGain.gain.setValueAtTime(0.0001, now + 0.12);
+    dissonantGain.gain.exponentialRampToValueAtTime(0.35, now + 0.24);
+    dissonantGain.gain.exponentialRampToValueAtTime(0.12, now + 1.8);
+    dissonantGain.gain.exponentialRampToValueAtTime(0.0001, now + hornDuration + 0.1);
+    dissonantOsc.connect(dissonantGain);
+    dissonantGain.connect(globalGain);
+    dissonantOsc.start(now + 0.12);
+    dissonantOsc.stop(now + hornDuration + 0.1);
+
+    for (let i = 0; i < 3; i += 1) {
+      setTimeout(() => {
+        playNoiseBurst({
+          duration: 0.5,
+          volume: 0.28,
+          filterType: 'bandpass',
+          filterFreq: 520 - i * 40,
+          q: 1.1,
+          attack: 0.008,
+          decay: 0.38,
+        });
+      }, Math.round(i * 350));
+    }
   }
 
   function playReverseShuffle() {
