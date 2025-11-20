@@ -91,7 +91,7 @@
   let brassActivationDenied = false;
   let bridgePreviewWillBeBrass = false; // dynamic flag for previewing brass outcome
   let bridgePreviewWillBreakPipes = false;
-  let xbPreviewBlockedByBrass = false;
+  let xbPreviewBlockReason = null; // 'brass' | 'inactive' | null
   let mouseWorldX = 0; // current mouse position in world coordinates
   let mouseWorldY = 0;
   let bridgeCostDisplay = null; // current bridge cost display text object
@@ -598,7 +598,9 @@
 
   function normalizeBreakMode(value) {
     if (typeof value !== 'string') return 'brass';
-    return value.trim().toLowerCase() === 'any' ? 'any' : 'brass';
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'any' || normalized === 'flowing') return normalized;
+    return 'brass';
   }
 
   function isMagicResourceModeActive() {
@@ -639,8 +641,12 @@
     }
   }
 
-  function isAnyPipeBreakModeActive() {
-    return currentBreakMode === 'any';
+  function doesBreakModeAllowNormalBreaks() {
+    return currentBreakMode === 'any' || currentBreakMode === 'flowing';
+  }
+
+  function isFlowingBreakModeActive() {
+    return currentBreakMode === 'flowing';
   }
 
   function getMyGemCount(gemKey = 'brass') {
@@ -1061,7 +1067,10 @@
     const brassLabel = brassValue === 'gem'
       ? 'Gem'
       : (brassValue === 'right-click' ? 'Right-Click' : 'Cross');
-    const breakLabel = normalizeBreakMode(settings.breakMode) === 'any' ? 'Any' : 'Brass';
+    const normalizedBreak = normalizeBreakMode(settings.breakMode);
+    const breakLabel = normalizedBreak === 'any'
+      ? 'Any'
+      : (normalizedBreak === 'flowing' ? 'Flowing' : 'Brass');
     const startLabel = (settings.brassStart === 'anywhere') ? 'Anywhere' : 'Owned';
     const startModeLabel = (settings.gameStart === 'hidden-split') ? 'Hidden' : 'Open';
     const costLabel = coerceBridgeCost(settings.bridgeCost).toFixed(1);
@@ -2869,7 +2878,7 @@ function clearBridgeSelection() {
   brassPreviewIntersections.clear();
   bridgePreviewWillBeBrass = false;
   bridgePreviewWillBreakPipes = false;
-  xbPreviewBlockedByBrass = false;
+  xbPreviewBlockReason = null;
   warpWrapUsed = false;
   lastDoubleWarpWarningTime = 0;
   lastWarpAxis = null;
@@ -8135,7 +8144,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     bridgeIsBrass = wantBrass;
     bridgePreviewWillBeBrass = computeInitialBrassPreviewState();
     bridgePreviewWillBreakPipes = false;
-    xbPreviewBlockedByBrass = false;
+    xbPreviewBlockReason = null;
     brassPreviewIntersections.clear();
     warpWrapUsed = false;
     lastDoubleWarpWarningTime = 0;
@@ -8183,8 +8192,11 @@ function fallbackRemoveEdgesForNode(nodeId) {
           const useBrassPipe = bridgePreviewWillBeBrass && (isMagicResourceModeActive() || isCrossLikeModeActive());
           const pipeType = determinePipeTypeForBridge(useBrassPipe);
           const applyBrassCost = pipeType === 'gold' && brassPipesDoubleCost();
-          if (modeIsXb && xbPreviewBlockedByBrass) {
-            showErrorMessage('Cannot cross brass pipe');
+          if (modeIsXb && xbPreviewBlockReason) {
+            const message = xbPreviewBlockReason === 'inactive'
+              ? 'Cannot cross inactive pipe'
+              : 'Cannot cross brass pipe';
+            showErrorMessage(message);
             return true;
           }
           const ownershipRequired = pipeStartRequiresOwnership();
@@ -9845,13 +9857,14 @@ function drawBridgePreviewSegment(segment, color, baseScale, pipeType = 'normal'
 
 function updateBrassPreviewIntersections() {
   brassPreviewIntersections.clear();
-  xbPreviewBlockedByBrass = false;
+  xbPreviewBlockReason = null;
   bridgePreviewWillBreakPipes = false;
 
   const gemMode = isMagicResourceModeActive();
   const modeIsXb = isXbModeActive();
   const modeIsCrossLike = isCrossLikeModeActive();
-  const breakModeAnyActive = isAnyPipeBreakModeActive();
+  const breakModeAllowsNormalBreaks = doesBreakModeAllowNormalBreaks();
+  const breakModeRequiresFlowingTargets = isFlowingBreakModeActive();
 
   const setDefaultPreviewState = () => {
     bridgePreviewWillBeBrass = gemMode ? bridgeIsBrass : (bridgeIsBrass && modeIsCrossLike);
@@ -9867,7 +9880,7 @@ function updateBrassPreviewIntersections() {
   const firstNode = nodes.get(bridgeFirstNode);
   if (!firstNode) return;
 
-  const shouldCheck = modeIsXb || ((modeIsCrossLike || gemMode) && (bridgeIsBrass || breakModeAnyActive));
+  const shouldCheck = modeIsXb || ((modeIsCrossLike || gemMode) && (bridgeIsBrass || breakModeAllowsNormalBreaks));
   if (!shouldCheck) return;
 
   let previewTarget = null;
@@ -9905,6 +9918,7 @@ function updateBrassPreviewIntersections() {
 
   let willCross = false;
   let blockedByBrass = false;
+  let blockedByInactive = false;
 
   edges.forEach((edge, edgeId) => {
     if (!edge) return;
@@ -9914,6 +9928,7 @@ function updateBrassPreviewIntersections() {
 
     const existingSegments = getEdgeWarpSegments(edge);
     if (!existingSegments.length) return;
+    const edgeFlowing = Boolean(edge.flowing);
 
     for (const candidate of candidateSegments) {
       for (const existing of existingSegments) {
@@ -9924,6 +9939,8 @@ function updateBrassPreviewIntersections() {
         ) {
           if (edge.pipeType === 'gold') {
             blockedByBrass = true;
+          } else if (breakModeRequiresFlowingTargets && !edgeFlowing) {
+            blockedByInactive = true;
           } else {
             brassPreviewIntersections.add(edgeId);
             willCross = true;
@@ -9936,13 +9953,17 @@ function updateBrassPreviewIntersections() {
 
   if (modeIsXb) {
     bridgePreviewWillBreakPipes = willCross;
-    if (!breakModeAnyActive) {
+    if (!breakModeAllowsNormalBreaks) {
       bridgePreviewWillBeBrass = willCross;
     }
-    xbPreviewBlockedByBrass = blockedByBrass;
+    if (blockedByBrass) {
+      xbPreviewBlockReason = 'brass';
+    } else if (blockedByInactive) {
+      xbPreviewBlockReason = 'inactive';
+    }
   } else if (gemMode || modeIsCrossLike) {
-    bridgePreviewWillBreakPipes = willCross && (bridgeIsBrass || breakModeAnyActive);
-    if (!bridgeIsBrass && !breakModeAnyActive) {
+    bridgePreviewWillBreakPipes = willCross && (bridgeIsBrass || breakModeAllowsNormalBreaks);
+    if (!bridgeIsBrass && !breakModeAllowsNormalBreaks) {
       brassPreviewIntersections.clear();
     }
     bridgePreviewWillBeBrass = bridgeIsBrass;
