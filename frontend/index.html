@@ -638,10 +638,6 @@
         flex-wrap: wrap;
       }
 
-      .mode-option-group.hidden-setting {
-        display: none;
-      }
-
       .mode-option-group .selector-label {
         flex: 0 0 auto;
       }
@@ -838,8 +834,9 @@
           <div class="mode-option-group" data-setting-group="brass">
             <span class="selector-label">Brass</span>
             <div class="mode-option-buttons">
+              <button class="mode-option-button active" data-setting="brass" data-value="none">None</button>
               <button class="mode-option-button" data-setting="brass" data-value="cross">Cross</button>
-              <button class="mode-option-button active" data-setting="brass" data-value="right-click">Right-Click</button>
+              <button class="mode-option-button" data-setting="brass" data-value="right-click">Right-Click</button>
             </div>
           </div>
           <div class="mode-option-group" data-setting-group="brassStart">
@@ -853,15 +850,15 @@
             <span class="selector-label">Break</span>
             <div class="mode-option-buttons">
               <button class="mode-option-button" data-setting="breakMode" data-value="brass">Brass</button>
-              <button class="mode-option-button" data-setting="breakMode" data-value="any">Any</button>
-              <button class="mode-option-button active" data-setting="breakMode" data-value="flowing">Flowing</button>
+              <button class="mode-option-button active" data-setting="breakMode" data-value="any">Any</button>
+              <button class="mode-option-button" data-setting="breakMode" data-value="flowing">Flowing</button>
             </div>
           </div>
           <div class="mode-option-group" data-setting-group="gameStart">
             <span class="selector-label">Game Start</span>
             <div class="mode-option-buttons">
-              <button class="mode-option-button active" data-setting="gameStart" data-value="open">Open</button>
-              <button class="mode-option-button" data-setting="gameStart" data-value="hidden-split">Hidden Split</button>
+              <button class="mode-option-button" data-setting="gameStart" data-value="open">Open</button>
+              <button class="mode-option-button active" data-setting="gameStart" data-value="hidden-split">Hidden Split</button>
             </div>
           </div>
           <div class="mode-option-group" data-setting-group="winCondition">
@@ -878,81 +875,46 @@
               <button class="mode-option-button" data-setting="resources" data-value="gems">Gems</button>
             </div>
           </div>
-          <div class="mode-option-group hidden-setting" data-setting-group="startingJuice">
+          <div class="mode-option-group" data-setting-group="startingJuice">
             <span class="selector-label">Starting Juice</span>
             <div class="mode-slider">
               <input type="range" id="startingJuiceSlider" min="50" max="300" step="10" value="300" aria-label="Starting node juice" />
               <span id="startingJuiceValue">300</span>
             </div>
           </div>
-          <div class="mode-option-group hidden-setting" data-setting-group="kingCrownHealth">
+          <div class="mode-option-group" data-setting-group="kingCrownHealth">
             <span class="selector-label">Crown Health</span>
             <div class="mode-slider">
               <input type="range" id="crownHealthSlider" min="1" max="300" step="1" value="300" aria-label="Crown health buffer" />
               <span id="crownHealthValue">300</span>
             </div>
           </div>
-          <div class="mode-option-group bridge-cost-group hidden-setting" data-setting-group="bridgeCost">
-            <span class="selector-label">Bridge Cost</span>
-            <div class="mode-slider">
-              <input type="range" id="bridgeCostSlider" min="0.5" max="1" step="0.1" value="1" aria-label="Bridge cost multiplier" />
-              <span id="bridgeCostValue">1.0</span>
-            </div>
-          </div>
           <div class="mode-option-group" data-setting-group="passiveIncome">
             <span class="selector-label">Passive Income</span>
             <div class="mode-slider">
-              <input type="range" id="passiveIncomeSlider" min="0" max="2" step="0.05" value="1" aria-label="Passive income per second" />
-              <span id="passiveIncomeValue">1.00/s</span>
+              <input type="range" id="passiveIncomeSlider" min="0" max="2" step="0.05" value="0" aria-label="Passive income per second" />
+              <span id="passiveIncomeValue">0.00/s</span>
             </div>
           </div>
           <div class="mode-option-group" data-setting-group="neutralReward">
             <span class="selector-label">Neutral Capture</span>
             <div class="mode-slider">
-              <input type="range" id="neutralCaptureSlider" min="0" max="20" step="1" value="5" aria-label="Neutral capture gold" />
-              <span id="neutralCaptureValue">5</span>
+              <input type="range" id="neutralCaptureSlider" min="0" max="20" step="1" value="12" aria-label="Neutral capture gold" />
+              <span id="neutralCaptureValue">12</span>
             </div>
           </div>
-          <div class="mode-option-group hidden-setting" data-setting-group="ringJuiceRatio">
+          <div class="mode-option-group" data-setting-group="ringJuiceRatio">
             <span class="selector-label">Ring Ratio</span>
             <div class="mode-slider">
-              <input type="range" id="ringRatioSlider" min="5" max="30" step="1" value="30" aria-label="Juice to gold ratio" />
-              <span id="ringRatioValue">30</span>
+              <input type="range" id="ringRatioSlider" min="5" max="30" step="1" value="20" aria-label="Juice to gold ratio" />
+              <span id="ringRatioValue">20</span>
             </div>
           </div>
-          <div class="mode-option-group hidden-setting" data-setting-group="ringPayout">
+          <div class="mode-option-group" data-setting-group="ringPayout">
             <span class="selector-label">Ring Payout</span>
             <div class="mode-slider">
-              <input type="range" id="ringPayoutSlider" min="1" max="20" step="1" value="10" aria-label="Gold needed to pop ring" />
-              <span id="ringPayoutValue">10</span>
-            </div>
-          </div>
-          <div class="mode-option-group" data-setting-group="warpGemCount">
-            <span class="selector-label">Warp Gems</span>
-            <div class="mode-slider">
-              <input type="range" id="warpGemSlider" min="0" max="10" step="1" value="3" aria-label="Warp gem count" />
-              <span id="warpGemValue">3</span>
-            </div>
-          </div>
-          <div class="mode-option-group" data-setting-group="brassGemCount">
-            <span class="selector-label">Brass Gems</span>
-            <div class="mode-slider">
-              <input type="range" id="brassGemSlider" min="0" max="10" step="1" value="7" aria-label="Brass gem count" />
-              <span id="brassGemValue">7</span>
-            </div>
-          </div>
-          <div class="mode-option-group" data-setting-group="rageGemCount">
-            <span class="selector-label">Rage Gems</span>
-            <div class="mode-slider">
-              <input type="range" id="rageGemSlider" min="0" max="10" step="1" value="4" aria-label="Rage gem count" />
-              <span id="rageGemValue">4</span>
-            </div>
-          </div>
-          <div class="mode-option-group" data-setting-group="reverseGemCount">
-            <span class="selector-label">Reverse Gems</span>
-            <div class="mode-slider">
-              <input type="range" id="reverseGemSlider" min="0" max="10" step="1" value="6" aria-label="Reverse gem count" />
-              <span id="reverseGemValue">6</span>
+              <input type="range" id="ringPayoutSlider" min="1" max="20" step="1" value="3" aria-label="Gold needed to pop ring" />
+              <span id="ringPayoutValue">3</span>
             </div>
           </div>
         </div>
