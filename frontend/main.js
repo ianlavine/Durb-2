@@ -614,7 +614,7 @@
   function normalizeBreakMode(value) {
     if (typeof value !== 'string') return 'brass';
     const normalized = value.trim().toLowerCase();
-    if (normalized === 'any' || normalized === 'flowing') return normalized;
+    if (normalized === 'any' || normalized === 'flowing' || normalized === 'double') return normalized;
     return 'brass';
   }
 
@@ -661,11 +661,17 @@
   }
 
   function doesBreakModeAllowNormalBreaks() {
-    return currentBreakMode === 'any' || currentBreakMode === 'flowing';
+    return currentBreakMode === 'any'
+      || currentBreakMode === 'flowing'
+      || currentBreakMode === 'double';
   }
 
   function isFlowingBreakModeActive() {
     return currentBreakMode === 'flowing';
+  }
+
+  function isDoubleBreakModeActive() {
+    return currentBreakMode === 'double';
   }
 
   function getMyGemCount(gemKey = 'brass') {
@@ -1097,9 +1103,14 @@
       brassLabel = 'None';
     }
     const normalizedBreak = normalizeBreakMode(settings.breakMode);
-    const breakLabel = normalizedBreak === 'any'
-      ? 'Any'
-      : (normalizedBreak === 'flowing' ? 'Flowing' : 'Brass');
+    let breakLabel = 'Brass';
+    if (normalizedBreak === 'any') {
+      breakLabel = 'Any';
+    } else if (normalizedBreak === 'flowing') {
+      breakLabel = 'Flowing';
+    } else if (normalizedBreak === 'double') {
+      breakLabel = 'Double';
+    }
     const startLabel = (settings.brassStart === 'anywhere') ? 'Anywhere' : 'Owned';
     const startModeLabel = (settings.gameStart === 'hidden-split') ? 'Hidden' : 'Open';
     const costLabel = coerceBridgeCost(settings.bridgeCost).toFixed(1);
@@ -8305,6 +8316,15 @@ function fallbackRemoveEdgesForNode(nodeId) {
               : 'Cannot cross brass pipe';
             showErrorMessage(message);
             return true;
+          }
+          const doubleBreakModeActive = isDoubleBreakModeActive();
+          const targetOwnerId = Number.isFinite(node.owner) ? node.owner : null;
+          if (doubleBreakModeActive && targetOwnerId !== myPlayerId) {
+            const breakingExisting = bridgePreviewWillBreakPipes || (brassPreviewIntersections && brassPreviewIntersections.size > 0);
+            if (breakingExisting) {
+              showErrorMessage('Double breaks must end on your nodes');
+              return true;
+            }
           }
           const ownershipRequired = pipeStartRequiresOwnership();
           const firstOwner = firstNode.owner;

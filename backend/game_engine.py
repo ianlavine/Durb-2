@@ -211,11 +211,13 @@ class GameEngine:
 
             pipe_break_raw = options.get("breakMode", options.get("pipeBreakMode", options.get("break", "")))
             pipe_break_option = str(pipe_break_raw).strip().lower()
-            if pipe_break_option in {"brass", "any", "flowing"}:
+            if pipe_break_option in {"brass", "any", "flowing", "double"}:
                 if pipe_break_option == "flowing":
                     pipe_break_mode = "flowing"
                 elif pipe_break_option == "any":
                     pipe_break_mode = "any"
+                elif pipe_break_option == "double":
+                    pipe_break_mode = "double"
                 else:
                     pipe_break_mode = "brass"
 
@@ -1572,8 +1574,9 @@ class GameEngine:
                     destroyed_pipes_during_build = True
 
             pipe_break_setting = str(getattr(self.state, "pipe_break_mode", "brass") or "brass").strip().lower()
-            allow_pipe_breaks_without_brass = pipe_break_setting in {"any", "flowing"}
+            allow_pipe_breaks_without_brass = pipe_break_setting in {"any", "flowing", "double"}
             flowing_only_breaks = pipe_break_setting == "flowing"
+            double_break_requires_owned_target = pipe_break_setting == "double"
 
             # Check for intersections (cross mode converts them into removals)
             intersecting_edges = self._find_intersecting_edges(from_node, to_node, candidate_segments)
@@ -1670,6 +1673,11 @@ class GameEngine:
                     if delayed_cross_removals and not can_current_pipe_break:
                         # Should not happen because blocking_edges would have triggered, but guard anyway
                         raise GameValidationError("Only golden pipes can cross others")
+
+            if double_break_requires_owned_target and delayed_cross_removals:
+                target_owner = getattr(to_node, "owner", None)
+                if target_owner != player_id:
+                    raise GameValidationError("Double breaks must end on your nodes")
 
             if delayed_cross_removals:
                 destroyed_pipes_during_build = True
