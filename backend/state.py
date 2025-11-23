@@ -333,6 +333,48 @@ class GraphState:
 
         return None
 
+    def _handle_king_elimination(self, king_owner_id: Optional[int], node: Optional["Node"] = None) -> bool:
+        """Remove a player's crown tracking and mark elimination. Returns True if a winner emerges."""
+        if king_owner_id is None:
+            return False
+
+        self.player_king_nodes.pop(king_owner_id, None)
+
+        target_node = node
+        if target_node is None or getattr(target_node, "king_owner_id", None) != king_owner_id:
+            # Fall back to searching for the hosting node if not provided
+            for candidate in self.nodes.values():
+                if getattr(candidate, "king_owner_id", None) == king_owner_id:
+                    target_node = candidate
+                    break
+
+        if target_node is not None:
+            setattr(target_node, "king_owner_id", None)
+            setattr(target_node, "king_crown_health", 0.0)
+            setattr(target_node, "king_crown_max_health", 0.0)
+
+        if king_owner_id not in self.eliminated_players:
+            self.eliminated_players.add(king_owner_id)
+            self.pending_eliminations.append(king_owner_id)
+
+        if king_owner_id in self.player_auto_expand:
+            self.player_auto_expand[king_owner_id] = False
+        if king_owner_id in self.player_auto_attack:
+            self.player_auto_attack[king_owner_id] = False
+        if hasattr(self, "pending_auto_expand_nodes"):
+            self.pending_auto_expand_nodes.pop(king_owner_id, None)
+        if hasattr(self, "pending_auto_attack_nodes"):
+            self.pending_auto_attack_nodes.pop(king_owner_id, None)
+
+        remaining_players = [
+            pid for pid in self.players.keys() if pid not in self.eliminated_players
+        ]
+        if len(remaining_players) == 1:
+            self.game_ended = True
+            self.winner_id = remaining_players[0]
+            return True
+        return False
+
     def remove_node_and_edges(self, node_id: int) -> Optional[Dict[str, Any]]:
         """Remove a node and all connected edges, returning snapshot details for messaging."""
         node = self.nodes.get(node_id)
@@ -804,6 +846,7 @@ class GraphState:
 
         # Flows using intake-influenced transfer amounts
         pending_ownership: Dict[int, int] = {}  # node_id -> new_owner_id
+        king_victory_triggered = False
         outgoing_by_node: Dict[int, List[int]] = {}
         for e in self.edges.values():
             if not e.flowing:
@@ -904,6 +947,10 @@ class GraphState:
                                 "king_crown_max_health",
                                 getattr(self, "king_crown_max_health", KING_CROWN_MAX_HEALTH),
                             )
+                        if crown_health <= 0.0:
+                            remaining_attack = 0.0
+                            if self._handle_king_elimination(crown_owner_id, to_node):
+                                king_victory_triggered = True
                 if remaining_attack > 0.0:
                     size_delta[to_id] -= remaining_attack
                     projected = max(NODE_MIN_JUICE, to_node.juice + size_delta[to_id])
@@ -953,9 +1000,7 @@ class GraphState:
                 node.juice = max(NODE_MIN_JUICE, min(node_max, updated_amount))
             else:
                 node.juice = max(NODE_MIN_JUICE, min(node_max, updated_amount))
-
         # Apply pending ownership changes and award gold for capturing unowned nodes
-        king_victory_triggered = False
         for nid, new_owner in pending_ownership.items():
             node = self.nodes.get(nid)
             if node is None:
@@ -1020,31 +1065,7 @@ class GraphState:
                 if getattr(self, "win_condition", "dominate") == "king":
                     king_owner_id = getattr(node, "king_owner_id", None)
                     if king_owner_id is not None and king_owner_id != new_owner:
-                        # Remove king tracking for the eliminated player
-                        self.player_king_nodes.pop(king_owner_id, None)
-                        setattr(node, "king_owner_id", None)
-                        setattr(node, "king_crown_health", 0.0)
-                        setattr(node, "king_crown_max_health", 0.0)
-
-                        if king_owner_id not in self.eliminated_players:
-                            self.eliminated_players.add(king_owner_id)
-                            self.pending_eliminations.append(king_owner_id)
-                            if king_owner_id in self.player_auto_expand:
-                                self.player_auto_expand[king_owner_id] = False
-                            if king_owner_id in self.player_auto_attack:
-                                self.player_auto_attack[king_owner_id] = False
-                            if hasattr(self, "pending_auto_expand_nodes"):
-                                self.pending_auto_expand_nodes.pop(king_owner_id, None)
-                            if hasattr(self, "pending_auto_attack_nodes"):
-                                self.pending_auto_attack_nodes.pop(king_owner_id, None)
-
-                        remaining_players = [
-                            pid for pid in self.players.keys() if pid not in self.eliminated_players
-                        ]
-
-                        if len(remaining_players) == 1:
-                            self.game_ended = True
-                            self.winner_id = remaining_players[0]
+                        if self._handle_king_elimination(king_owner_id, node):
                             king_victory_triggered = True
                         # Continue processing other pending ownership changes to keep state consistent
 

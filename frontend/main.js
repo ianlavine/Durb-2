@@ -614,7 +614,7 @@
   function normalizeBreakMode(value) {
     if (typeof value !== 'string') return 'brass';
     const normalized = value.trim().toLowerCase();
-    if (normalized === 'any' || normalized === 'flowing') return normalized;
+    if (normalized === 'any' || normalized === 'flowing' || normalized === 'double') return normalized;
     return 'brass';
   }
 
@@ -661,11 +661,17 @@
   }
 
   function doesBreakModeAllowNormalBreaks() {
-    return currentBreakMode === 'any' || currentBreakMode === 'flowing';
+    return currentBreakMode === 'any'
+      || currentBreakMode === 'flowing'
+      || currentBreakMode === 'double';
   }
 
   function isFlowingBreakModeActive() {
     return currentBreakMode === 'flowing';
+  }
+
+  function isDoubleBreakModeActive() {
+    return currentBreakMode === 'double';
   }
 
   function getMyGemCount(gemKey = 'brass') {
@@ -1097,9 +1103,14 @@
       brassLabel = 'None';
     }
     const normalizedBreak = normalizeBreakMode(settings.breakMode);
-    const breakLabel = normalizedBreak === 'any'
-      ? 'Any'
-      : (normalizedBreak === 'flowing' ? 'Flowing' : 'Brass');
+    let breakLabel = 'Brass';
+    if (normalizedBreak === 'any') {
+      breakLabel = 'Any';
+    } else if (normalizedBreak === 'flowing') {
+      breakLabel = 'Flowing';
+    } else if (normalizedBreak === 'double') {
+      breakLabel = 'Double';
+    }
     const startLabel = (settings.brassStart === 'anywhere') ? 'Anywhere' : 'Owned';
     const startModeLabel = (settings.gameStart === 'hidden-split') ? 'Hidden' : 'Open';
     const costLabel = coerceBridgeCost(settings.bridgeCost).toFixed(1);
@@ -4540,6 +4551,9 @@ function clearBridgeSelection() {
           isBrass,
           kingOwnerId,
           isKing: kingOwnerId != null,
+          kingLastOwnerId: kingOwnerId != null ? kingOwnerId : null,
+          kingGraveOwnerId: null,
+          kingCrownFallen: false,
           kingCrownHealth: normalizedCrownHealth,
           kingCrownMax: normalizedCrownMax,
           resourceType,
@@ -5140,6 +5154,9 @@ function clearBridgeSelection() {
           const oldOwner = node.owner;
           const prevKingOwnerId = Number.isFinite(node.kingOwnerId) ? node.kingOwnerId : null;
           const prevCrownHealth = Number(node.kingCrownHealth);
+          const prevGraveOwnerId = Number.isFinite(node.kingGraveOwnerId) ? node.kingGraveOwnerId : null;
+          const prevLastOwnerId = Number.isFinite(node.kingLastOwnerId) ? node.kingLastOwnerId : null;
+          const prevKingFallen = node.kingCrownFallen === true;
           node.size = size;
           node.owner = owner;
           node.pendingGold = Number(pendingGold) || 0;
@@ -5155,6 +5172,13 @@ function clearBridgeSelection() {
           if (!Number.isFinite(crownHealth)) crownHealth = null;
           let crownMax = Number(crownMaxRaw);
           if (!Number.isFinite(crownMax)) crownMax = null;
+          const kingLostThisTick = prevKingOwnerId != null && kingOwnerId == null;
+          const reportedCrownHealth = Number(crownHealthRaw);
+          const crownHealthWasZero = Number.isFinite(prevCrownHealth) && prevCrownHealth <= 0;
+          const fallingKing = kingLostThisTick && (
+            (Number.isFinite(reportedCrownHealth) && reportedCrownHealth <= 0) ||
+            crownHealthWasZero
+          );
           if (kingOwnerId != null) {
             if (Number.isFinite(crownMax) && crownMax > 0) {
               kingCrownDefaultMax = Math.max(kingCrownDefaultMax, crownMax);
@@ -5177,6 +5201,34 @@ function clearBridgeSelection() {
           }
           node.kingCrownMax = Number.isFinite(crownMax) ? Math.max(0, crownMax) : 0;
           node.kingCrownHealth = Number.isFinite(crownHealth) ? Math.max(0, crownHealth) : (node.kingCrownMax || 0);
+          if (kingOwnerId != null) {
+            node.kingLastOwnerId = kingOwnerId;
+            node.kingGraveOwnerId = null;
+            node.kingCrownFallen = false;
+          } else if (fallingKing) {
+            const fallenOwnerId = prevKingOwnerId ?? prevLastOwnerId ?? prevGraveOwnerId;
+            if (fallenOwnerId != null) {
+              node.kingLastOwnerId = fallenOwnerId;
+              node.kingGraveOwnerId = fallenOwnerId;
+              node.kingCrownFallen = true;
+            } else {
+              node.kingLastOwnerId = null;
+              node.kingGraveOwnerId = null;
+              node.kingCrownFallen = false;
+            }
+          } else if (prevKingFallen && prevGraveOwnerId != null) {
+            node.kingGraveOwnerId = prevGraveOwnerId;
+            node.kingCrownFallen = true;
+            if (!Number.isFinite(node.kingLastOwnerId)) {
+              node.kingLastOwnerId = prevGraveOwnerId;
+            }
+          } else {
+            node.kingGraveOwnerId = null;
+            node.kingCrownFallen = false;
+            if (!Number.isFinite(kingOwnerId)) {
+              node.kingLastOwnerId = null;
+            }
+          }
           trackKingUnderAttack(id, prevKingOwnerId, prevCrownHealth, kingOwnerId, node.kingCrownHealth);
           if (oldOwner !== owner) {
             // Enemy capture sound: you captured from someone else
@@ -6067,6 +6119,11 @@ function fallbackRemoveEdgesForNode(nodeId) {
       isBrass,
       kingOwnerId: null,
       isKing: false,
+      kingLastOwnerId: null,
+      kingGraveOwnerId: null,
+      kingCrownFallen: false,
+      kingCrownHealth: 0,
+      kingCrownMax: 0,
       resourceType,
       resourceKey,
     });
@@ -6257,6 +6314,9 @@ function fallbackRemoveEdgesForNode(nodeId) {
         sourceNode.isKing = false;
         sourceNode.kingCrownHealth = 0;
         sourceNode.kingCrownMax = 0;
+        sourceNode.kingLastOwnerId = null;
+        sourceNode.kingGraveOwnerId = null;
+        sourceNode.kingCrownFallen = false;
       }
     }
 
@@ -6265,6 +6325,9 @@ function fallbackRemoveEdgesForNode(nodeId) {
       kingMoveSuppressedNodes.add(toNodeId);
       targetNode.kingOwnerId = playerId;
       targetNode.isKing = true;
+      targetNode.kingLastOwnerId = playerId;
+      targetNode.kingGraveOwnerId = null;
+      targetNode.kingCrownFallen = false;
       let resolvedCrownMax = crownMax;
       let resolvedCrownHealth = crownHealth;
       if (!Number.isFinite(resolvedCrownMax) || resolvedCrownMax <= 0) {
@@ -7154,20 +7217,28 @@ function fallbackRemoveEdgesForNode(nodeId) {
       }
 
       const kingOwnerId = Number.isFinite(n.kingOwnerId) ? Number(n.kingOwnerId) : null;
+      const fallenOwnerId = (n.kingCrownFallen && Number.isFinite(n.kingGraveOwnerId)) ? Number(n.kingGraveOwnerId) : null;
+      const shouldDrawFallenKing = kingOwnerId == null && fallenOwnerId != null;
+      const hideKingVisual = shouldHideCrownForHiddenStart(n);
       if (winCondition === 'king') {
-        if (kingOwnerId != null) {
-          const crownColor = ownerToColor(kingOwnerId);
-          const isSelectedKing = kingSelectionActive && kingSelectedNodeId === id;
+        if (hideKingVisual) {
+          if (crownHealthDisplays.has(id)) {
+            destroyCrownHealthDisplay(id);
+          }
+        } else if (kingOwnerId != null || shouldDrawFallenKing) {
+          const crownOwnerId = kingOwnerId != null ? kingOwnerId : fallenOwnerId;
+          const crownColor = ownerToColor(crownOwnerId);
+          const isSelectedKing = kingOwnerId != null && kingSelectionActive && kingSelectedNodeId === id;
           const selectionColor = ownerToSecondaryColor(myPlayerId) || ownerToColor(myPlayerId) || crownColor || 0x000000;
           const kingCrownRadius = computeStandardKingCrownRadius(baseScale);
-          if (kingAttackAlertActive && kingAttackNodeId === id) {
+          if (kingOwnerId != null && kingAttackAlertActive && kingAttackNodeId === id) {
             drawKingDistressWaves(nx, ny, kingCrownRadius, crownColor);
           }
           drawKingCrown(nx, ny, kingCrownRadius, crownColor, {
             highlighted: isSelectedKing,
             highlightColor: selectionColor,
-            crownHealth: Number.isFinite(n.kingCrownHealth) ? n.kingCrownHealth : null,
-            crownMax: Number.isFinite(n.kingCrownMax) ? n.kingCrownMax : null,
+            crownHealth: kingOwnerId != null && Number.isFinite(n.kingCrownHealth) ? n.kingCrownHealth : 0,
+            crownMax: kingOwnerId != null && Number.isFinite(n.kingCrownMax) ? n.kingCrownMax : null,
             nodeId: id,
           });
         } else if (crownHealthDisplays.has(id)) {
@@ -7579,6 +7650,11 @@ function fallbackRemoveEdgesForNode(nodeId) {
       return node.x >= hiddenStartBoundary - tolerance;
     }
     return true;
+  }
+
+  function shouldHideCrownForHiddenStart(node) {
+    if (!hiddenStartActive || hiddenStartRevealed || phase !== 'picking') return false;
+    return node ? !isNodeWithinStartZone(node) : false;
   }
 
   function hexToInt(color) {
@@ -8240,6 +8316,15 @@ function fallbackRemoveEdgesForNode(nodeId) {
               : 'Cannot cross brass pipe';
             showErrorMessage(message);
             return true;
+          }
+          const doubleBreakModeActive = isDoubleBreakModeActive();
+          const targetOwnerId = Number.isFinite(node.owner) ? node.owner : null;
+          if (doubleBreakModeActive && targetOwnerId !== myPlayerId) {
+            const breakingExisting = bridgePreviewWillBreakPipes || (brassPreviewIntersections && brassPreviewIntersections.size > 0);
+            if (breakingExisting) {
+              showErrorMessage('Double breaks must end on your nodes');
+              return true;
+            }
           }
           const ownershipRequired = pipeStartRequiresOwnership();
           const firstOwner = firstNode.owner;
@@ -9045,7 +9130,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
       progressSegments.clear();
       const notice = document.createElement('div');
       notice.className = 'progressSegment winConNotice';
-      notice.textContent = 'Win-Con: King · Capture the crowned node';
+      notice.textContent = 'Win Con: Kill The King';
       notice.style.flex = '1';
       progressBarInner.appendChild(notice);
       progressBarInner.style.justifyContent = 'center';
