@@ -313,8 +313,8 @@
         startingNodeJuice: 300,
         passiveIncome: 0,
         neutralCaptureGold: 10,
-        ringJuiceToGoldRatio: 30,
-        ringPayoutGold: 10,
+        ringJuiceToGoldRatio: 10,
+        ringPayoutGold: 2,
         warpGemCount: 3,
         brassGemCount: 7,
         rageGemCount: 4,
@@ -325,6 +325,9 @@
         kingCrownHealth: KING_CROWN_DEFAULT_HEALTH,
         resources: 'standard',
         lonelyNode: 'sinks',
+        nodeGrowthRate: 0.7,
+        startingFlowRate: 0.01,
+        secondaryFlowRate: 0.75,
       }
     : {
         screen: 'warp',
@@ -336,8 +339,8 @@
         startingNodeJuice: 300,
         passiveIncome: 0,
         neutralCaptureGold: 12,
-        ringJuiceToGoldRatio: 20,
-        ringPayoutGold: 3,
+        ringJuiceToGoldRatio: 10,
+        ringPayoutGold: 2,
         warpGemCount: 3,
         brassGemCount: 7,
         rageGemCount: 4,
@@ -346,6 +349,9 @@
         kingCrownHealth: KING_CROWN_DEFAULT_HEALTH,
         resources: 'standard',
         lonelyNode: 'sinks',
+        nodeGrowthRate: 0.2,
+        startingFlowRate: 0.004,
+        secondaryFlowRate: 0.7,
       };
 
   const INITIAL_MODE = LEGACY_DEFAULT_MODE || (IS_LEGACY_CLIENT ? 'basic' : 'flat');
@@ -370,6 +376,12 @@
   let ringRatioValueLabel = null;
   let ringPayoutSlider = null;
   let ringPayoutValueLabel = null;
+  let nodeGrowthSlider = null;
+  let nodeGrowthValueLabel = null;
+  let startingFlowSlider = null;
+  let startingFlowValueLabel = null;
+  let secondaryFlowSlider = null;
+  let secondaryFlowValueLabel = null;
   let startingJuiceSlider = null;
   let startingJuiceValueLabel = null;
   let crownHealthSlider = null;
@@ -397,6 +409,18 @@
   const RING_PAYOUT_MIN = 1;
   const RING_PAYOUT_MAX = 20;
   const RING_PAYOUT_STEP = 1;
+  const NODE_GROWTH_MIN = 0;
+  const NODE_GROWTH_MAX = 1;
+  const NODE_GROWTH_STEP = 0.01;
+  const STARTING_FLOW_MIN = 0;
+  const STARTING_FLOW_MAX = 0.01;
+  const STARTING_FLOW_STEP = 0.0001;
+  const BASE_FLOW_SLIDER_MIN = 0;
+  const BASE_FLOW_SLIDER_MAX = 1;
+  const BASE_FLOW_SLIDER_STEP = 0.01;
+  const SECONDARY_FLOW_MIN = 0;
+  const SECONDARY_FLOW_MAX = 1;
+  const SECONDARY_FLOW_STEP = 0.01;
   const STARTING_JUICE_MIN = 50;
   const STARTING_JUICE_MAX = 300;
   const STARTING_JUICE_STEP = 10;
@@ -576,6 +600,43 @@
     }
     const clamped = Math.min(CROWN_HEALTH_MAX, Math.max(CROWN_HEALTH_MIN, numeric));
     return Math.round(clamped);
+  }
+
+  function coerceNodeGrowthRate(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return DEFAULT_MODE_SETTINGS.nodeGrowthRate;
+    const clamped = Math.min(NODE_GROWTH_MAX, Math.max(NODE_GROWTH_MIN, numeric));
+    const stepped = Math.round(clamped / NODE_GROWTH_STEP) * NODE_GROWTH_STEP;
+    return Number(stepped.toFixed(2));
+  }
+
+  function coerceStartingFlowRate(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return DEFAULT_MODE_SETTINGS.startingFlowRate;
+    const clamped = Math.min(STARTING_FLOW_MAX, Math.max(STARTING_FLOW_MIN, numeric));
+    const stepped = Math.round(clamped / STARTING_FLOW_STEP) * STARTING_FLOW_STEP;
+    return Number(stepped.toFixed(4));
+  }
+
+  function coerceSecondaryFlowRate(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return DEFAULT_MODE_SETTINGS.secondaryFlowRate;
+    const clamped = Math.min(SECONDARY_FLOW_MAX, Math.max(SECONDARY_FLOW_MIN, numeric));
+    const stepped = Math.round(clamped / SECONDARY_FLOW_STEP) * SECONDARY_FLOW_STEP;
+    return Number(stepped.toFixed(2));
+  }
+
+  function ratioToBaseFlowSliderValue(ratio) {
+    if (!Number.isFinite(ratio)) return BASE_FLOW_SLIDER_MIN;
+    const percent = ratio * 100;
+    return Math.max(BASE_FLOW_SLIDER_MIN, Math.min(BASE_FLOW_SLIDER_MAX, percent));
+  }
+
+  function sliderValueToBaseFlowRatio(sliderValue) {
+    if (!Number.isFinite(sliderValue)) return STARTING_FLOW_MIN;
+    const clamped = Math.max(BASE_FLOW_SLIDER_MIN, Math.min(BASE_FLOW_SLIDER_MAX, sliderValue));
+    const ratio = clamped / 100;
+    return Math.max(STARTING_FLOW_MIN, Math.min(STARTING_FLOW_MAX, ratio));
   }
 
   function coerceGemCount(value, gemKey = 'warp') {
@@ -1304,6 +1365,21 @@
     } else {
       next.kingCrownHealth = coerceKingCrownHealth(next.kingCrownHealth);
     }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'nodeGrowthRate')) {
+      next.nodeGrowthRate = coerceNodeGrowthRate(overrides.nodeGrowthRate);
+    } else {
+      next.nodeGrowthRate = coerceNodeGrowthRate(next.nodeGrowthRate);
+    }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'startingFlowRate')) {
+      next.startingFlowRate = coerceStartingFlowRate(overrides.startingFlowRate);
+    } else {
+      next.startingFlowRate = coerceStartingFlowRate(next.startingFlowRate);
+    }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'secondaryFlowRate')) {
+      next.secondaryFlowRate = coerceSecondaryFlowRate(overrides.secondaryFlowRate);
+    } else {
+      next.secondaryFlowRate = coerceSecondaryFlowRate(next.secondaryFlowRate);
+    }
     if (Object.prototype.hasOwnProperty.call(overrides, 'warpGemCount')) {
       next.warpGemCount = coerceGemCount(overrides.warpGemCount, 'warp');
     } else {
@@ -1367,6 +1443,9 @@
     syncNeutralCaptureSlider();
     syncRingRatioSlider();
     syncRingPayoutSlider();
+    syncNodeGrowthSlider();
+    syncStartingFlowSlider();
+    syncSecondaryFlowSlider();
     syncStartingJuiceSlider();
     syncCrownHealthSlider();
     syncGemCountSliders();
@@ -1387,6 +1466,9 @@
       ringJuiceToGoldRatio: coerceRingRatio(selectedSettings.ringJuiceToGoldRatio),
       ringPayoutGold: coerceRingPayout(selectedSettings.ringPayoutGold),
       kingCrownHealth: coerceKingCrownHealth(selectedSettings.kingCrownHealth),
+      nodeGrowthRate: coerceNodeGrowthRate(selectedSettings.nodeGrowthRate),
+      startingFlowRate: coerceStartingFlowRate(selectedSettings.startingFlowRate),
+      secondaryFlowRate: coerceSecondaryFlowRate(selectedSettings.secondaryFlowRate),
       warpGemCount: coerceGemCount(selectedSettings.warpGemCount, 'warp'),
       brassGemCount: coerceGemCount(selectedSettings.brassGemCount, 'brass'),
       rageGemCount: coerceGemCount(selectedSettings.rageGemCount, 'rage'),
@@ -1420,6 +1502,9 @@
     if (Object.prototype.hasOwnProperty.call(payload, 'ringJuiceToGoldRatio')) overrides.ringJuiceToGoldRatio = payload.ringJuiceToGoldRatio;
     if (Object.prototype.hasOwnProperty.call(payload, 'ringPayoutGold')) overrides.ringPayoutGold = payload.ringPayoutGold;
     if (Object.prototype.hasOwnProperty.call(payload, 'kingCrownHealth')) overrides.kingCrownHealth = payload.kingCrownHealth;
+    if (Object.prototype.hasOwnProperty.call(payload, 'nodeGrowthRate')) overrides.nodeGrowthRate = payload.nodeGrowthRate;
+    if (Object.prototype.hasOwnProperty.call(payload, 'startingFlowRate')) overrides.startingFlowRate = payload.startingFlowRate;
+    if (Object.prototype.hasOwnProperty.call(payload, 'secondaryFlowRate')) overrides.secondaryFlowRate = payload.secondaryFlowRate;
     if (Object.prototype.hasOwnProperty.call(payload, 'warpGemCount')) overrides.warpGemCount = payload.warpGemCount;
     if (Object.prototype.hasOwnProperty.call(payload, 'brassGemCount')) overrides.brassGemCount = payload.brassGemCount;
     if (Object.prototype.hasOwnProperty.call(payload, 'rageGemCount')) overrides.rageGemCount = payload.rageGemCount;
@@ -1466,6 +1551,28 @@
     const value = coerceRingPayout(selectedSettings.ringPayoutGold);
     ringPayoutSlider.value = String(value);
     ringPayoutValueLabel.textContent = String(value);
+  }
+
+  function syncNodeGrowthSlider() {
+    if (!nodeGrowthSlider || !nodeGrowthValueLabel) return;
+    const value = coerceNodeGrowthRate(selectedSettings.nodeGrowthRate);
+    nodeGrowthSlider.value = value.toFixed(2);
+    nodeGrowthValueLabel.textContent = value.toFixed(2);
+  }
+
+  function syncStartingFlowSlider() {
+    if (!startingFlowSlider || !startingFlowValueLabel) return;
+    const ratio = coerceStartingFlowRate(selectedSettings.startingFlowRate);
+    const sliderValue = ratioToBaseFlowSliderValue(ratio);
+    startingFlowSlider.value = sliderValue.toFixed(2);
+    startingFlowValueLabel.textContent = `${sliderValue.toFixed(2)}%`;
+  }
+
+  function syncSecondaryFlowSlider() {
+    if (!secondaryFlowSlider || !secondaryFlowValueLabel) return;
+    const value = coerceSecondaryFlowRate(selectedSettings.secondaryFlowRate);
+    secondaryFlowSlider.value = value.toFixed(2);
+    secondaryFlowValueLabel.textContent = value.toFixed(2);
   }
 
   function syncStartingJuiceSlider() {
@@ -3308,6 +3415,12 @@ function clearBridgeSelection() {
     ringRatioValueLabel = document.getElementById('ringRatioValue');
     ringPayoutSlider = document.getElementById('ringPayoutSlider');
     ringPayoutValueLabel = document.getElementById('ringPayoutValue');
+    nodeGrowthSlider = document.getElementById('nodeGrowthSlider');
+    nodeGrowthValueLabel = document.getElementById('nodeGrowthValue');
+    startingFlowSlider = document.getElementById('startingFlowSlider');
+    startingFlowValueLabel = document.getElementById('startingFlowValue');
+    secondaryFlowSlider = document.getElementById('secondaryFlowSlider');
+    secondaryFlowValueLabel = document.getElementById('secondaryFlowValue');
     startingJuiceSlider = document.getElementById('startingJuiceSlider');
     startingJuiceValueLabel = document.getElementById('startingJuiceValue');
     crownHealthSlider = document.getElementById('crownHealthSlider');
@@ -3394,6 +3507,43 @@ function clearBridgeSelection() {
       };
       ringPayoutSlider.addEventListener('input', handler);
       ringPayoutSlider.addEventListener('change', handler);
+    }
+
+    if (nodeGrowthSlider) {
+      nodeGrowthSlider.min = String(NODE_GROWTH_MIN);
+      nodeGrowthSlider.max = String(NODE_GROWTH_MAX);
+      nodeGrowthSlider.step = String(NODE_GROWTH_STEP);
+      const handler = (event) => {
+        const sliderValue = Number(event.target.value);
+        applySelectedSettings({ nodeGrowthRate: sliderValue });
+      };
+      nodeGrowthSlider.addEventListener('input', handler);
+      nodeGrowthSlider.addEventListener('change', handler);
+    }
+
+    if (startingFlowSlider) {
+      startingFlowSlider.min = String(BASE_FLOW_SLIDER_MIN);
+      startingFlowSlider.max = String(BASE_FLOW_SLIDER_MAX);
+      startingFlowSlider.step = String(BASE_FLOW_SLIDER_STEP);
+      const handler = (event) => {
+        const sliderValue = Number(event.target.value);
+        const ratio = sliderValueToBaseFlowRatio(sliderValue);
+        applySelectedSettings({ startingFlowRate: ratio });
+      };
+      startingFlowSlider.addEventListener('input', handler);
+      startingFlowSlider.addEventListener('change', handler);
+    }
+
+    if (secondaryFlowSlider) {
+      secondaryFlowSlider.min = String(SECONDARY_FLOW_MIN);
+      secondaryFlowSlider.max = String(SECONDARY_FLOW_MAX);
+      secondaryFlowSlider.step = String(SECONDARY_FLOW_STEP);
+      const handler = (event) => {
+        const sliderValue = Number(event.target.value);
+        applySelectedSettings({ secondaryFlowRate: sliderValue });
+      };
+      secondaryFlowSlider.addEventListener('input', handler);
+      secondaryFlowSlider.addEventListener('change', handler);
     }
 
     if (startingJuiceSlider) {

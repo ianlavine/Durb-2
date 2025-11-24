@@ -973,15 +973,36 @@
           <div class="mode-option-group" data-setting-group="ringJuiceRatio">
             <span class="selector-label">Ring Ratio</span>
             <div class="mode-slider">
-              <input type="range" id="ringRatioSlider" min="5" max="30" step="1" value="20" aria-label="Juice to gold ratio" />
-              <span id="ringRatioValue">20</span>
+              <input type="range" id="ringRatioSlider" min="5" max="30" step="1" value="10" aria-label="Juice to gold ratio" />
+              <span id="ringRatioValue">10</span>
             </div>
           </div>
           <div class="mode-option-group" data-setting-group="ringPayout">
             <span class="selector-label">Ring Payout</span>
             <div class="mode-slider">
-              <input type="range" id="ringPayoutSlider" min="1" max="20" step="1" value="3" aria-label="Gold needed to pop ring" />
-              <span id="ringPayoutValue">3</span>
+              <input type="range" id="ringPayoutSlider" min="1" max="20" step="1" value="2" aria-label="Gold needed to pop ring" />
+              <span id="ringPayoutValue">2</span>
+            </div>
+          </div>
+          <div class="mode-option-group" data-setting-group="nodeGrowth">
+            <span class="selector-label">Node Growth</span>
+            <div class="mode-slider">
+              <input type="range" id="nodeGrowthSlider" min="0" max="1" step="0.01" value="0.2" aria-label="Node growth per tick" />
+              <span id="nodeGrowthValue">0.20</span>
+            </div>
+          </div>
+          <div class="mode-option-group" data-setting-group="baseFlow">
+            <span class="selector-label">Base Flow</span>
+            <div class="mode-slider">
+              <input type="range" id="startingFlowSlider" min="0" max="1" step="0.01" value="0.4" aria-label="Base flow share" />
+              <span id="startingFlowValue">0.40%</span>
+            </div>
+          </div>
+          <div class="mode-option-group" data-setting-group="secondaryFlow">
+            <span class="selector-label">Secondary Flow</span>
+            <div class="mode-slider">
+              <input type="range" id="secondaryFlowSlider" min="0" max="1" step="0.01" value="0.7" aria-label="Secondary flow share" />
+              <span id="secondaryFlowValue">0.70</span>
             </div>
           </div>
           <div class="mode-option-group" data-setting-group="lonelyNode">

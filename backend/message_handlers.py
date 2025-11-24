@@ -15,6 +15,9 @@ from .constants import (
     MIN_FRIEND_PLAYERS,
     NODE_MAX_JUICE,
     PLAYER_COLOR_SCHEMES,
+    PRODUCTION_RATE_PER_NODE,
+    RESERVE_TRANSFER_RATIO,
+    INTAKE_TRANSFER_RATIO,
     TICK_INTERVAL_SECONDS,
     UNOWNED_NODE_BASE_JUICE,
     KING_CROWN_MAX_HEALTH,
@@ -207,8 +210,8 @@ class MessageRouter:
             "gameStart": "open",
             "passiveIncome": 1.0,
             "neutralCaptureGold": 5.0,
-            "ringJuiceToGoldRatio": 30.0,
-            "ringPayoutGold": 10.0,
+            "ringJuiceToGoldRatio": 10.0,
+            "ringPayoutGold": 2.0,
             "warpGemCount": DEFAULT_GEM_COUNTS.get("warp", 3),
             "brassGemCount": DEFAULT_GEM_COUNTS.get("brass", 7),
             "rageGemCount": DEFAULT_GEM_COUNTS.get("rage", 4),
@@ -218,6 +221,9 @@ class MessageRouter:
             "kingCrownHealth": KING_CROWN_MAX_HEALTH,
             "resources": "standard",
             "lonelyNode": "sinks",
+            "nodeGrowthRate": PRODUCTION_RATE_PER_NODE,
+            "startingFlowRate": RESERVE_TRANSFER_RATIO,
+            "secondaryFlowRate": INTAKE_TRANSFER_RATIO,
         }
         if not isinstance(payload, dict):
             settings["pipeStart"] = settings["brassStart"]
@@ -333,6 +339,36 @@ class MessageRouter:
             clamped_start = max(UNOWNED_NODE_BASE_JUICE, min(NODE_MAX_JUICE, parsed_start))
             snapped = round(clamped_start / 10.0) * 10.0
             settings["startingNodeJuice"] = max(UNOWNED_NODE_BASE_JUICE, min(NODE_MAX_JUICE, snapped))
+
+        growth_value = payload.get("nodeGrowthRate", settings["nodeGrowthRate"])
+        if isinstance(growth_value, str):
+            growth_value = growth_value.strip()
+        try:
+            parsed_growth = float(growth_value)
+        except (TypeError, ValueError):
+            parsed_growth = None
+        if parsed_growth is not None and not math.isnan(parsed_growth):
+            settings["nodeGrowthRate"] = max(0.0, min(1.0, round(parsed_growth, 4)))
+
+        starting_flow_value = payload.get("startingFlowRate", settings["startingFlowRate"])
+        if isinstance(starting_flow_value, str):
+            starting_flow_value = starting_flow_value.strip()
+        try:
+            parsed_starting_flow = float(starting_flow_value)
+        except (TypeError, ValueError):
+            parsed_starting_flow = None
+        if parsed_starting_flow is not None and not math.isnan(parsed_starting_flow):
+            settings["startingFlowRate"] = max(0.0, min(1.0, round(parsed_starting_flow, 4)))
+
+        secondary_flow_value = payload.get("secondaryFlowRate", settings["secondaryFlowRate"])
+        if isinstance(secondary_flow_value, str):
+            secondary_flow_value = secondary_flow_value.strip()
+        try:
+            parsed_secondary_flow = float(secondary_flow_value)
+        except (TypeError, ValueError):
+            parsed_secondary_flow = None
+        if parsed_secondary_flow is not None and not math.isnan(parsed_secondary_flow):
+            settings["secondaryFlowRate"] = max(0.0, min(1.0, round(parsed_secondary_flow, 4)))
 
         crown_health_value = payload.get("kingCrownHealth", settings["kingCrownHealth"])
         if isinstance(crown_health_value, str):

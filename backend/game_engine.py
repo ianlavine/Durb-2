@@ -147,6 +147,12 @@ class GameEngine:
         self.state.king_crown_max_health = KING_CROWN_MAX_HEALTH
 
         resource_mode = "standard"
+        growth_rate_value = PRODUCTION_RATE_PER_NODE
+        growth_rate_overridden = False
+        starting_flow_ratio = RESERVE_TRANSFER_RATIO
+        starting_flow_overridden = False
+        secondary_flow_ratio = INTAKE_TRANSFER_RATIO
+        secondary_flow_overridden = False
 
         if normalized_mode in {"warp-old", "warp", "i-warp"}:
             screen_variant = "warp"
@@ -321,6 +327,39 @@ class GameEngine:
             gem_counts["rage"] = sanitize_gem_count(options.get("rageGemCount", gem_counts["rage"]), gem_counts["rage"])
             gem_counts["reverse"] = sanitize_gem_count(options.get("reverseGemCount", gem_counts["reverse"]), gem_counts["reverse"])
 
+            growth_rate_raw = options.get("nodeGrowthRate")
+            if isinstance(growth_rate_raw, str):
+                growth_rate_raw = growth_rate_raw.strip()
+            try:
+                parsed_growth = float(growth_rate_raw)
+            except (TypeError, ValueError):
+                parsed_growth = None
+            if parsed_growth is not None and not math.isnan(parsed_growth):
+                growth_rate_value = max(0.0, min(1.0, round(parsed_growth, 4)))
+                growth_rate_overridden = True
+
+            starting_flow_raw = options.get("startingFlowRate")
+            if isinstance(starting_flow_raw, str):
+                starting_flow_raw = starting_flow_raw.strip()
+            try:
+                parsed_starting_flow = float(starting_flow_raw)
+            except (TypeError, ValueError):
+                parsed_starting_flow = None
+            if parsed_starting_flow is not None and not math.isnan(parsed_starting_flow):
+                starting_flow_ratio = max(0.0, min(1.0, round(parsed_starting_flow, 4)))
+                starting_flow_overridden = True
+
+            secondary_flow_raw = options.get("secondaryFlowRate")
+            if isinstance(secondary_flow_raw, str):
+                secondary_flow_raw = secondary_flow_raw.strip()
+            try:
+                parsed_secondary_flow = float(secondary_flow_raw)
+            except (TypeError, ValueError):
+                parsed_secondary_flow = None
+            if parsed_secondary_flow is not None and not math.isnan(parsed_secondary_flow):
+                secondary_flow_ratio = max(0.0, min(1.0, round(parsed_secondary_flow, 4)))
+                secondary_flow_overridden = True
+
         if resource_mode == "gems":
             auto_brass_on_cross = False
             manual_brass_selection = True
@@ -338,6 +377,12 @@ class GameEngine:
             self.state.reserve_transfer_ratio = CLASSIC_RESERVE_TRANSFER_RATIO
             if not starting_node_juice_overridden:
                 starting_node_juice_value = CLASSIC_STARTING_NODE_JUICE
+            if not growth_rate_overridden:
+                growth_rate_value = CLASSIC_PRODUCTION_RATE_PER_NODE
+            if not starting_flow_overridden:
+                starting_flow_ratio = CLASSIC_RESERVE_TRANSFER_RATIO
+            if not secondary_flow_overridden:
+                secondary_flow_ratio = CLASSIC_INTAKE_TRANSFER_RATIO
 
         if bridge_cost_override is not None:
             clamped_cost = max(0.5, min(1.0, float(bridge_cost_override)))
@@ -351,6 +396,10 @@ class GameEngine:
             brass_double_cost = manual_brass_selection or normalized_mode == "cross"
 
         self._apply_resource_distribution(resource_mode, gem_counts)
+
+        self.state.production_rate_per_node = growth_rate_value
+        self.state.reserve_transfer_ratio = starting_flow_ratio
+        self.state.intake_transfer_ratio = secondary_flow_ratio
 
         sanitized_options: Dict[str, Any] = {
             "screen": screen_variant,
@@ -373,6 +422,9 @@ class GameEngine:
             "kingCrownHealth": crown_health_value,
             "resources": resource_mode,
             "lonelyNode": lonely_mode,
+            "nodeGrowthRate": growth_rate_value,
+            "startingFlowRate": starting_flow_ratio,
+            "secondaryFlowRate": secondary_flow_ratio,
         }
         if resource_mode == "gems":
             sanitized_options["brass"] = "gem"
@@ -593,6 +645,9 @@ class GameEngine:
         mode_settings["pipeStart"] = "anywhere"
         mode_settings["bridgeCost"] = 0.0
         mode_settings["startingNodeJuice"] = self.state.starting_node_juice
+        mode_settings["nodeGrowthRate"] = self.state.production_rate_per_node
+        mode_settings["startingFlowRate"] = self.state.reserve_transfer_ratio
+        mode_settings["secondaryFlowRate"] = self.state.intake_transfer_ratio
         mode_settings["gameStart"] = "open"
         mode_settings["derivedMode"] = "sandbox"
         mode_settings["sandbox"] = True
