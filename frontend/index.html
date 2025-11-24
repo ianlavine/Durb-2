@@ -502,10 +502,10 @@
         right: clamp(6px, 2vw, 8px);
         display: flex;
         flex-direction: column;
-        align-items: flex-end;
+        align-items: center;
         gap: clamp(8px, 1.6vh, 16px);
         max-width: clamp(320px, 80vw, 1200px);
-        text-align: right;
+        text-align: center;
         z-index: 30;
       }
 
@@ -650,6 +650,7 @@
         width: 100%;
         font-size: clamp(16px, 1.6vw, 20px);
         letter-spacing: 0.04em;
+        text-align: center;
       }
 
       .mode-option-group.span-full {
@@ -666,7 +667,7 @@
         flex: 1 1 auto;
         flex-wrap: nowrap;
         gap: 8px;
-        justify-content: flex-start;
+        justify-content: center;
       }
 
       .gem-slider-grid {
@@ -981,6 +982,13 @@
             <div class="mode-slider">
               <input type="range" id="ringPayoutSlider" min="1" max="20" step="1" value="3" aria-label="Gold needed to pop ring" />
               <span id="ringPayoutValue">3</span>
+            </div>
+          </div>
+          <div class="mode-option-group" data-setting-group="lonelyNode">
+            <span class="selector-label">Lonely Node</span>
+            <div class="mode-option-buttons">
+              <button class="mode-option-button active" data-setting="lonelyNode" data-value="nothing">Nothing</button>
+              <button class="mode-option-button" data-setting="lonelyNode" data-value="sinks">Sinks</button>
             </div>
           </div>
           <div class="mode-option-group gem-counts span-full" data-setting-group="gemCounts">

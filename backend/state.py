@@ -87,6 +87,8 @@ class GraphState:
         self.pending_edge_removals: List[Dict[str, Any]] = []
         self.pending_auto_reversed_edge_ids: List[int] = []
         self.pending_edge_reversal_events: List[Dict[str, Any]] = []
+        self.lonely_node_mode: str = "nothing"
+        self.pending_lonely_sinks: List[Dict[str, Any]] = []
 
         # Economy overrides
         self.passive_income_per_second: float = 0.0
@@ -388,6 +390,8 @@ class GraphState:
             "owner": node.owner,
             "juice": node.juice,
             "kingOwnerId": getattr(node, "king_owner_id", None),
+            "nodeType": getattr(node, "node_type", "normal"),
+            "isBrass": (getattr(node, "node_type", "normal") == "brass"),
             "resourceType": getattr(node, "resource_type", "money"),
             "resourceKey": getattr(node, "resource_key", None),
         }
@@ -431,6 +435,7 @@ class GraphState:
             return []
 
         removed_ids: List[int] = []
+        candidate_nodes: Set[int] = set()
         for edge_id in edge_ids:
             edge = self.edges.pop(edge_id, None)
             if not edge:
@@ -440,10 +445,12 @@ class GraphState:
             source_node = self.nodes.get(edge.source_node_id)
             if source_node and edge_id in source_node.attached_edge_ids:
                 source_node.attached_edge_ids.remove(edge_id)
+                candidate_nodes.add(source_node.id)
 
             target_node = self.nodes.get(edge.target_node_id)
             if target_node and edge_id in target_node.attached_edge_ids:
                 target_node.attached_edge_ids.remove(edge_id)
+                candidate_nodes.add(target_node.id)
 
         if record and removed_ids:
             for rid in removed_ids:
@@ -452,7 +459,41 @@ class GraphState:
                     payload["reason"] = reason
                 self.pending_edge_removals.append(payload)
 
+        if getattr(self, "lonely_node_mode", "nothing") == "sinks" and candidate_nodes:
+            for node_id in list(candidate_nodes):
+                node = self.nodes.get(node_id)
+                if node and not node.attached_edge_ids:
+                    self._queue_lonely_sink(node)
+
         return removed_ids
+
+    def _queue_lonely_sink(self, node: Node) -> None:
+        if not node:
+            return
+
+        king_owner_id = getattr(node, "king_owner_id", None)
+        win_condition = str(getattr(self, "win_condition", "dominate") or "").strip().lower()
+
+        removal_info = self.remove_node_and_edges(node.id)
+        if not removal_info:
+            return
+        payload: Dict[str, Any] = {
+            "nodeId": node.id,
+            "node": removal_info.get("node"),
+            "removedEdges": removal_info.get("removedEdges", []),
+            "playerId": node.owner,
+        }
+        if king_owner_id is not None and win_condition == "king":
+            payload["kingGraveOwnerId"] = int(king_owner_id)
+            self._handle_king_elimination(king_owner_id, None)
+        self.pending_lonely_sinks.append(payload)
+
+    def pop_pending_lonely_sinks(self) -> List[Dict[str, Any]]:
+        if not self.pending_lonely_sinks:
+            return []
+        events = list(self.pending_lonely_sinks)
+        self.pending_lonely_sinks = []
+        return events
 
     def record_node_movement(self, node_id: int, x: float, y: float) -> None:
         """Queue a node position update for inclusion in the next tick."""

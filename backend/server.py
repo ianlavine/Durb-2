@@ -205,6 +205,13 @@ class WebSocketServer:
                         await self.message_router._broadcast_to_game(game_info, dict(event))
                     state.pending_edge_reversal_events = []
 
+                pending_lonely = state.pop_pending_lonely_sinks() if hasattr(state, "pop_pending_lonely_sinks") else []
+                if pending_lonely:
+                    for sink_event in pending_lonely:
+                        payload = self.message_router._build_lonely_sink_payload(sink_event)
+                        if payload:
+                            await self.message_router._broadcast_to_game(game_info, payload)
+
                 tick_msg = state.to_tick_message(now)
                 await self.message_router._broadcast_to_game(game_info, tick_msg)
 
@@ -282,6 +289,22 @@ class WebSocketServer:
                             per_player_event = state.build_player_view(copy.deepcopy(event), player_id)
                             await self._broadcast_to_specific([websocket], json.dumps(per_player_event))
                     state.pending_edge_reversal_events = []
+
+                if state and hasattr(state, "pop_pending_lonely_sinks"):
+                    pending_lonely = state.pop_pending_lonely_sinks()
+                else:
+                    pending_lonely = []
+                if state and pending_lonely:
+                    for sink_event in pending_lonely:
+                        payload = self.message_router._build_lonely_sink_payload(sink_event)
+                        if not payload:
+                            continue
+                        for token, websocket in list(self.server_context.get("bot_game_clients", {}).items()):
+                            if not websocket:
+                                continue
+                            player_id = bot_game_engine.token_to_player_id.get(token)
+                            per_player_payload = state.build_player_view(copy.deepcopy(payload), player_id)
+                            await self._broadcast_to_specific([websocket], json.dumps(per_player_payload))
 
                 if state:
                     base_tick_msg = state.to_tick_message(now)

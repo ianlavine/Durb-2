@@ -178,6 +178,7 @@ class GameEngine:
             "rage": int(DEFAULT_GEM_COUNTS.get("rage", 4)),
             "reverse": int(DEFAULT_GEM_COUNTS.get("reverse", 6)),
         }
+        lonely_mode = "nothing"
 
         def sanitize_gem_count(raw_value: Any, fallback: int) -> int:
             if isinstance(raw_value, str):
@@ -311,6 +312,10 @@ class GameEngine:
             elif resources_option == "standard":
                 resource_mode = "standard"
 
+            lonely_option = options.get("lonelyNode")
+            if isinstance(lonely_option, str) and lonely_option.strip().lower() == "sinks":
+                lonely_mode = "sinks"
+
             gem_counts["warp"] = sanitize_gem_count(options.get("warpGemCount", gem_counts["warp"]), gem_counts["warp"])
             gem_counts["brass"] = sanitize_gem_count(options.get("brassGemCount", gem_counts["brass"]), gem_counts["brass"])
             gem_counts["rage"] = sanitize_gem_count(options.get("rageGemCount", gem_counts["rage"]), gem_counts["rage"])
@@ -367,6 +372,7 @@ class GameEngine:
             "winCondition": win_condition,
             "kingCrownHealth": crown_health_value,
             "resources": resource_mode,
+            "lonelyNode": lonely_mode,
         }
         if resource_mode == "gems":
             sanitized_options["brass"] = "gem"
@@ -383,6 +389,7 @@ class GameEngine:
         self.state.brass_double_cost = brass_double_cost
         self.state.pipe_break_mode = pipe_break_mode
         self.state.allow_pipe_start_anywhere = allow_pipe_start_anywhere
+        self.state.lonely_node_mode = "sinks" if lonely_mode == "sinks" else "nothing"
         self.state.mode_settings = sanitized_options
         self.state.passive_income_per_second = passive_income_per_second
         self.state.neutral_capture_reward = neutral_capture_reward
