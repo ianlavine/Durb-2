@@ -103,6 +103,7 @@
   let kingAttackLastDamageTime = -Infinity;
   let kingAttackNodeId = null;
   let kingAttackWasActive = false;
+  const fallenKingMarkers = new Map();
 
   function destroyCrownHealthDisplay(nodeId) {
     if (nodeId == null) return;
@@ -147,6 +148,7 @@
   };
   const NODE_MOVE_DURATION_SEC = 1.8;
   const NODE_MOVE_EPSILON = 1e-4;
+  const NODE_SINK_DURATION_SEC = 0.9;
   const PRE_PIPE_COLOR = 0xbec4cf;
   const PRE_PIPE_OUTLINE_COLOR = 0x4a5568;
   const PRE_PIPE_SHAKE_SPEED = 6.4;
@@ -155,6 +157,7 @@
   const REVERSE_PIPE_SPACING_MULTIPLIER = 1.5;
   let pendingSingleClickTimeout = null;
   let pendingSingleClickData = null;
+  const sinkingNodes = new Map();
 
   // Bridge costs - dynamically loaded from backend settings
   let BRIDGE_BASE_COST = 0;
@@ -235,6 +238,7 @@
   const WARP_MARGIN_RATIO_X = 0.06; // horizontal extra space relative to board width
   const WARP_MARGIN_RATIO_Y = 0.10; // vertical extra space relative to board height
   const WARP_BORDER_COLOR = 0x9b4dff; // purple border for warp space
+  const ENABLE_WARP_PIPE_OUTLINE = false;
   const VIRTUAL_CURSOR_COLOR = '#b675ff';
   let warpBoundsWorld = null; // { minX, minY, maxX, maxY, width, height }
   let warpBoundsScreen = null; // { minX, minY, maxX, maxY }
@@ -320,6 +324,7 @@
         winCondition: 'king',
         kingCrownHealth: KING_CROWN_DEFAULT_HEALTH,
         resources: 'standard',
+        lonelyNode: 'sinks',
       }
     : {
         screen: 'warp',
@@ -340,6 +345,7 @@
         winCondition: 'king',
         kingCrownHealth: KING_CROWN_DEFAULT_HEALTH,
         resources: 'standard',
+        lonelyNode: 'sinks',
       };
 
   const INITIAL_MODE = LEGACY_DEFAULT_MODE || (IS_LEGACY_CLIENT ? 'basic' : 'flat');
@@ -596,6 +602,11 @@
   function normalizeResources(value) {
     if (typeof value !== 'string') return 'standard';
     return value.trim().toLowerCase() === 'gems' ? 'gems' : 'standard';
+  }
+
+  function normalizeLonelyNodeMode(value) {
+    if (typeof value !== 'string') return 'nothing';
+    return value.trim().toLowerCase() === 'sinks' ? 'sinks' : 'nothing';
   }
 
   function normalizeBrassSetting(value) {
@@ -1201,6 +1212,9 @@
         isActive = normalized === normalizeWinCondition(selectedSettings.winCondition);
       } else if (setting === 'resources') {
         isActive = normalizeResources(value) === currentResources;
+      } else if (setting === 'lonelyNode') {
+        const normalized = normalizeLonelyNodeMode(value);
+        isActive = normalized === normalizeLonelyNodeMode(selectedSettings.lonelyNode);
       }
       btn.classList.toggle('active', isActive);
     });
@@ -1320,6 +1334,11 @@
     } else {
       next.resources = normalizeResources(next.resources);
     }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'lonelyNode')) {
+      next.lonelyNode = normalizeLonelyNodeMode(overrides.lonelyNode);
+    } else {
+      next.lonelyNode = normalizeLonelyNodeMode(next.lonelyNode);
+    }
 
     if (next.resources === 'gems') {
       next.brass = 'gem';
@@ -1376,6 +1395,7 @@
       derivedMode: selectedMode,
       winCondition: selectedSettings.winCondition || 'dominate',
       resources: normalizeResources(selectedSettings.resources),
+      lonelyNode: normalizeLonelyNodeMode(selectedSettings.lonelyNode),
     };
   }
 
@@ -1404,6 +1424,7 @@
     if (Object.prototype.hasOwnProperty.call(payload, 'brassGemCount')) overrides.brassGemCount = payload.brassGemCount;
     if (Object.prototype.hasOwnProperty.call(payload, 'rageGemCount')) overrides.rageGemCount = payload.rageGemCount;
     if (Object.prototype.hasOwnProperty.call(payload, 'reverseGemCount')) overrides.reverseGemCount = payload.reverseGemCount;
+    if (typeof payload.lonelyNode === 'string') overrides.lonelyNode = payload.lonelyNode;
     if (Object.prototype.hasOwnProperty.call(payload, 'winCondition')) overrides.winCondition = payload.winCondition;
     if (Object.prototype.hasOwnProperty.call(payload, 'resources')) overrides.resources = payload.resources;
     applySelectedSettings(overrides);
@@ -3428,7 +3449,7 @@ function clearBridgeSelection() {
 
     const openModePanel = () => {
       if (!modeOptionsPanel) return;
-      modeOptionsPanel.style.display = 'flex';
+      modeOptionsPanel.style.display = 'grid';
       modeOptionsPanel.setAttribute('aria-hidden', 'false');
       if (modeOptionsButton) modeOptionsButton.setAttribute('aria-expanded', 'true');
       modePanelOpen = true;
@@ -4200,6 +4221,28 @@ function clearBridgeSelection() {
     return needsRedraw;
   }
 
+  function updateSinkingNodes() {
+    if (sinkingNodes.size === 0) return false;
+    const finished = [];
+    let active = false;
+    sinkingNodes.forEach((entry, nodeId) => {
+      const elapsed = animationTime - (entry.startTime || 0);
+      if (!Number.isFinite(entry.duration) || entry.duration <= 0) {
+        finished.push(nodeId);
+        return;
+      }
+      if (elapsed >= entry.duration) {
+        finished.push(nodeId);
+      } else {
+        active = true;
+      }
+    });
+    finished.forEach((nodeId) => {
+      sinkingNodes.delete(nodeId);
+    });
+    return active || finished.length > 0;
+  }
+
   function update() {
     // Update animation timer for juice flow
     animationTime += 1/60; // Assuming 60 FPS, increment by frame time
@@ -4209,6 +4252,7 @@ function clearBridgeSelection() {
     updateMoneyIndicators();
 
     const prePipeStateChanged = updatePrePipesState();
+    const sinkingActive = updateSinkingNodes();
     
     // Update game timer
     const remainingTime = updateTimer();
@@ -4235,7 +4279,20 @@ function clearBridgeSelection() {
     const kingSelectionPending = kingSelectionActive && kingMoveOptionsPending;
     const kingAlertActive = refreshKingAttackAlertState();
     const redrawForKingAlert = kingAlertActive || kingAttackWasActive;
-    if (hasFlowingEdges || anySpinning || removalAnimating || moneyIndicators.length > 0 || (persistentTargeting && currentTargetNodeId !== null) || nodesAnimating || prePipesAnimating || prePipeStateChanged || kingTargetsAnimating || kingSelectionPending || redrawForKingAlert) {
+    if (
+      hasFlowingEdges ||
+      anySpinning ||
+      removalAnimating ||
+      moneyIndicators.length > 0 ||
+      (persistentTargeting && currentTargetNodeId !== null) ||
+      nodesAnimating ||
+      prePipesAnimating ||
+      prePipeStateChanged ||
+      kingTargetsAnimating ||
+      kingSelectionPending ||
+      redrawForKingAlert ||
+      sinkingActive
+    ) {
       redrawStatic();
     }
     kingAttackWasActive = kingAlertActive;
@@ -4411,6 +4468,9 @@ function clearBridgeSelection() {
       tickIntervalSec = msg.tickInterval;
     }
     nodes.clear();
+    fallenKingMarkers.forEach((_, id) => destroyCrownHealthDisplay(id));
+    fallenKingMarkers.clear();
+    sinkingNodes.clear();
     kingNodesByPlayer.clear();
     clearKingAttackAlert();
     kingAttackWasActive = false;
@@ -5149,6 +5209,10 @@ function clearBridgeSelection() {
           resourceTypeRaw = null,
           resourceKeyRaw = null,
         ] = entry;
+        if (fallenKingMarkers.has(id)) {
+          fallenKingMarkers.delete(id);
+          destroyCrownHealthDisplay(id);
+        }
         const node = nodes.get(id);
         if (node) {
           const oldOwner = node.owner;
@@ -6029,6 +6093,15 @@ function fallbackRemoveEdgesForNode(nodeId) {
     if (!Number.isFinite(nodeId)) return;
 
     const nodeSnapshot = msg.nodeSnapshot || nodes.get(nodeId);
+    const reason = typeof msg.reason === 'string' ? msg.reason.toLowerCase() : '';
+    const shouldSink = reason === 'lonely' || msg.sinking === true || msg.lonely === true;
+    if (shouldSink && nodeSnapshot) {
+      startNodeSinkAnimation(nodeId, nodeSnapshot);
+      const graveOwner = determineGraveOwner(msg);
+      if (graveOwner != null) {
+        addFallenKingMarker(nodeId, nodeSnapshot, graveOwner);
+      }
+    }
 
     if (nodes.has(nodeId)) {
       nodes.delete(nodeId);
@@ -6064,6 +6137,40 @@ function fallbackRemoveEdgesForNode(nodeId) {
       activeAbility = null;
       clearBridgeSelection();
     }
+  }
+
+  function startNodeSinkAnimation(nodeId, snapshot) {
+    if (!Number.isFinite(nodeId) || !snapshot) return;
+    const normalizedOwner = snapshot.owner == null ? null : Number(snapshot.owner);
+    const payload = {
+      id: nodeId,
+      x: Number(snapshot.x) || 0,
+      y: Number(snapshot.y) || 0,
+      size: Number(snapshot.size ?? snapshot.juice ?? 0) || 0,
+      owner: Number.isFinite(normalizedOwner) ? normalizedOwner : null,
+      resourceType: normalizeNodeResourceType(snapshot.resourceType),
+      resourceKey: snapshot.resourceKey,
+      isBrass: snapshot.isBrass === true || (typeof snapshot.nodeType === 'string' && snapshot.nodeType.toLowerCase() === 'brass'),
+      startTime: animationTime,
+      duration: NODE_SINK_DURATION_SEC,
+    };
+    sinkingNodes.set(nodeId, payload);
+  }
+
+  function determineGraveOwner(msg) {
+    if (msg && Number.isFinite(msg.kingGraveOwnerId)) {
+      return Number(msg.kingGraveOwnerId);
+    }
+    return null;
+  }
+
+  function addFallenKingMarker(nodeId, snapshot, ownerId) {
+    if (!Number.isFinite(nodeId) || !snapshot || !Number.isFinite(ownerId)) return;
+    const x = Number(snapshot.x);
+    const y = Number(snapshot.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    fallenKingMarkers.set(nodeId, { x, y, ownerId: Number(ownerId) });
+    destroyCrownHealthDisplay(nodeId);
   }
 
   function handleDestroyError(msg) {
@@ -7338,6 +7445,9 @@ function fallbackRemoveEdgesForNode(nodeId) {
       }
     }
 
+    drawSinkingNodes();
+    drawFallenKingMarkers();
+
     drawKingMoveTargetsOverlay();
 
     // After drawing nodes / previews:
@@ -7391,6 +7501,40 @@ function fallbackRemoveEdgesForNode(nodeId) {
     
     // Draw money indicators
     drawMoneyIndicators();
+  }
+
+  function drawSinkingNodes() {
+    if (sinkingNodes.size === 0) return;
+    const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
+    sinkingNodes.forEach((entry) => {
+      const [nx, ny] = worldToScreen(entry.x, entry.y);
+      const duration = Number.isFinite(entry.duration) && entry.duration > 0
+        ? entry.duration
+        : NODE_SINK_DURATION_SEC;
+      const elapsed = Math.max(0, animationTime - (entry.startTime || 0));
+      const t = Math.min(1, elapsed / Math.max(duration, 1e-4));
+      const eased = t * t;
+      const baseRadius = calculateNodeRadius(entry, baseScale);
+      const radius = Math.max(0, baseRadius * (1 - eased));
+      if (radius <= 0) {
+        return;
+      }
+      const alpha = Math.max(0, 1 - t * 0.85);
+      const fillColor = entry.owner != null ? ownerToColor(entry.owner) : ownerToColor(null);
+      graphicsNodes.fillStyle(fillColor, alpha);
+      graphicsNodes.fillCircle(nx, ny, Math.max(0.5, radius));
+      if (entry.isBrass && radius > 0.6) {
+        const triHeight = Math.max(4, radius * 1.15);
+        const halfBase = triHeight * 0.5;
+        graphicsNodes.fillStyle(BRASS_PIPE_COLOR, alpha);
+        graphicsNodes.fillTriangle(nx, ny - triHeight / 2, nx - halfBase, ny + triHeight / 2, nx + halfBase, ny + triHeight / 2);
+      }
+      const ringAlpha = Math.max(0, 0.35 - t * 0.35);
+      if (ringAlpha > 0.01) {
+        graphicsNodes.lineStyle(2, 0xffffff, ringAlpha);
+        graphicsNodes.strokeCircle(nx, ny, radius + 4);
+      }
+    });
   }
 
   function computeTransform(viewW, viewH) {
@@ -7540,6 +7684,21 @@ function fallbackRemoveEdgesForNode(nodeId) {
       warpBoundsWorld = null;
       warpBoundsScreen = null;
     }
+  }
+
+  function drawFallenKingMarkers() {
+    if (fallenKingMarkers.size === 0 || !view) return;
+    const baseScale = Math.min(view.scaleX, view.scaleY);
+    fallenKingMarkers.forEach((marker, nodeId) => {
+      if (!marker) return;
+      const [nx, ny] = worldToScreen(marker.x, marker.y);
+      const crownRadius = computeStandardKingCrownRadius(baseScale);
+      drawKingCrown(nx, ny, crownRadius, ownerToColor(marker.ownerId), {
+        crownHealth: 0,
+        crownMax: 0,
+        nodeId,
+      });
+    });
   }
 
   function drawHiddenStartOverlay() {
@@ -10207,6 +10366,7 @@ function fillPipeShape(shape, color, alpha) {
 }
 
 function strokeWarpOuterTriangle(cx, cy, baseW, height, angle, alpha = 0.95) {
+  if (!ENABLE_WARP_PIPE_OUTLINE) return;
   if (!graphicsEdges) return;
   if (!Number.isFinite(baseW) || !Number.isFinite(height)) return;
   const expandedPoints = computeTrianglePoints(

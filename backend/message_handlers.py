@@ -217,6 +217,7 @@ class MessageRouter:
             "winCondition": "king",
             "kingCrownHealth": KING_CROWN_MAX_HEALTH,
             "resources": "standard",
+            "lonelyNode": "sinks",
         }
         if not isinstance(payload, dict):
             settings["pipeStart"] = settings["brassStart"]
@@ -370,6 +371,12 @@ class MessageRouter:
             else:
                 settings["resources"] = "standard"
 
+        lonely_value = payload.get("lonelyNode", settings["lonelyNode"])
+        if isinstance(lonely_value, str) and lonely_value.strip().lower() == "sinks":
+            settings["lonelyNode"] = "sinks"
+        else:
+            settings["lonelyNode"] = "nothing"
+
         settings["pipeStart"] = settings["brassStart"]
 
         return settings
@@ -397,6 +404,35 @@ class MessageRouter:
             return "basic"
 
         return fallback_normalized
+
+    def _build_lonely_sink_payload(self, sink_data: Any) -> Optional[Dict[str, Any]]:
+        if not isinstance(sink_data, dict):
+            return None
+        node_snapshot = sink_data.get("node")
+        node_id = sink_data.get("nodeId")
+        if node_id is None and isinstance(node_snapshot, dict):
+            node_id = node_snapshot.get("id")
+        try:
+            node_int = int(node_id)
+        except (TypeError, ValueError):
+            return None
+        payload = {
+            "type": "nodeDestroyed",
+            "nodeId": node_int,
+            "playerId": sink_data.get("playerId"),
+            "removedEdges": sink_data.get("removedEdges", []),
+            "reason": "lonely",
+            "sinking": True,
+            "cost": 0,
+        }
+        if isinstance(node_snapshot, dict):
+            payload["nodeSnapshot"] = node_snapshot
+        if sink_data.get("kingGraveOwnerId") is not None:
+            try:
+                payload["kingGraveOwnerId"] = int(sink_data.get("kingGraveOwnerId"))
+            except (TypeError, ValueError):
+                pass
+        return payload
 
     async def _start_friend_game(
         self,
@@ -754,6 +790,15 @@ class MessageRouter:
                     message_to_send["cost"] = actual_cost
                 
                 await self._send_safe(client_websocket, json.dumps(message_to_send))
+
+        lonely_events = []
+        if engine.state and hasattr(engine.state, "pop_pending_lonely_sinks"):
+            lonely_events = engine.state.pop_pending_lonely_sinks()
+        if lonely_events:
+            for sink_event in lonely_events:
+                payload = self._build_lonely_sink_payload(sink_event)
+                if payload:
+                    await self._broadcast_to_game(game_info, payload)
 
         event_payload = {
             "fromNodeId": int(from_node_id),
