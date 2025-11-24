@@ -7292,13 +7292,10 @@ function fallbackRemoveEdgesForNode(nodeId) {
           const pendingGold = Math.max(0, Number(n.pendingGold) || 0);
           const progress = Math.min(1, pendingGold / OVERFLOW_PENDING_GOLD_THRESHOLD);
           if (progress > 0) {
-            const ringRadius = r + 2;
-            const startAngle = -Math.PI / 2;
-            const endAngle = startAngle + progress * Math.PI * 2;
-          graphicsNodes.lineStyle(4, 0xffd700, 1);
-            graphicsNodes.beginPath();
-            graphicsNodes.arc(nx, ny, ringRadius, startAngle, endAngle, false);
-            graphicsNodes.strokePath();
+            const maxRingRadius = Math.max(1, r - 1);
+            const ringRadius = Math.max(0.5, maxRingRadius * progress);
+            graphicsNodes.lineStyle(3, 0xffd700, 1);
+            graphicsNodes.strokeCircle(nx, ny, ringRadius);
           }
         } else if (!overflowMode) {
           graphicsNodes.lineStyle(4, 0x000000, 1);
