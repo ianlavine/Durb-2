@@ -3428,7 +3428,7 @@ function clearBridgeSelection() {
 
     const openModePanel = () => {
       if (!modeOptionsPanel) return;
-      modeOptionsPanel.style.display = 'flex';
+      modeOptionsPanel.style.display = 'grid';
       modeOptionsPanel.setAttribute('aria-hidden', 'false');
       if (modeOptionsButton) modeOptionsButton.setAttribute('aria-expanded', 'true');
       modePanelOpen = true;
