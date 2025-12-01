@@ -91,7 +91,7 @@
   let brassActivationDenied = false;
   let bridgePreviewWillBeBrass = false; // dynamic flag for previewing brass outcome
   let bridgePreviewWillBreakPipes = false;
-  let xbPreviewBlockReason = null; // 'brass' | 'inactive' | null
+  let xbPreviewBlockReason = null; // 'brass' | null
   let mouseWorldX = 0; // current mouse position in world coordinates
   let mouseWorldY = 0;
   let bridgeCostDisplay = null; // current bridge cost display text object
@@ -328,7 +328,7 @@
       }
     : {
         screen: 'warp',
-        brass: 'none',
+        brass: 'flowing',
         brassStart: 'owned',
         breakMode: 'any',
         bridgeCost: 1.0,
@@ -354,7 +354,7 @@
   let selectedMode = INITIAL_MODE;
   let gameMode = INITIAL_MODE;
   let selectedSettings = { ...DEFAULT_MODE_SETTINGS };
-  currentBreakMode = normalizeBreakMode(selectedSettings.breakMode);
+  currentBreakMode = getEffectiveBreakMode(selectedSettings);
   let modeOptionsButton = null;
   let modeOptionsPanel = null;
   let modeSelectorContainer = null;
@@ -617,6 +617,7 @@
     }
     const normalized = value.trim().toLowerCase();
     if (normalized === 'none') return 'none';
+    if (normalized === 'flowing') return 'flowing';
     if (normalized === 'gem') return 'gem';
     if (normalized.startsWith('right')) return 'right-click';
     return 'cross';
@@ -627,6 +628,17 @@
     const normalized = value.trim().toLowerCase();
     if (normalized === 'any' || normalized === 'flowing' || normalized === 'double') return normalized;
     return 'brass';
+  }
+
+  function isFlowingBrassModeSelected(targetSettings = selectedSettings) {
+    if (!targetSettings || typeof targetSettings !== 'object') return false;
+    return normalizeBrassSetting(targetSettings.brass) === 'flowing';
+  }
+
+  function getEffectiveBreakMode(targetSettings = selectedSettings) {
+    if (!targetSettings || typeof targetSettings !== 'object') return 'brass';
+    if (isFlowingBrassModeSelected(targetSettings)) return 'flowing';
+    return normalizeBreakMode(targetSettings.breakMode);
   }
 
   function areBrassPipesDisabled() {
@@ -683,6 +695,12 @@
 
   function isDoubleBreakModeActive() {
     return currentBreakMode === 'double';
+  }
+
+  function edgeBehavesAsBrass(edge) {
+    if (!edge) return false;
+    if (edge.pipeType === 'gold') return true;
+    return isFlowingBreakModeActive() && !edge.flowing;
   }
 
   function getMyGemCount(gemKey = 'brass') {
@@ -1108,12 +1126,14 @@
     let brassLabel = 'Cross';
     if (brassValue === 'gem') {
       brassLabel = 'Gem';
+    } else if (brassValue === 'flowing') {
+      brassLabel = 'Flowing';
     } else if (brassValue === 'right-click') {
       brassLabel = 'Right-Click';
     } else if (brassValue === 'none') {
       brassLabel = 'None';
     }
-    const normalizedBreak = normalizeBreakMode(settings.breakMode);
+    const normalizedBreak = getEffectiveBreakMode(settings);
     let breakLabel = 'Brass';
     if (normalizedBreak === 'any') {
       breakLabel = 'Any';
@@ -1374,11 +1394,16 @@
   }
 
   function buildModeSettingsPayload() {
+    const normalizedBrass = normalizeBrassSetting(selectedSettings.brass);
+    const payloadBrass = normalizedBrass === 'flowing' ? 'cross' : normalizedBrass;
+    const payloadBreakMode = normalizedBrass === 'flowing'
+      ? 'flowing'
+      : normalizeBreakMode(selectedSettings.breakMode);
     return {
       screen: selectedSettings.screen,
-      brass: normalizeBrassSetting(selectedSettings.brass),
+      brass: payloadBrass,
       brassStart: selectedSettings.brassStart,
-      breakMode: normalizeBreakMode(selectedSettings.breakMode),
+      breakMode: payloadBreakMode,
       bridgeCost: Number(coerceBridgeCost(selectedSettings.bridgeCost).toFixed(1)),
       gameStart: selectedSettings.gameStart,
       startingNodeJuice: coerceStartingNodeJuice(selectedSettings.startingNodeJuice),
@@ -8470,10 +8495,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
           const pipeType = determinePipeTypeForBridge(useBrassPipe);
           const applyBrassCost = pipeType === 'gold' && brassPipesDoubleCost();
           if (modeIsXb && xbPreviewBlockReason) {
-            const message = xbPreviewBlockReason === 'inactive'
-              ? 'Cannot cross inactive pipe'
-              : 'Cannot cross brass pipe';
-            showErrorMessage(message);
+            showErrorMessage('Cannot cross brass pipe');
             return true;
           }
           const doubleBreakModeActive = isDoubleBreakModeActive();
@@ -10150,7 +10172,6 @@ function updateBrassPreviewIntersections() {
   const modeIsXb = isXbModeActive();
   const modeIsCrossLike = isCrossLikeModeActive();
   const breakModeAllowsNormalBreaks = doesBreakModeAllowNormalBreaks();
-  const breakModeRequiresFlowingTargets = isFlowingBreakModeActive();
 
   const setDefaultPreviewState = () => {
     bridgePreviewWillBeBrass = gemMode ? bridgeIsBrass : (bridgeIsBrass && modeIsCrossLike);
@@ -10204,7 +10225,6 @@ function updateBrassPreviewIntersections() {
 
   let willCross = false;
   let blockedByBrass = false;
-  let blockedByInactive = false;
 
   edges.forEach((edge, edgeId) => {
     if (!edge) return;
@@ -10214,8 +10234,6 @@ function updateBrassPreviewIntersections() {
 
     const existingSegments = getEdgeWarpSegments(edge);
     if (!existingSegments.length) return;
-    const edgeFlowing = Boolean(edge.flowing);
-
     for (const candidate of candidateSegments) {
       for (const existing of existingSegments) {
         if (![candidate, existing].every(Boolean)) continue;
@@ -10223,10 +10241,8 @@ function updateBrassPreviewIntersections() {
           .every((value) => Number.isFinite(value)) &&
           segmentsIntersect(candidate.sx, candidate.sy, candidate.ex, candidate.ey, existing.sx, existing.sy, existing.ex, existing.ey)
         ) {
-          if (edge.pipeType === 'gold') {
+          if (edgeBehavesAsBrass(edge)) {
             blockedByBrass = true;
-          } else if (breakModeRequiresFlowingTargets && !edgeFlowing) {
-            blockedByInactive = true;
           } else {
             brassPreviewIntersections.add(edgeId);
             willCross = true;
@@ -10244,8 +10260,6 @@ function updateBrassPreviewIntersections() {
     }
     if (blockedByBrass) {
       xbPreviewBlockReason = 'brass';
-    } else if (blockedByInactive) {
-      xbPreviewBlockReason = 'inactive';
     }
   } else if (gemMode || modeIsCrossLike) {
     bridgePreviewWillBreakPipes = willCross && (bridgeIsBrass || breakModeAllowsNormalBreaks);
@@ -10566,7 +10580,8 @@ function drawRemovalExplosion(edge, removal, fromNode) {
     const fadeStartTime = removal.startTime + (Number(removal.driftMaxDuration) || 0) + (Number(removal.restDuration) || 0);
     const fadeEndTime = fadeStartTime + (Number(removal.fadeDuration) || 0);
     const pipeType = edge?.pipeType || 'normal';
-    const outlineColor = pipeType === 'gold' ? BRASS_PIPE_OUTLINE_COLOR : 0x000000;
+    const behavesLikeBrass = edgeBehavesAsBrass(edge);
+    const outlineColor = behavesLikeBrass ? BRASS_PIPE_OUTLINE_COLOR : 0x000000;
     const showWarpOutline = edgeUsesWarp(edge);
     const driftAlphaStart = Number.isFinite(removal.driftAlphaStart) ? removal.driftAlphaStart : 0.6;
     const driftAlphaEnd = Number.isFinite(removal.driftAlphaEnd) ? removal.driftAlphaEnd : 0.95;
@@ -10610,7 +10625,7 @@ function drawRemovalExplosion(edge, removal, fromNode) {
       const [screenX, screenY] = worldToScreen(currentX, currentY);
       const triWidth = Number(particle.triWidth) || PIPE_TRIANGLE_WIDTH;
       const triHeight = Number(particle.triHeight) || PIPE_TRIANGLE_HEIGHT;
-      drawExplosionTriangle(screenX, screenY, triWidth, triHeight, angle, color, alpha, outlineColor, pipeType, showWarpOutline);
+      drawExplosionTriangle(screenX, screenY, triWidth, triHeight, angle, color, alpha, outlineColor, pipeType, showWarpOutline, behavesLikeBrass);
     }
 
     if (fadeEndTime > fadeStartTime && now >= fadeEndTime) {
@@ -10620,7 +10635,7 @@ function drawRemovalExplosion(edge, removal, fromNode) {
 
 function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, isHovered, triangleIndex, totalTriangles, removalOutline = false, scaleOverride = 1) {
     const pipeType = e?.pipeType || 'normal';
-    const isBrass = pipeType === 'gold';
+    const isBrass = edgeBehavesAsBrass(e);
     const inactiveColor = isBrass ? BRASS_PIPE_DIM_COLOR : 0x999999;
     const isRemovalOutline = !!removalOutline;
     const color = (overrideColor != null) ? overrideColor : edgeColor(e, fromNode);
@@ -10728,9 +10743,9 @@ function drawTriangle(cx, cy, baseW, height, angle, e, fromNode, overrideColor, 
     });
   }
 
-function drawExplosionTriangle(cx, cy, baseW, height, angle, color, alpha, outlineColor, pipeType, showWarpOutline = false) {
+function drawExplosionTriangle(cx, cy, baseW, height, angle, color, alpha, outlineColor, pipeType, showWarpOutline = false, brassOverride = false) {
     const [p1, p2, p3] = computeTrianglePoints(cx, cy, baseW, height, angle);
-    const isBrass = pipeType === 'gold';
+    const isBrass = brassOverride || pipeType === 'gold';
 
     if (isBrass) {
       const [bp1, bp2, bp3] = computeTrianglePoints(

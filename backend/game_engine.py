@@ -1567,11 +1567,10 @@ class GameEngine:
                 blocking_between: List[int] = []
                 for edge_id in existing_between:
                     existing_edge = self.state.edges.get(edge_id)
-                    existing_type = getattr(existing_edge, "pipe_type", "normal") if existing_edge else "normal"
-                    if existing_type != "gold":
-                        removable_between.append(edge_id)
-                    else:
+                    if self._edge_behaves_like_brass(existing_edge):
                         blocking_between.append(edge_id)
+                    else:
+                        removable_between.append(edge_id)
 
                 if blocking_between:
                     raise GameValidationError("Cannot replace existing brass pipe")
@@ -1582,7 +1581,6 @@ class GameEngine:
 
             pipe_break_setting = str(getattr(self.state, "pipe_break_mode", "brass") or "brass").strip().lower()
             allow_pipe_breaks_without_brass = pipe_break_setting in {"any", "flowing", "double"}
-            flowing_only_breaks = pipe_break_setting == "flowing"
             double_break_requires_owned_target = pipe_break_setting == "double"
 
             # Check for intersections (cross mode converts them into removals)
@@ -1590,23 +1588,16 @@ class GameEngine:
             if intersecting_edges:
                 if is_warp_variant_mode:
                     blocked_edges: List[int] = []
-                    inactive_blocked_edges: List[int] = []
                     for intersect_id in intersecting_edges:
                         existing_edge = self.state.edges.get(intersect_id) if self.state else None
-                        existing_type = getattr(existing_edge, "pipe_type", "normal") if existing_edge else "normal"
-                        existing_flowing = bool(getattr(existing_edge, "flowing", False)) if existing_edge else False
-                        if existing_type == "gold":
+                        if self._edge_behaves_like_brass(existing_edge):
                             blocked_edges.append(intersect_id)
-                        elif flowing_only_breaks and not existing_flowing:
-                            inactive_blocked_edges.append(intersect_id)
                         else:
                             distance = self._distance_to_first_intersection(candidate_segments, existing_edge) or 0.0
                             delayed_cross_removals.append((intersect_id, max(0.0, distance)))
 
                     if blocked_edges:
                         raise GameValidationError("Cannot cross brass pipe")
-                    if inactive_blocked_edges:
-                        raise GameValidationError("Cannot cross inactive pipe")
 
                     can_current_pipe_break = normalized_pipe_type == "gold" or allow_pipe_breaks_without_brass
                     if delayed_cross_removals:
@@ -1620,28 +1611,24 @@ class GameEngine:
                         if not is_cross_like_mode and not can_current_pipe_break:
                             raise GameValidationError("Bridge would intersect existing edge")
 
-                        blocking_edges: List[int] = []
-                        inactive_blocked_edges: List[int] = []
+                        brass_blocking_edges: List[int] = []
+                        type_blocking_edges: List[int] = []
                         for intersect_id in intersecting_edges:
                             existing_edge = self.state.edges.get(intersect_id) if self.state else None
-                            existing_type = getattr(existing_edge, "pipe_type", "normal") if existing_edge else "normal"
-                            existing_flowing = bool(getattr(existing_edge, "flowing", False)) if existing_edge else False
-                            if existing_type == "gold":
-                                blocking_edges.append(intersect_id)
-                                continue
-                            if flowing_only_breaks and not existing_flowing:
-                                inactive_blocked_edges.append(intersect_id)
+                            behaves_like_brass = self._edge_behaves_like_brass(existing_edge)
+                            if behaves_like_brass:
+                                brass_blocking_edges.append(intersect_id)
                                 continue
                             if can_current_pipe_break:
                                 distance = self._distance_to_first_intersection(candidate_segments, existing_edge) or 0.0
                                 delayed_cross_removals.append((intersect_id, max(0.0, distance)))
                             else:
-                                blocking_edges.append(intersect_id)
+                                type_blocking_edges.append(intersect_id)
 
-                        if blocking_edges:
+                        if brass_blocking_edges:
                             raise GameValidationError("Cannot cross golden pipe")
-                        if inactive_blocked_edges:
-                            raise GameValidationError("Cannot cross inactive pipe")
+                        if type_blocking_edges:
+                            raise GameValidationError("Only golden pipes can cross others")
 
                         if delayed_cross_removals and not can_current_pipe_break:
                             # Should not happen because blocking_edges would have triggered, but guard anyway
@@ -1653,16 +1640,11 @@ class GameEngine:
 
                     brass_blocking_edges: List[int] = []
                     type_blocking_edges: List[int] = []
-                    inactive_blocking_edges: List[int] = []
                     for intersect_id in intersecting_edges:
                         existing_edge = self.state.edges.get(intersect_id) if self.state else None
-                        existing_type = getattr(existing_edge, "pipe_type", "normal") if existing_edge else "normal"
-                        existing_flowing = bool(getattr(existing_edge, "flowing", False)) if existing_edge else False
-                        if existing_type == "gold":
+                        behaves_like_brass = self._edge_behaves_like_brass(existing_edge)
+                        if behaves_like_brass:
                             brass_blocking_edges.append(intersect_id)
-                            continue
-                        if flowing_only_breaks and not existing_flowing:
-                            inactive_blocking_edges.append(intersect_id)
                             continue
                         if can_current_pipe_break:
                             distance = self._distance_to_first_intersection(candidate_segments, existing_edge) or 0.0
@@ -1672,8 +1654,6 @@ class GameEngine:
 
                     if brass_blocking_edges:
                         raise GameValidationError("Cannot cross golden pipe")
-                    if inactive_blocking_edges:
-                        raise GameValidationError("Cannot cross inactive pipe")
                     if type_blocking_edges:
                         raise GameValidationError("Only golden pipes can cross others")
 
@@ -1909,6 +1889,19 @@ class GameEngine:
                 (edge.source_node_id == node_id2 and edge.target_node_id == node_id1)):
                 return True
         return False
+
+    def _edge_behaves_like_brass(self, edge: Optional[Edge]) -> bool:
+        """Determine whether an edge should behave as brass for break/cross logic."""
+        if edge is None:
+            return False
+        if getattr(edge, "pipe_type", "normal") == "gold":
+            return True
+        if not self.state:
+            return False
+        pipe_break_mode = str(getattr(self.state, "pipe_break_mode", "") or "").strip().lower()
+        if pipe_break_mode != "flowing":
+            return False
+        return not bool(getattr(edge, "flowing", False))
     
     def _find_intersecting_edges(
         self,
