@@ -51,8 +51,8 @@ INTAKE_TRANSFER_RATIO: float = 0.7
 RESERVE_TRANSFER_RATIO: float = 0.004
 
 # Overflow tuning
-OVERFLOW_JUICE_TO_GOLD_RATIO: float = 30.0  # 30 juice -> 1 pending gold (tunable)
-OVERFLOW_PENDING_GOLD_PAYOUT: float = 10.0   # payout after 10 pending gold -> $10
+OVERFLOW_JUICE_TO_GOLD_RATIO: float = 10.0  # 10 juice -> 1 pending gold (tunable)
+OVERFLOW_PENDING_GOLD_PAYOUT: float = 2.0   # payout after 2 pending gold -> $2
 
 
 # Economy tuning
