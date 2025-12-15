@@ -188,9 +188,13 @@
   const kingCrownFlights = [];
   const kingCrownFlightDestinations = new Set();
 
-  const KING_CROWN_TRAVEL_PIXELS_PER_SECOND = 620;
-  const KING_CROWN_MIN_TRAVEL_DURATION = 0.35;
-  const KING_CROWN_MAX_TRAVEL_DURATION = 1.5;
+  const KING_CROWN_TICKS_PER_UNIT_DISTANCE = 0.6; // mirrors backend pipe build speed
+  const KING_CROWN_MIN_TRAVEL_TICKS = 2;
+  const KING_CROWN_MAX_TRAVEL_TICKS = 18;
+  const KING_CROWN_SPIN_TICKS_RATIO = 0.35;
+  const KING_CROWN_SPIN_TICKS_MIN = 2;
+  const KING_CROWN_SPIN_TICKS_MAX = 5;
+  const KING_CROWN_DEFAULT_SECONDS_PER_TICK = 0.2;
 
   const KING_STANDARD_NODE_SIZE = 80;
   const KING_STANDARD_RADIUS_BASE = 0.15 * Math.pow(KING_STANDARD_NODE_SIZE, 0.6);
@@ -231,6 +235,14 @@
     const dg = Math.round(g * factor);
     const db = Math.round(b * factor);
     return (dr << 16) | (dg << 8) | db;
+  }
+
+  function normalizeAngleRadians(angle) {
+    if (!Number.isFinite(angle)) return 0;
+    let a = angle;
+    while (a > Math.PI) a -= Math.PI * 2;
+    while (a < -Math.PI) a += Math.PI * 2;
+    return a;
   }
   
   // UI background bars
@@ -4362,6 +4374,14 @@ function clearBridgeSelection() {
     return 1 - Math.pow(1 - t, 3);
   }
 
+  function easeInOutCubic(t) {
+    const clamped = Math.max(0, Math.min(1, t));
+    if (clamped < 0.5) {
+      return 4 * clamped * clamped * clamped;
+    }
+    return 1 - Math.pow(-2 * clamped + 2, 3) / 2;
+  }
+
   function updateNodeAnimations() {
     let needsRedraw = false;
     nodes.forEach((node) => {
@@ -4411,10 +4431,10 @@ function clearBridgeSelection() {
         kingCrownFlights.splice(i, 1);
         continue;
       }
-      const duration = Math.max(KING_CROWN_MIN_TRAVEL_DURATION, Number(flight.duration) || 0);
+      const timing = resolveKingCrownFlightTiming(flight);
       const startTime = Number(flight.startTime) || 0;
-      const elapsed = animationTime - startTime;
-      if (!Number.isFinite(elapsed) || elapsed >= duration) {
+      const elapsedTicks = timing.tickSeconds > 0 ? (animationTime - startTime) / timing.tickSeconds : Infinity;
+      if (!Number.isFinite(elapsedTicks) || elapsedTicks >= timing.totalTicks) {
         if (Number.isFinite(flight.toNodeId)) {
           kingCrownFlightDestinations.delete(flight.toNodeId);
         }
@@ -6552,22 +6572,71 @@ function fallbackRemoveEdgesForNode(nodeId) {
     kingCrownFlightDestinations.delete(nodeId);
   }
 
-  function estimateKingCrownFlightDuration(fromX, fromY, toX, toY) {
-    const safeSpeed = Math.max(1e-3, Number(KING_CROWN_TRAVEL_PIXELS_PER_SECOND) || 0);
+  function computeKingCrownFlightTiming(fromX, fromY, toX, toY) {
+    let worldDistance = Math.hypot(toX - fromX, toY - fromY);
+    if ((!Number.isFinite(worldDistance) || worldDistance <= 0) && view) {
+      const [screenStartX, screenStartY] = worldToScreen(fromX, fromY);
+      const [screenEndX, screenEndY] = worldToScreen(toX, toY);
+      const screenDistance = Math.hypot(screenEndX - screenStartX, screenEndY - screenStartY);
+      if (Number.isFinite(screenDistance) && screenDistance > 0) {
+        const scale = Math.max(1e-3, Math.min(view.scaleX || 0, view.scaleY || 0)) || 1;
+        worldDistance = screenDistance / scale;
+      }
+    }
+    if (!Number.isFinite(worldDistance) || worldDistance <= 0) {
+      worldDistance = 1;
+    }
+
+    const ticksPerUnit = Math.max(1e-4, Number(KING_CROWN_TICKS_PER_UNIT_DISTANCE) || 0.01);
+    let travelTicks = Math.round(worldDistance * ticksPerUnit);
+    travelTicks = Math.max(
+      KING_CROWN_MIN_TRAVEL_TICKS,
+      Math.min(
+        KING_CROWN_MAX_TRAVEL_TICKS,
+        Number.isFinite(travelTicks) ? travelTicks : KING_CROWN_MIN_TRAVEL_TICKS
+      )
+    );
+
+    const spinBase = Math.round(travelTicks * KING_CROWN_SPIN_TICKS_RATIO);
+    const spinTicks = Math.max(
+      KING_CROWN_SPIN_TICKS_MIN,
+      Math.min(
+        KING_CROWN_SPIN_TICKS_MAX,
+        Number.isFinite(spinBase) ? spinBase : KING_CROWN_SPIN_TICKS_MIN
+      )
+    );
+    const preSpinTicks = spinTicks;
+    const postSpinTicks = spinTicks;
+    const totalTicks = preSpinTicks + travelTicks + postSpinTicks;
+
+    const tickSeconds = Math.max(
+      1e-3,
+      Number.isFinite(tickIntervalSec) && tickIntervalSec > 0 ? tickIntervalSec : KING_CROWN_DEFAULT_SECONDS_PER_TICK
+    );
+
+    return {
+      tickSeconds,
+      travelTicks,
+      preSpinTicks,
+      postSpinTicks,
+      totalTicks,
+    };
+  }
+
+  function computeKingCrownRotation(fromX, fromY, toX, toY) {
     const [startScreenX, startScreenY] = worldToScreen(fromX, fromY);
     const [endScreenX, endScreenY] = worldToScreen(toX, toY);
-    let distance = Math.hypot(endScreenX - startScreenX, endScreenY - startScreenY);
-    if (!Number.isFinite(distance) || distance <= 0) {
-      distance = Math.hypot(toX - fromX, toY - fromY);
+    let dx = endScreenX - startScreenX;
+    let dy = endScreenY - startScreenY;
+    if (!Number.isFinite(dx) || !Number.isFinite(dy) || (Math.abs(dx) < 1e-4 && Math.abs(dy) < 1e-4)) {
+      dx = toX - fromX;
+      dy = toY - fromY;
     }
-    if (!Number.isFinite(distance) || distance <= 0 || !Number.isFinite(safeSpeed) || safeSpeed <= 0) {
-      return KING_CROWN_MIN_TRAVEL_DURATION;
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
+      return 0;
     }
-    const duration = distance / safeSpeed;
-    return Math.max(
-      KING_CROWN_MIN_TRAVEL_DURATION,
-      Math.min(KING_CROWN_MAX_TRAVEL_DURATION, duration)
-    );
+    const heading = Math.atan2(dy, dx);
+    return normalizeAngleRadians(heading + Math.PI / 2);
   }
 
   function beginKingCrownFlight(options = {}) {
@@ -6597,7 +6666,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
     if (Math.abs(dx) < 1e-3 && Math.abs(dy) < 1e-3) {
       return false;
     }
-    const duration = estimateKingCrownFlightDuration(startX, startY, endX, endY);
+    const timing = computeKingCrownFlightTiming(startX, startY, endX, endY);
+    const headingRotation = computeKingCrownRotation(startX, startY, endX, endY);
     if (Number.isFinite(toNodeId)) {
       removeKingCrownFlightsForNode(toNodeId);
     }
@@ -6610,7 +6680,14 @@ function fallbackRemoveEdgesForNode(nodeId) {
       endX,
       endY,
       startTime: animationTime,
-      duration,
+      tickSeconds: Number.isFinite(timing?.tickSeconds) ? timing.tickSeconds : KING_CROWN_DEFAULT_SECONDS_PER_TICK,
+      travelTicks: Number.isFinite(timing?.travelTicks) ? timing.travelTicks : KING_CROWN_MIN_TRAVEL_TICKS,
+      preSpinTicks: Number.isFinite(timing?.preSpinTicks) ? timing.preSpinTicks : 0,
+      postSpinTicks: Number.isFinite(timing?.postSpinTicks) ? timing.postSpinTicks : 0,
+      totalTicks: Number.isFinite(timing?.totalTicks)
+        ? timing.totalTicks
+        : (Number.isFinite(timing?.travelTicks) ? timing.travelTicks : KING_CROWN_MIN_TRAVEL_TICKS),
+      rotationTarget: headingRotation,
       crownHealth,
       crownMax,
     });
@@ -6619,6 +6696,38 @@ function fallbackRemoveEdgesForNode(nodeId) {
       destroyCrownHealthDisplay(toNodeId);
     }
     return true;
+  }
+
+  function resolveKingCrownFlightTiming(flight) {
+    if (!flight) {
+      return {
+        tickSeconds: Number.isFinite(tickIntervalSec) && tickIntervalSec > 0 ? tickIntervalSec : KING_CROWN_DEFAULT_SECONDS_PER_TICK,
+        travelTicks: KING_CROWN_MIN_TRAVEL_TICKS,
+        preSpinTicks: 0,
+        postSpinTicks: 0,
+        totalTicks: KING_CROWN_MIN_TRAVEL_TICKS,
+      };
+    }
+    const tickSeconds = Math.max(
+      1e-3,
+      Number.isFinite(flight.tickSeconds) && flight.tickSeconds > 0
+        ? flight.tickSeconds
+        : (Number.isFinite(tickIntervalSec) && tickIntervalSec > 0 ? tickIntervalSec : KING_CROWN_DEFAULT_SECONDS_PER_TICK)
+    );
+    const travelTicks = Math.max(
+      KING_CROWN_MIN_TRAVEL_TICKS,
+      Number.isFinite(flight.travelTicks) ? flight.travelTicks : KING_CROWN_MIN_TRAVEL_TICKS
+    );
+    const preSpinTicks = Math.max(0, Number.isFinite(flight.preSpinTicks) ? flight.preSpinTicks : 0);
+    const postSpinTicks = Math.max(0, Number.isFinite(flight.postSpinTicks) ? flight.postSpinTicks : 0);
+    let totalTicks = Number.isFinite(flight.totalTicks) ? flight.totalTicks : 0;
+    if (totalTicks <= 0) {
+      totalTicks = preSpinTicks + travelTicks + postSpinTicks;
+    }
+    if (totalTicks <= 0) {
+      totalTicks = travelTicks;
+    }
+    return { tickSeconds, travelTicks, preSpinTicks, postSpinTicks, totalTicks };
   }
 
   function startKingSelection(nodeId) {
@@ -7121,6 +7230,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
       crownHealth: crownHealthOpt = null,
       crownMax: crownMaxOpt = null,
       nodeId = null,
+      rotationRadians: rotationOverride = 0,
     } = options;
     const layout = computePlacedKingCrownLayout(nx, ny, radius);
     if (!layout) return null;
@@ -7160,7 +7270,18 @@ function fallbackRemoveEdgesForNode(nodeId) {
       }
     }
 
-    const bodyOutline = layout.bodyOutlinePoints || layout.outlinePoints;
+    const rotationRadians = Number.isFinite(rotationOverride) ? rotationOverride : 0;
+    const hasRotation = Math.abs(rotationRadians) > 1e-3;
+    const transformPoint = hasRotation
+      ? (pt) => rotatePointAround(pt, layout.centerX, layout.centerY, rotationRadians)
+      : (pt) => pt;
+    const transformPoints = (points) => {
+      if (!Array.isArray(points)) return points;
+      if (!hasRotation) return points;
+      return points.map(transformPoint);
+    };
+
+    const bodyOutline = transformPoints(layout.bodyOutlinePoints || layout.outlinePoints);
     if (bodyOutline) {
       fillCrownPolygon(bodyOutline, emptyFillColor, emptyFillAlpha);
     }
@@ -7168,13 +7289,20 @@ function fallbackRemoveEdgesForNode(nodeId) {
     if (bodyFillRatio > 0) {
       const fillPoints = buildCrownFillPolygon(layout, Math.min(1, bodyFillRatio));
       if (fillPoints) {
-        fillCrownPolygon(fillPoints, fillColor, liquidFillAlpha);
+        fillCrownPolygon(transformPoints(fillPoints), fillColor, liquidFillAlpha);
       }
     }
 
     if (tipFillRatio > 0 && Array.isArray(layout.spikes)) {
       const clampedTip = Math.min(1, tipFillRatio);
-      layout.spikes.forEach((spike) => {
+      const spikes = hasRotation
+        ? layout.spikes.map((spike) => ({
+          tip: transformPoint(spike.tip),
+          leftBase: transformPoint(spike.leftBase),
+          rightBase: transformPoint(spike.rightBase),
+        }))
+        : layout.spikes;
+      spikes.forEach((spike) => {
         if (!spike || !spike.tip || !spike.leftBase || !spike.rightBase) return;
         const { tip, leftBase, rightBase } = spike;
         if (clampedTip >= 0.999) {
@@ -7210,11 +7338,12 @@ function fallbackRemoveEdgesForNode(nodeId) {
       });
     }
 
-    strokeCrownPolygon(layout.outlinePoints, outlineWidth, strokeColor, outlineAlpha);
+    const outlinePoints = transformPoints(layout.outlinePoints);
+    strokeCrownPolygon(outlinePoints, outlineWidth, strokeColor, outlineAlpha);
 
     if (highlighted && Number.isFinite(overrideHighlightColor)) {
       strokeCrownPolygon(
-        layout.outlinePoints,
+        outlinePoints,
         Math.max(1, outlineWidth - 1),
         overrideHighlightColor,
         0.5
@@ -7291,6 +7420,26 @@ function fallbackRemoveEdgesForNode(nodeId) {
     }
 
     return layout;
+  }
+
+  function rotatePointAround(point, centerX, centerY, radians) {
+    if (!point) return point;
+    const angle = Number.isFinite(radians) ? radians : 0;
+    if (Math.abs(angle) < 1e-4) return { x: point.x, y: point.y };
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    const px = Number(point.x);
+    const py = Number(point.y);
+    if (!Number.isFinite(px) || !Number.isFinite(py)) return { x: point.x, y: point.y };
+    const cx = Number(centerX);
+    const cy = Number(centerY);
+    if (!Number.isFinite(cx) || !Number.isFinite(cy)) return { x: point.x, y: point.y };
+    const relX = px - cx;
+    const relY = py - cy;
+    return {
+      x: cx + relX * cos - relY * sin,
+      y: cy + relX * sin + relY * cos,
+    };
   }
 
   function drawKingMovePreviewCrown(nx, baseBottomY, radius, options = {}) {
@@ -7850,8 +7999,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
     if (!graphicsNodes || kingCrownFlights.length === 0) return;
     const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
     kingCrownFlights.forEach((flight) => {
-      if (!flight) return;
       if (
+        !flight ||
         !Number.isFinite(flight.startX) ||
         !Number.isFinite(flight.startY) ||
         !Number.isFinite(flight.endX) ||
@@ -7859,13 +8008,39 @@ function fallbackRemoveEdgesForNode(nodeId) {
       ) {
         return;
       }
-      const duration = Math.max(KING_CROWN_MIN_TRAVEL_DURATION, Number(flight.duration) || 0);
+      const timing = resolveKingCrownFlightTiming(flight);
       const startTime = Number(flight.startTime) || 0;
-      const elapsed = Math.max(0, animationTime - startTime);
-      const rawT = duration <= 0 ? 1 : Math.min(1, elapsed / duration);
-      const eased = easeOutCubic(rawT);
-      const currentX = flight.startX + (flight.endX - flight.startX) * eased;
-      const currentY = flight.startY + (flight.endY - flight.startY) * eased;
+      const elapsedTicks = timing.tickSeconds > 0
+        ? Math.max(0, (animationTime - startTime) / timing.tickSeconds)
+        : Infinity;
+      const travelStartTick = timing.preSpinTicks;
+      const travelEndTick = timing.preSpinTicks + timing.travelTicks;
+      let currentX = flight.startX;
+      let currentY = flight.startY;
+      let rotationRadians = Number.isFinite(flight.rotationTarget) ? flight.rotationTarget : 0;
+      if (elapsedTicks < travelStartTick) {
+        const spinProgress = Math.max(0, Math.min(1, travelStartTick <= 0 ? 1 : elapsedTicks / travelStartTick));
+        rotationRadians = (Number.isFinite(flight.rotationTarget) ? flight.rotationTarget : 0) * easeInOutCubic(spinProgress);
+      } else if (elapsedTicks < travelEndTick) {
+        const travelProgress = Math.max(
+          0,
+          Math.min(1, timing.travelTicks <= 0 ? 1 : (elapsedTicks - travelStartTick) / timing.travelTicks)
+        );
+        const easedTravel = easeOutCubic(travelProgress);
+        currentX = flight.startX + (flight.endX - flight.startX) * easedTravel;
+        currentY = flight.startY + (flight.endY - flight.startY) * easedTravel;
+        rotationRadians = Number.isFinite(flight.rotationTarget) ? flight.rotationTarget : 0;
+      } else {
+        const postElapsed = elapsedTicks - travelEndTick;
+        const postTicks = timing.postSpinTicks;
+        const spinProgress = Math.max(
+          0,
+          Math.min(1, postTicks <= 0 ? 1 : Math.min(postElapsed / postTicks, 1))
+        );
+        rotationRadians = (Number.isFinite(flight.rotationTarget) ? flight.rotationTarget : 0) * (1 - easeInOutCubic(spinProgress));
+        currentX = flight.endX;
+        currentY = flight.endY;
+      }
       const [screenX, screenY] = worldToScreen(currentX, currentY);
       if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return;
       const crownRadius = computeStandardKingCrownRadius(baseScale);
@@ -7877,6 +8052,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
         crownHealth: flight.crownHealth,
         crownMax: flight.crownMax,
         nodeId: null,
+        rotationRadians,
       });
     });
   }
