@@ -7299,11 +7299,14 @@ function fallbackRemoveEdgesForNode(nodeId) {
     graphicsNodes.strokePath();
   }
 
-  function computePlacedKingCrownLayout(screenX, screenY, crownRadius) {
+  function computePlacedKingCrownLayout(screenX, screenY, crownRadius, actualNodeRadius = null) {
     const radius = Math.max(1, crownRadius);
-    const nodeRadiusEquivalent = Math.max(1, radius / KING_CROWN_TO_NODE_RATIO);
-    const verticalOffset = Math.max(6, nodeRadiusEquivalent * 0.35);
-    const baseBottomY = screenY - nodeRadiusEquivalent - verticalOffset;
+    // Use actual node radius if provided, otherwise fall back to computed equivalent
+    const nodeRadiusEquivalent = actualNodeRadius != null && Number.isFinite(actualNodeRadius) && actualNodeRadius > 0
+      ? actualNodeRadius
+      : Math.max(1, radius / KING_CROWN_TO_NODE_RATIO);
+    // Position crown so its bottom sits right at the top edge of the node
+    const baseBottomY = screenY - nodeRadiusEquivalent;
     const layout = createKingCrownLayout(screenX, baseBottomY, radius);
     layout.nodeRadius = nodeRadiusEquivalent;
     return layout;
@@ -7339,8 +7342,9 @@ function fallbackRemoveEdgesForNode(nodeId) {
       nodeId = null,
       rotationRadians: rotationOverride = 0,
       rotationPivot: rotationPivotOverride = null,
+      nodeRadius: actualNodeRadius = null,
     } = options;
-    const layout = computePlacedKingCrownLayout(nx, ny, radius);
+    const layout = computePlacedKingCrownLayout(nx, ny, radius, actualNodeRadius);
     if (!layout) return null;
 
     const strokeColor = Number.isFinite(ownerColor) ? ownerColor : 0x000000;
@@ -7603,9 +7607,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
       const bounceMagnitude = Math.max(3, crownRadius * KING_OPTION_BOUNCE_SCALE);
       const bounce = Math.sin(animationTime * 2.6 + index * 0.8) * bounceMagnitude;
 
-      const verticalGap = nodeRadius + crownRadius * KING_OPTION_VERTICAL_SCALE + KING_OPTION_VERTICAL_EXTRA;
-      const crownOffset = -(verticalGap) - bounce;
-      const crownAnchorY = screenY + crownOffset;
+      // Position crown so its bottom sits right at the top edge of the node
+      const crownAnchorY = screenY - nodeRadius - bounce;
       const defaultCenterY = crownAnchorY - crownRadius * 0.7;
 
       const isHovered = kingMoveTargetHoveredId === nodeId;
@@ -8125,6 +8128,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
             crownMax: kingOwnerId != null && Number.isFinite(n.kingCrownMax) ? n.kingCrownMax : null,
             nodeId: id,
             rotationPivot: { x: nx, y: ny },
+            nodeRadius: r,
           });
         } else if (crownHealthDisplays.has(id)) {
           destroyCrownHealthDisplay(id);
@@ -8556,10 +8560,13 @@ function fallbackRemoveEdgesForNode(nodeId) {
       if (!marker) return;
       const [nx, ny] = worldToScreen(marker.x, marker.y);
       const crownRadius = computeStandardKingCrownRadius(baseScale);
+      const node = nodes.get(nodeId);
+      const nodeRadius = node ? Math.max(1, calculateNodeRadius(node, baseScale)) : null;
       drawKingCrown(nx, ny, crownRadius, ownerToColor(marker.ownerId), {
         crownHealth: 0,
         crownMax: 0,
         nodeId,
+        nodeRadius,
       });
     });
   }
@@ -9508,7 +9515,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
       if (originNode) {
         const [originScreenX, originScreenY] = worldToScreen(originNode.x, originNode.y);
         const originCrownRadius = computeStandardKingCrownRadius(baseScale);
-        const originLayout = computePlacedKingCrownLayout(originScreenX, originScreenY, originCrownRadius);
+        const originNodeRadius = Math.max(1, calculateNodeRadius(originNode, baseScale));
+        const originLayout = computePlacedKingCrownLayout(originScreenX, originScreenY, originCrownRadius, originNodeRadius);
         const withinBounds = originLayout && isPointWithinRect(pointerScreenX, pointerScreenY, originLayout.bounds);
         const dx = pointerScreenX - (originLayout?.centerX ?? originScreenX);
         const dy = pointerScreenY - (originLayout?.centerY ?? originScreenY);
@@ -9818,7 +9826,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
           const [pointerX, pointerY] = getPointerScreenCoords(ev);
           const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
           const crownRadius = computeStandardKingCrownRadius(baseScale);
-          const layout = computePlacedKingCrownLayout(screenX, screenY, crownRadius);
+          const kingNodeRadius = Math.max(1, calculateNodeRadius(kingNode, baseScale));
+          const layout = computePlacedKingCrownLayout(screenX, screenY, crownRadius, kingNodeRadius);
           const withinBounds = layout && isPointWithinRect(pointerX, pointerY, layout.bounds);
           const dx = pointerX - (layout?.centerX ?? screenX);
           const dy = pointerY - (layout?.centerY ?? screenY);
