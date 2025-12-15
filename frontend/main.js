@@ -7343,20 +7343,35 @@ function fallbackRemoveEdgesForNode(nodeId) {
       rotationRadians: rotationOverride = 0,
       rotationPivot: rotationPivotOverride = null,
       nodeRadius: actualNodeRadius = null,
+      travelMode = false, // When true, reverse colors: yellow border, player color fill
     } = options;
     const layout = computePlacedKingCrownLayout(nx, ny, radius, actualNodeRadius);
     if (!layout) return null;
 
-    const strokeColor = Number.isFinite(ownerColor) ? ownerColor : 0x000000;
+    const playerColor = Number.isFinite(ownerColor) ? ownerColor : 0x000000;
     const primaryColor = KING_CROWN_FILL_COLOR;
-    const highlightColor = Number.isFinite(overrideHighlightColor) ? overrideHighlightColor : primaryColor;
-    const fillColor = highlighted ? highlightColor : primaryColor;
-    const baseHex = `#${primaryColor.toString(16).padStart(6, '0')}`;
-    const emptyFillColor = hexToInt(lightenColor(baseHex, 0.35));
-    const outlineWidth = highlighted ? 3.0 : 2.4;
-    const outlineAlpha = highlighted ? 0.98 : 0.9;
-    const emptyFillAlpha = highlighted ? 0.3 : 0.18;
-    const liquidFillAlpha = highlighted ? 0.96 : 0.85;
+    
+    // In travel mode: yellow border, player color body, yellow spike tips
+    // Normal mode: player color border, yellow fill (based on health)
+    let strokeColor, fillColor, emptyFillColor, spikeFillColor;
+    if (travelMode) {
+      strokeColor = primaryColor; // Yellow border
+      fillColor = playerColor; // Player color for body fill
+      emptyFillColor = playerColor; // Also player color (fully filled body)
+      spikeFillColor = primaryColor; // Yellow spike tips
+    } else {
+      strokeColor = playerColor;
+      const highlightColor = Number.isFinite(overrideHighlightColor) ? overrideHighlightColor : primaryColor;
+      fillColor = highlighted ? highlightColor : primaryColor;
+      const baseHex = `#${primaryColor.toString(16).padStart(6, '0')}`;
+      emptyFillColor = hexToInt(lightenColor(baseHex, 0.35));
+      spikeFillColor = fillColor; // Same as body fill in normal mode
+    }
+    
+    const outlineWidth = (highlighted || travelMode) ? 3.0 : 2.4;
+    const outlineAlpha = (highlighted || travelMode) ? 0.98 : 0.9;
+    const emptyFillAlpha = travelMode ? 0.96 : (highlighted ? 0.3 : 0.18); // Full opacity in travel mode
+    const liquidFillAlpha = (highlighted || travelMode) ? 0.96 : 0.85;
 
     let crownMaxValue = Number.isFinite(crownMaxOpt) ? Math.max(0, crownMaxOpt) : 0;
     let crownHealthValue = Number.isFinite(crownHealthOpt) ? Math.max(0, crownHealthOpt) : NaN;
@@ -7406,8 +7421,11 @@ function fallbackRemoveEdgesForNode(nodeId) {
       }
     }
 
-    if (tipFillRatio > 0 && Array.isArray(layout.spikes)) {
-      const clampedTip = Math.min(1, tipFillRatio);
+    // In travel mode, always fill spikes fully with yellow
+    // In normal mode, fill spikes based on health ratio
+    const shouldFillSpikes = travelMode || (tipFillRatio > 0 && Array.isArray(layout.spikes));
+    if (shouldFillSpikes && Array.isArray(layout.spikes)) {
+      const clampedTip = travelMode ? 1 : Math.min(1, tipFillRatio);
       const spikes = hasRotation
         ? layout.spikes.map((spike) => ({
           tip: transformPoint(spike.tip),
@@ -7425,7 +7443,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
               { x: rightBase.x, y: rightBase.y },
               { x: tip.x, y: tip.y },
             ],
-            fillColor,
+            spikeFillColor,
             liquidFillAlpha
           );
           return;
@@ -7445,7 +7463,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
             rightInterp,
             leftInterp,
           ],
-          fillColor,
+          spikeFillColor,
           liquidFillAlpha
         );
       });
@@ -8141,20 +8159,22 @@ function fallbackRemoveEdgesForNode(nodeId) {
         } else if (kingOwnerId != null || shouldDrawFallenKing) {
           const crownOwnerId = kingOwnerId != null ? kingOwnerId : fallenOwnerId;
           const crownColor = ownerToColor(crownOwnerId);
-          const isSelectedKing = kingOwnerId != null && kingSelectionActive && kingSelectedNodeId === id;
+          // Crown is in "travel mode" (reversed colors) when selected, until destination is chosen
+          const isInTravelMode = kingOwnerId != null && kingSelectionActive && kingSelectedNodeId === id && kingMovePendingDestinationId == null;
           const selectionColor = ownerToSecondaryColor(myPlayerId) || ownerToColor(myPlayerId) || crownColor || 0x000000;
           const kingCrownRadius = computeStandardKingCrownRadius(baseScale);
           if (kingOwnerId != null && kingAttackAlertActive && kingAttackNodeId === id) {
             drawKingDistressWaves(nx, ny, kingCrownRadius, crownColor);
           }
           drawKingCrown(nx, ny, kingCrownRadius, crownColor, {
-            highlighted: isSelectedKing,
+            highlighted: false, // No longer use highlighted, use travelMode instead
             highlightColor: selectionColor,
             crownHealth: kingOwnerId != null && Number.isFinite(n.kingCrownHealth) ? n.kingCrownHealth : 0,
             crownMax: kingOwnerId != null && Number.isFinite(n.kingCrownMax) ? n.kingCrownMax : null,
             nodeId: id,
             rotationPivot: { x: nx, y: ny },
             nodeRadius: r,
+            travelMode: isInTravelMode,
           });
         } else if (crownHealthDisplays.has(id)) {
           destroyCrownHealthDisplay(id);
@@ -8429,15 +8449,21 @@ function fallbackRemoveEdgesForNode(nodeId) {
       }
       const crownRadius = computeStandardKingCrownRadius(baseScale);
       const playerColor = ownerToColor(flight.playerId);
-      const accentColor = ownerToSecondaryColor(flight.playerId) || playerColor;
+      
+      // Crown is in travel mode (reversed colors: yellow border, player fill) until post-spin is complete
+      // Health should only show after the crown has finished its post-spin (settled at destination)
+      const postSpinComplete = elapsedTicks >= travelEndTick + timing.postSpinTicks;
+      const showHealth = postSpinComplete;
+      const usesTravelMode = !postSpinComplete; // Travel mode until fully settled
+      
       drawKingCrown(screenX, screenY, crownRadius, playerColor, {
-        highlighted: flight.playerId === myPlayerId,
-        highlightColor: accentColor,
-        crownHealth: flight.crownHealth,
-        crownMax: flight.crownMax,
+        highlighted: false,
+        crownHealth: showHealth ? flight.crownHealth : null,
+        crownMax: showHealth ? flight.crownMax : null,
         nodeId: null,
         rotationRadians,
         rotationPivot,
+        travelMode: usesTravelMode,
       });
     });
   }
