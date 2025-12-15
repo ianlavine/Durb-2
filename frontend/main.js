@@ -187,6 +187,7 @@
   const kingMoveSuppressedNodes = new Set();
   const kingCrownFlights = [];
   const kingCrownFlightDestinations = new Set();
+  let kingMovePreviewLine = null;
 
   const KING_CROWN_TICKS_PER_UNIT_DISTANCE = 0.6; // mirrors backend pipe build speed
   const KING_CROWN_MIN_TRAVEL_TICKS = 2;
@@ -198,13 +199,18 @@
 
   const KING_STANDARD_NODE_SIZE = 80;
   const KING_STANDARD_RADIUS_BASE = 0.15 * Math.pow(KING_STANDARD_NODE_SIZE, 0.6);
-  const KING_CROWN_TO_NODE_RATIO = 0.6;
+  const KING_CROWN_TO_NODE_RATIO = 0.4;
   const KING_CROWN_MIN_SCREEN_RADIUS = 14;
   const KING_OPTION_RADIUS_MULTIPLIER = 1.12;
   const KING_OPTION_BOUNCE_SCALE = 0.18;
   const KING_OPTION_VERTICAL_SCALE = 0.55;
   const KING_OPTION_VERTICAL_EXTRA = 6;
   const KING_CROWN_FILL_COLOR = 0xffd700;
+  const KING_MOVE_PREVIEW_COLOR = 0xffd85c;
+  const KING_MOVE_PREVIEW_ALPHA = 0.42;
+  const KING_MOVE_PREVIEW_INVALID_COLOR = 0x000000;
+  const KING_MOVE_PREVIEW_INVALID_ALPHA = 0.55;
+  const KING_MOVE_PREVIEW_WIDTH = 10;
   const KING_CROWN_DEFAULT_HEALTH = 300;
   let kingCrownDefaultMax = KING_CROWN_DEFAULT_HEALTH;
   const KING_ATTACK_ALERT_LINGER_SEC = 2.5;
@@ -6550,6 +6556,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     kingMoveTargetRenderInfo.clear();
     kingMoveTargetHoveredId = null;
     kingMovePendingDestinationId = null;
+    kingMovePreviewLine = null;
     if (!skipRedraw) {
       redrawStatic();
     }
@@ -6744,6 +6751,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
     kingMoveTargetRenderInfo.clear();
     kingMoveTargetHoveredId = null;
     kingMovePendingDestinationId = null;
+    kingMovePreviewLine = null;
+    updateKingMovePreviewLine();
     redrawStatic();
 
     ws.send(JSON.stringify({
@@ -6762,6 +6771,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
     kingMovePendingDestinationId = nodeId;
     kingMoveOptionsPending = true;
+    kingMovePreviewLine = null;
     redrawStatic();
 
     ws.send(JSON.stringify({
@@ -6794,6 +6804,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     kingMoveOptionsPending = false;
     kingMovePendingDestinationId = null;
     kingMoveTargetHoveredId = null;
+    updateKingMovePreviewLine();
     redrawStatic();
   }
 
@@ -6801,6 +6812,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     const message = (msg && typeof msg.message === 'string') ? msg.message : 'Unable to move king';
     showErrorMessage(message);
     kingMovePendingDestinationId = null;
+    kingMovePreviewLine = null;
     clearKingSelection();
   }
 
@@ -6884,6 +6896,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     }
 
     kingMovePendingDestinationId = null;
+    kingMovePreviewLine = null;
     kingNodesByPlayer.set(playerId, toNodeId);
     if (playerId === myPlayerId) {
       clearKingSelection({ skipRedraw: true });
@@ -7231,6 +7244,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
       crownMax: crownMaxOpt = null,
       nodeId = null,
       rotationRadians: rotationOverride = 0,
+      rotationPivot: rotationPivotOverride = null,
     } = options;
     const layout = computePlacedKingCrownLayout(nx, ny, radius);
     if (!layout) return null;
@@ -7271,9 +7285,10 @@ function fallbackRemoveEdgesForNode(nodeId) {
     }
 
     const rotationRadians = Number.isFinite(rotationOverride) ? rotationOverride : 0;
+    const rotationPivot = rotationPivotOverride || { x: nx, y: ny };
     const hasRotation = Math.abs(rotationRadians) > 1e-3;
     const transformPoint = hasRotation
-      ? (pt) => rotatePointAround(pt, layout.centerX, layout.centerY, rotationRadians)
+      ? (pt) => rotatePointAround(pt, rotationPivot, rotationRadians)
       : (pt) => pt;
     const transformPoints = (points) => {
       if (!Array.isArray(points)) return points;
@@ -7422,7 +7437,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     return layout;
   }
 
-  function rotatePointAround(point, centerX, centerY, radians) {
+  function rotatePointAround(point, pivot, radians) {
     if (!point) return point;
     const angle = Number.isFinite(radians) ? radians : 0;
     if (Math.abs(angle) < 1e-4) return { x: point.x, y: point.y };
@@ -7431,8 +7446,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
     const px = Number(point.x);
     const py = Number(point.y);
     if (!Number.isFinite(px) || !Number.isFinite(py)) return { x: point.x, y: point.y };
-    const cx = Number(centerX);
-    const cy = Number(centerY);
+    const cx = Number(pivot?.x);
+    const cy = Number(pivot?.y);
     if (!Number.isFinite(cx) || !Number.isFinite(cy)) return { x: point.x, y: point.y };
     const relX = px - cx;
     const relY = py - cy;
@@ -7525,6 +7540,100 @@ function fallbackRemoveEdgesForNode(nodeId) {
         radius: crownRadius,
       });
     });
+  }
+
+  function updateKingMovePreviewLine() {
+    const prev = kingMovePreviewLine;
+    if (!kingSelectionActive || kingMovePendingDestinationId != null) {
+      if (prev) {
+        kingMovePreviewLine = null;
+        return true;
+      }
+      return false;
+    }
+    const selectedNode = kingSelectedNodeId != null ? nodes.get(kingSelectedNodeId) : null;
+    if (!selectedNode) {
+      if (prev) {
+        kingMovePreviewLine = null;
+        return true;
+      }
+      return false;
+    }
+    const wx = mouseWorldX;
+    const wy = mouseWorldY;
+    if (!Number.isFinite(wx) || !Number.isFinite(wy) || !view) {
+      if (prev) {
+        kingMovePreviewLine = null;
+        return true;
+      }
+      return false;
+    }
+    const [pointerScreenX, pointerScreenY] = worldToScreen(wx, wy);
+    if (!Number.isFinite(pointerScreenX) || !Number.isFinite(pointerScreenY)) {
+      if (prev) {
+        kingMovePreviewLine = null;
+        return true;
+      }
+      return false;
+    }
+    const baseScale = Math.max(1e-6, Math.min(view.scaleX || 0, view.scaleY || 0) || 1);
+    const tolerance = 18 / baseScale;
+    const lockedNodeId = pickNearestNode(wx, wy, tolerance);
+    const hasTargets = kingMoveTargets.size > 0;
+    const lockedInvalid = hasTargets && lockedNodeId != null && lockedNodeId !== kingSelectedNodeId && !kingMoveTargets.has(lockedNodeId);
+    const color = lockedInvalid ? KING_MOVE_PREVIEW_INVALID_COLOR : KING_MOVE_PREVIEW_COLOR;
+    const alpha = lockedInvalid ? KING_MOVE_PREVIEW_INVALID_ALPHA : KING_MOVE_PREVIEW_ALPHA;
+    const next = {
+      startX: selectedNode.x,
+      startY: selectedNode.y,
+      endX: wx,
+      endY: wy,
+      color,
+      alpha,
+    };
+    const changed = !prev ||
+      prev.startX !== next.startX ||
+      prev.startY !== next.startY ||
+      prev.endX !== next.endX ||
+      prev.endY !== next.endY ||
+      prev.color !== next.color ||
+      prev.alpha !== next.alpha;
+    if (changed) {
+      kingMovePreviewLine = next;
+      return true;
+    }
+    return false;
+  }
+
+  function drawKingMovePreviewLine() {
+    if (!graphicsNodes || !kingSelectionActive) return;
+    const line = kingMovePreviewLine;
+    if (!line) return;
+    if (!view) return;
+    const selectedNode = kingSelectedNodeId != null ? nodes.get(kingSelectedNodeId) : null;
+    if (!selectedNode) return;
+    const [sx, sy] = worldToScreen(line.startX, line.startY);
+    let [ex, ey] = worldToScreen(line.endX, line.endY);
+    if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(ex) || !Number.isFinite(ey)) return;
+    const dx = ex - sx;
+    const dy = ey - sy;
+    const len = Math.hypot(dx, dy);
+    if (!Number.isFinite(len) || len < 1) return;
+    const baseScale = Math.max(1e-6, Math.min(view.scaleX || 0, view.scaleY || 0) || 1);
+    const startRadius = Math.max(4, calculateNodeRadius(selectedNode, baseScale) + computeStandardKingCrownRadius(baseScale) * 0.35);
+    if (len <= startRadius) return;
+    const ux = dx / len;
+    const uy = dy / len;
+    const clippedSx = sx + ux * startRadius;
+    const clippedSy = sy + uy * startRadius;
+    const shortenEnd = Math.min(24, len * 0.12);
+    const clippedEx = ex - ux * shortenEnd;
+    const clippedEy = ey - uy * shortenEnd;
+    graphicsNodes.lineStyle(KING_MOVE_PREVIEW_WIDTH, line.color ?? KING_MOVE_PREVIEW_COLOR, line.alpha ?? KING_MOVE_PREVIEW_ALPHA);
+    graphicsNodes.beginPath();
+    graphicsNodes.moveTo(clippedSx, clippedSy);
+    graphicsNodes.lineTo(clippedEx, clippedEy);
+    graphicsNodes.strokePath();
   }
 
   function pickKingMoveTargetFromScreen(screenX, screenY) {
@@ -7804,6 +7913,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
             crownHealth: kingOwnerId != null && Number.isFinite(n.kingCrownHealth) ? n.kingCrownHealth : 0,
             crownMax: kingOwnerId != null && Number.isFinite(n.kingCrownMax) ? n.kingCrownMax : null,
             nodeId: id,
+            rotationPivot: { x: nx, y: ny },
           });
         } else if (crownHealthDisplays.has(id)) {
           destroyCrownHealthDisplay(id);
@@ -7906,6 +8016,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     drawKingCrownFlights();
     drawFallenKingMarkers();
 
+    drawKingMovePreviewLine();
     drawKingMoveTargetsOverlay();
 
     // After drawing nodes / previews:
@@ -8010,6 +8121,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
       }
       const timing = resolveKingCrownFlightTiming(flight);
       const startTime = Number(flight.startTime) || 0;
+      const [startScreenX, startScreenY] = worldToScreen(flight.startX, flight.startY);
+      const [endScreenX, endScreenY] = worldToScreen(flight.endX, flight.endY);
       const elapsedTicks = timing.tickSeconds > 0
         ? Math.max(0, (animationTime - startTime) / timing.tickSeconds)
         : Infinity;
@@ -8018,9 +8131,11 @@ function fallbackRemoveEdgesForNode(nodeId) {
       let currentX = flight.startX;
       let currentY = flight.startY;
       let rotationRadians = Number.isFinite(flight.rotationTarget) ? flight.rotationTarget : 0;
+      let rotationPivot = null;
       if (elapsedTicks < travelStartTick) {
         const spinProgress = Math.max(0, Math.min(1, travelStartTick <= 0 ? 1 : elapsedTicks / travelStartTick));
         rotationRadians = (Number.isFinite(flight.rotationTarget) ? flight.rotationTarget : 0) * easeInOutCubic(spinProgress);
+        rotationPivot = { x: startScreenX, y: startScreenY };
       } else if (elapsedTicks < travelEndTick) {
         const travelProgress = Math.max(
           0,
@@ -8030,6 +8145,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
         currentX = flight.startX + (flight.endX - flight.startX) * easedTravel;
         currentY = flight.startY + (flight.endY - flight.startY) * easedTravel;
         rotationRadians = Number.isFinite(flight.rotationTarget) ? flight.rotationTarget : 0;
+        rotationPivot = null;
       } else {
         const postElapsed = elapsedTicks - travelEndTick;
         const postTicks = timing.postSpinTicks;
@@ -8040,9 +8156,19 @@ function fallbackRemoveEdgesForNode(nodeId) {
         rotationRadians = (Number.isFinite(flight.rotationTarget) ? flight.rotationTarget : 0) * (1 - easeInOutCubic(spinProgress));
         currentX = flight.endX;
         currentY = flight.endY;
+        rotationPivot = { x: endScreenX, y: endScreenY };
       }
       const [screenX, screenY] = worldToScreen(currentX, currentY);
       if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return;
+      if (!rotationPivot || !Number.isFinite(rotationPivot.x) || !Number.isFinite(rotationPivot.y)) {
+        if (elapsedTicks < travelStartTick && Number.isFinite(startScreenX) && Number.isFinite(startScreenY)) {
+          rotationPivot = { x: startScreenX, y: startScreenY };
+        } else if (elapsedTicks >= travelEndTick && Number.isFinite(endScreenX) && Number.isFinite(endScreenY)) {
+          rotationPivot = { x: endScreenX, y: endScreenY };
+        } else {
+          rotationPivot = { x: screenX, y: screenY };
+        }
+      }
       const crownRadius = computeStandardKingCrownRadius(baseScale);
       const playerColor = ownerToColor(flight.playerId);
       const accentColor = ownerToSecondaryColor(flight.playerId) || playerColor;
@@ -8053,6 +8179,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
         crownMax: flight.crownMax,
         nodeId: null,
         rotationRadians,
+        rotationPivot,
       });
     });
   }
@@ -9438,6 +9565,11 @@ function fallbackRemoveEdgesForNode(nodeId) {
       }
     } else if (!kingSelectionActive && kingMoveTargetHoveredId !== null) {
       kingMoveTargetHoveredId = null;
+      needsRedraw = true;
+    }
+
+    const previewChanged = updateKingMovePreviewLine();
+    if (previewChanged) {
       needsRedraw = true;
     }
 
