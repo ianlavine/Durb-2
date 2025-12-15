@@ -35,7 +35,13 @@
   const ENABLE_REPLAY_UPLOAD = false; // gate replay upload UI while retaining implementation
   const ENABLE_IDLE_EDGE_ANIMATION = false; // animate pipes that are on but not flowing
 
-  let sceneRef = null; // Must be declared before Phaser.Game is created
+  // Variables that must be declared before Phaser.Game is created (used in create() callback)
+  let sceneRef = null;
+  let graphicsStartZones;
+  let graphicsEdges;
+  let graphicsNodes;
+  let statusText;
+  
   const game = new Phaser.Game(config);
 
   let ws = null;
@@ -43,12 +49,8 @@
   let nodes = new Map(); // id -> {x,y,size,owner}
   let edges = new Map(); // id -> {source,target,on,flowing,flowStartTime}
   let tickIntervalSec = 0.2; // provided by backend init; used to show per-second edge flow
+  let bridgeBuildTicksPerUnit = 0.6; // DEFAULT_BRIDGE_BUILD_TICKS_PER_UNIT value
   let settingsOpen = false; // persisted visibility of settings/toggles panel
-
-  let graphicsStartZones;
-  let graphicsEdges;
-  let graphicsNodes;
-  let statusText;
   let view = null; // {minX, minY, maxX, maxY, scale, offsetX, offsetY}
   let players = new Map(); // id -> {color, secondaryColors}
   let playerOrder = [];
@@ -484,7 +486,8 @@
   const MONEY_GAIN_COLOR = '#ffd700';
   const DURBIUM_GAIN_COLOR = '#8de1ff';
   const DURBIUM_BAR_CAP = 50;
-  const CROWN_SMASH_SPEED = 220;
+  const DEFAULT_BRIDGE_BUILD_TICKS_PER_UNIT = 0.6;
+  const CROWN_SMASH_FALLBACK_SPEED = 220;
   const CROWN_SMASH_MIN_DURATION_SEC = 0.4;
   const RESOURCE_EMOJIS = {
     money: '',
@@ -4931,6 +4934,7 @@ function startLocalCrownSmashFlight(originNodeId, targetNodeId) {
     if (typeof msg.tickInterval === 'number' && Number.isFinite(msg.tickInterval) && msg.tickInterval > 0) {
       tickIntervalSec = msg.tickInterval;
     }
+    bridgeBuildTicksPerUnit = DEFAULT_BRIDGE_BUILD_TICKS_PER_UNIT;
     nodes.clear();
     fallenKingMarkers.forEach((_, id) => destroyCrownHealthDisplay(id));
     fallenKingMarkers.clear();
@@ -5179,6 +5183,9 @@ function startLocalCrownSmashFlight(originNodeId, targetNodeId) {
       }
       if (typeof msg.settings.bridgeCostPerUnit === 'number') {
         BRIDGE_COST_PER_UNIT = msg.settings.bridgeCostPerUnit;
+      }
+      if (typeof msg.settings.bridgeBuildTicksPerUnit === 'number' && Number.isFinite(msg.settings.bridgeBuildTicksPerUnit)) {
+        bridgeBuildTicksPerUnit = Math.max(0.01, msg.settings.bridgeBuildTicksPerUnit);
       }
       if (typeof msg.settings.overflowPendingGoldPayout === 'number') {
         OVERFLOW_PENDING_GOLD_THRESHOLD = msg.settings.overflowPendingGoldPayout;
@@ -5730,9 +5737,10 @@ function startLocalCrownSmashFlight(originNodeId, targetNodeId) {
           let crownMax = Number(crownMaxRaw);
           if (!Number.isFinite(crownMax)) crownMax = null;
           const kingLostThisTick = prevKingOwnerId != null && kingOwnerId == null;
+          const kingMoveSuppressedHere = kingMoveSuppressedNodes.has(id);
           const reportedCrownHealth = Number(crownHealthRaw);
           const crownHealthWasZero = Number.isFinite(prevCrownHealth) && prevCrownHealth <= 0;
-          const fallingKing = kingLostThisTick && (
+          const fallingKing = !kingMoveSuppressedHere && kingLostThisTick && (
             (Number.isFinite(reportedCrownHealth) && reportedCrownHealth <= 0) ||
             crownHealthWasZero
           );
@@ -7586,6 +7594,47 @@ function drawKingCrown(nx, ny, radius, ownerColor, options = {}) {
     }));
   }
 
+  function computeNormalizedPathDistance(segments) {
+    if (!Array.isArray(segments) || segments.length === 0) return 0;
+    const width = Number.isFinite(screen?.width) ? screen.width : 275.0;
+    const height = Number.isFinite(screen?.height) ? screen.height : 108.0;
+    const largestSpan = Math.max(1, width, height);
+    const scale = 100 / largestSpan;
+    let total = 0;
+    segments.forEach((segment) => {
+      if (!segment || !segment.start || !segment.end) return;
+      const dx = (segment.end.x - segment.start.x) * scale;
+      const dy = (segment.end.y - segment.start.y) * scale;
+      if (Number.isFinite(dx) && Number.isFinite(dy)) {
+        total += Math.hypot(dx, dy);
+      }
+    });
+    return total;
+  }
+
+  function estimateCrownSmashDuration(totalDistance, fallbackDuration = null, normalizedDistance = null) {
+    const safeFallback = (Number.isFinite(fallbackDuration) && fallbackDuration > 0)
+      ? fallbackDuration
+      : ((Number.isFinite(totalDistance) && totalDistance > 0)
+        ? totalDistance / Math.max(1, CROWN_SMASH_FALLBACK_SPEED)
+        : CROWN_SMASH_MIN_DURATION_SEC);
+    const resolvedTicksPerUnit = Number.isFinite(bridgeBuildTicksPerUnit)
+      ? Math.max(0.01, bridgeBuildTicksPerUnit)
+      : DEFAULT_BRIDGE_BUILD_TICKS_PER_UNIT;
+    const resolvedTickSeconds = Number.isFinite(tickIntervalSec)
+      ? Math.max(1e-3, tickIntervalSec)
+      : 0.2;
+    const scaledDistance = (Number.isFinite(normalizedDistance) && normalizedDistance > 0)
+      ? normalizedDistance
+      : 0;
+    const derived = scaledDistance > 0 ? scaledDistance * resolvedTicksPerUnit * resolvedTickSeconds : 0;
+    let duration = (Number.isFinite(derived) && derived > 0) ? derived : safeFallback;
+    if (!Number.isFinite(duration) || duration <= 0) {
+      duration = safeFallback;
+    }
+    return Math.max(CROWN_SMASH_MIN_DURATION_SEC, duration);
+  }
+
   function startCrownSmashAnimation(payload = {}) {
     const fromNodeId = Number(payload.fromNodeId);
     const toNodeId = Number(payload.toNodeId);
@@ -7601,7 +7650,11 @@ function drawKingCrown(nx, ny, radius, ownerColor, options = {}) {
     if (!Number.isFinite(totalDistance) || totalDistance <= 0) {
       totalDistance = Math.max(1, Math.hypot(segments[segments.length - 1].end.x - segments[0].start.x, segments[segments.length - 1].end.y - segments[0].start.y));
     }
-    let duration = Math.max(CROWN_SMASH_MIN_DURATION_SEC, totalDistance / CROWN_SMASH_SPEED);
+    const fallbackDuration = (Number.isFinite(totalDistance) && totalDistance > 0)
+      ? totalDistance / Math.max(1, CROWN_SMASH_FALLBACK_SPEED)
+      : CROWN_SMASH_MIN_DURATION_SEC;
+    const normalizedDistance = computeNormalizedPathDistance(segments);
+    let duration = estimateCrownSmashDuration(totalDistance, fallbackDuration, normalizedDistance);
     const hits = Array.isArray(payload.edgeHits)
       ? payload.edgeHits.map((hit) => {
           const edgeId = toEdgeId(hit.edgeId);
@@ -7625,7 +7678,7 @@ function drawKingCrown(nx, ny, radius, ownerColor, options = {}) {
       const progress = existingFlight.duration > 0 ? Math.min(1, Math.max(0, elapsed / existingFlight.duration)) : 0;
       existingFlight.segments = segments;
       existingFlight.totalDistance = totalDistance;
-      existingFlight.duration = Math.max(duration, CROWN_SMASH_MIN_DURATION_SEC);
+      existingFlight.duration = duration;
       existingFlight.startTime = animationTime - progress * existingFlight.duration;
       existingFlight.edgeHits = hits;
       existingFlight.currentAngle = initialAngle;
@@ -7724,7 +7777,11 @@ function drawKingCrown(nx, ny, radius, ownerColor, options = {}) {
     if (!graphicsNodes || activeCrownFlights.length === 0) return;
     const radius = computeStandardKingCrownRadius(baseScale);
     activeCrownFlights.forEach((flight) => {
-      if (!flight || !Number.isFinite(flight.currentX) || !Number.isFinite(flight.currentY)) return;
+      if (!flight) return;
+      if (!flight.completed && Array.isArray(flight.segments) && flight.segments.length) {
+        drawCrownSmashPathSegments(flight.segments, { color: 0xfff3b0, alpha: 0.22, width: 12 });
+      }
+      if (!Number.isFinite(flight.currentX) || !Number.isFinite(flight.currentY)) return;
       const [screenX, screenY] = worldToScreen(flight.currentX, flight.currentY);
       drawKingCrown(screenX, screenY, radius, ownerToColor(flight.playerId), {
         highlighted: true,
@@ -10320,6 +10377,7 @@ function drawKingCrown(nx, ny, radius, ownerColor, options = {}) {
     eliminatedPlayers.clear();
     cancelCrownSmashMode({ skipRedraw: true });
     activeCrownFlights = [];
+    bridgeBuildTicksPerUnit = DEFAULT_BRIDGE_BUILD_TICKS_PER_UNIT;
     progressSegments.clear();
     if (progressBarInner) progressBarInner.innerHTML = '';
     if (progressBarInner) progressBarInner.style.justifyContent = 'flex-start';
@@ -10970,6 +11028,42 @@ function drawBridgePreviewSegment(segment, color, baseScale, pipeType = 'normal'
     }
 }
 
+function drawCrownSmashPathSegments(segments, options = {}) {
+  if (!graphicsNodes || !Array.isArray(segments) || !segments.length) return;
+  const {
+    color = 0xfff3b0,
+    alpha = 0.35,
+    width = 14,
+  } = options;
+  const highlightColor = Number.isFinite(color) ? color : 0xfff3b0;
+  const highlightAlpha = Number.isFinite(alpha) ? alpha : 0.35;
+  const highlightWidth = Number.isFinite(width) ? Math.max(2, width) : 14;
+  segments.forEach((segment) => {
+    const start = segment && segment.start;
+    const end = segment && segment.end;
+    if (!start || !end) return;
+    if (![start.x, start.y, end.x, end.y].every((value) => Number.isFinite(value))) return;
+    const [sx, sy] = worldToScreen(start.x, start.y);
+    const [ex, ey] = worldToScreen(end.x, end.y);
+    const dx = ex - sx;
+    const dy = ey - sy;
+    const len = Math.hypot(dx, dy);
+    if (!Number.isFinite(len) || len < 2) return;
+    const ux = dx / len;
+    const uy = dy / len;
+    const px = -uy * highlightWidth / 2;
+    const py = ux * highlightWidth / 2;
+    graphicsNodes.fillStyle(highlightColor, highlightAlpha);
+    graphicsNodes.beginPath();
+    graphicsNodes.moveTo(sx + px, sy + py);
+    graphicsNodes.lineTo(ex + px, ey + py);
+    graphicsNodes.lineTo(ex - px, ey - py);
+    graphicsNodes.lineTo(sx - px, sy - py);
+    graphicsNodes.closePath();
+    graphicsNodes.fillPath();
+  });
+}
+
 function drawCrownSmashPreviewPath() {
   if (!graphicsNodes || !crownSmashPreviewPath || !Array.isArray(crownSmashPreviewPath.segments)) return;
   const originNode = nodes.get(crownSmashOriginNodeId);
@@ -10980,31 +11074,7 @@ function drawCrownSmashPreviewPath() {
   const normalizedSegments = normalizePathSegmentsForDisplay(crownSmashPreviewPath, originNode, targetNode);
   if (!normalizedSegments.length) return;
   const highlightColor = 0xfff3b0;
-  const alpha = 0.35;
-  const width = 14;
-  normalizedSegments.forEach((segment) => {
-    const start = segment.start;
-    const end = segment.end;
-    if (!start || !end) return;
-    const [sx, sy] = worldToScreen(start.x, start.y);
-    const [ex, ey] = worldToScreen(end.x, end.y);
-    const dx = ex - sx;
-    const dy = ey - sy;
-    const len = Math.hypot(dx, dy);
-    if (!Number.isFinite(len) || len < 2) return;
-    const ux = dx / len;
-    const uy = dy / len;
-    const px = -uy * width / 2;
-    const py = ux * width / 2;
-    graphicsNodes.fillStyle(highlightColor, alpha);
-    graphicsNodes.beginPath();
-    graphicsNodes.moveTo(sx + px, sy + py);
-    graphicsNodes.lineTo(ex + px, ey + py);
-    graphicsNodes.lineTo(ex - px, ey - py);
-    graphicsNodes.lineTo(sx - px, sy - py);
-    graphicsNodes.closePath();
-    graphicsNodes.fillPath();
-  });
+  drawCrownSmashPathSegments(normalizedSegments, { color: highlightColor, alpha: 0.35, width: 14 });
 
   const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
   const [ox, oy] = worldToScreen(originNode.x, originNode.y);
