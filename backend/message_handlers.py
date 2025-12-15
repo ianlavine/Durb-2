@@ -10,6 +10,7 @@ import websockets
 from .constants import (
     DEFAULT_GEM_COUNTS,
     DEFAULT_GAME_MODE,
+    DEFAULT_KING_MOVEMENT_MODE,
     GAME_MODES,
     MAX_FRIEND_PLAYERS,
     MIN_FRIEND_PLAYERS,
@@ -22,6 +23,7 @@ from .constants import (
     UNOWNED_NODE_BASE_JUICE,
     KING_CROWN_MAX_HEALTH,
     normalize_game_mode,
+    normalize_king_movement_mode,
 )
 from .game_engine import GameEngine
 from .bot_manager import bot_game_manager
@@ -224,6 +226,7 @@ class MessageRouter:
             "nodeGrowthRate": PRODUCTION_RATE_PER_NODE,
             "startingFlowRate": RESERVE_TRANSFER_RATIO,
             "secondaryFlowRate": INTAKE_TRANSFER_RATIO,
+            "kingMovementMode": DEFAULT_KING_MOVEMENT_MODE,
         }
         if not isinstance(payload, dict):
             settings["pipeStart"] = settings["brassStart"]
@@ -412,6 +415,10 @@ class MessageRouter:
             settings["lonelyNode"] = "sinks"
         else:
             settings["lonelyNode"] = "nothing"
+
+        king_move_value = payload.get("kingMovementMode", settings["kingMovementMode"])
+        if isinstance(king_move_value, str):
+            settings["kingMovementMode"] = normalize_king_movement_mode(king_move_value)
 
         settings["pipeStart"] = settings["brassStart"]
 
@@ -1070,7 +1077,7 @@ class MessageRouter:
             except (TypeError, ValueError):
                 origin_arg = None
 
-        success, targets, error_msg, current_node_id = engine.get_king_move_options(token, origin_arg)
+        success, targets, error_msg, current_node_id, target_details = engine.get_king_move_options(token, origin_arg)
         if not success:
             await self._send_safe(
                 websocket,
@@ -1082,7 +1089,19 @@ class MessageRouter:
             "type": "kingMoveOptions",
             "originNodeId": current_node_id,
             "targets": [int(t) for t in targets],
+            "movementMode": getattr(engine.state, "king_movement_mode", DEFAULT_KING_MOVEMENT_MODE),
         }
+        if target_details:
+            serialized_costs = []
+            for detail in target_details:
+                try:
+                    node_id = int(detail.get("nodeId"))
+                    cost_value = float(detail.get("cost", 0))
+                except (TypeError, ValueError):
+                    continue
+                serialized_costs.append([node_id, cost_value])
+            if serialized_costs:
+                payload["targetCosts"] = serialized_costs
         await self._send_safe(websocket, json.dumps(payload))
 
     async def handle_king_move(
@@ -1136,7 +1155,20 @@ class MessageRouter:
                 broadcast_payload["crownMax"] = float(payload["crownMax"])
             except (TypeError, ValueError):
                 pass
-        await self._broadcast_to_game(game_info, broadcast_payload)
+        if "movementMode" in payload:
+            broadcast_payload["movementMode"] = payload["movementMode"]
+
+        clients = game_info.get("clients", {})
+        for token_key, client_websocket in clients.items():
+            if not client_websocket:
+                continue
+            message_to_send = dict(broadcast_payload)
+            if token_key == token and "cost" in payload:
+                try:
+                    message_to_send["cost"] = float(payload["cost"])
+                except (TypeError, ValueError):
+                    pass
+            await self._send_safe(client_websocket, json.dumps(message_to_send))
 
         event_payload = {
             "playerId": int(payload["playerId"]),
@@ -1153,6 +1185,13 @@ class MessageRouter:
                 event_payload["crownMax"] = float(payload["crownMax"])
             except (TypeError, ValueError):
                 pass
+        if "cost" in payload:
+            try:
+                event_payload["cost"] = float(payload["cost"])
+            except (TypeError, ValueError):
+                pass
+        if "movementMode" in payload:
+            event_payload["movementMode"] = payload["movementMode"]
         self._record_game_event(game_info, token, "moveKing", event_payload)
 
     async def handle_quit_game(
@@ -1571,7 +1610,7 @@ class MessageRouter:
                 except (TypeError, ValueError):
                     origin_arg = None
 
-            success, targets, error_msg, current_node_id = bot_game_engine.get_king_move_options(token, origin_arg)
+            success, targets, error_msg, current_node_id, target_details = bot_game_engine.get_king_move_options(token, origin_arg)
             if not success:
                 await self._send_safe(
                     websocket,
@@ -1582,7 +1621,19 @@ class MessageRouter:
                     "type": "kingMoveOptions",
                     "originNodeId": current_node_id,
                     "targets": [int(t) for t in targets],
+                    "movementMode": getattr(bot_game_engine.state, "king_movement_mode", DEFAULT_KING_MOVEMENT_MODE),
                 }
+                if target_details:
+                    serialized_costs = []
+                    for detail in target_details:
+                        try:
+                            node_id = int(detail.get("nodeId"))
+                            cost_value = float(detail.get("cost", 0))
+                        except (TypeError, ValueError):
+                            continue
+                        serialized_costs.append([node_id, cost_value])
+                    if serialized_costs:
+                        payload["targetCosts"] = serialized_costs
                 await self._send_safe(websocket, json.dumps(payload))
 
         elif msg_type == "kingMove":
@@ -1611,6 +1662,23 @@ class MessageRouter:
                             "fromNodeId": int(payload["fromNodeId"]),
                             "toNodeId": int(payload["toNodeId"]),
                         }
+                        if "crownHealth" in payload:
+                            try:
+                                message["crownHealth"] = float(payload["crownHealth"])
+                            except (TypeError, ValueError):
+                                pass
+                        if "crownMax" in payload:
+                            try:
+                                message["crownMax"] = float(payload["crownMax"])
+                            except (TypeError, ValueError):
+                                pass
+                        if "movementMode" in payload:
+                            message["movementMode"] = payload["movementMode"]
+                        if "cost" in payload:
+                            try:
+                                message["cost"] = float(payload["cost"])
+                            except (TypeError, ValueError):
+                                pass
                         await self._send_safe(websocket, json.dumps(message))
 
         elif msg_type == "localTargeting":

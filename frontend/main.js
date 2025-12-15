@@ -61,6 +61,7 @@
   let phase = 'picking';
   let currentResourceMode = 'standard';
   let currentBreakMode = 'flowing';
+  let kingMovementMode = 'basic';
   let brassGemModeActive = false;
   let pendingBrassGemSpend = false;
   let rageGemModeActive = false;
@@ -185,16 +186,39 @@
   let kingMoveTargetHoveredId = null;
   let kingMovePendingDestinationId = null;
   const kingMoveSuppressedNodes = new Set();
+  const kingCrownFlights = [];
+  const kingCrownFlightDestinations = new Set();
+  let kingMovePreviewLine = null;
+  const kingMoveTargetCosts = new Map();
+  let kingMoveCostDisplayActive = false;
+  const kingMovePreviewCrossingEdges = new Set(); // edges that would be destroyed by king movement
+
+  // Crown pipe avoidance: stores computed rotation angles for king crowns on each node
+  const kingCrownAngleOffsets = new Map(); // nodeId -> radians offset from top (0 = top)
+  const KING_CROWN_MIN_PIPE_ANGLE_SEPARATION = Math.PI / 4; // 45 degrees minimum separation between crown and any pipe
+
+  const KING_CROWN_TICKS_PER_UNIT_DISTANCE = 0.6; // mirrors backend pipe build speed
+  const KING_CROWN_MIN_TRAVEL_TICKS = 2;
+  const KING_CROWN_MAX_TRAVEL_TICKS = 18;
+  const KING_CROWN_SPIN_TICKS_RATIO = 0.35;
+  const KING_CROWN_SPIN_TICKS_MIN = 2;
+  const KING_CROWN_SPIN_TICKS_MAX = 5;
+  const KING_CROWN_DEFAULT_SECONDS_PER_TICK = 0.2;
 
   const KING_STANDARD_NODE_SIZE = 80;
   const KING_STANDARD_RADIUS_BASE = 0.15 * Math.pow(KING_STANDARD_NODE_SIZE, 0.6);
-  const KING_CROWN_TO_NODE_RATIO = 0.6;
-  const KING_CROWN_MIN_SCREEN_RADIUS = 14;
-  const KING_OPTION_RADIUS_MULTIPLIER = 1.12;
+  const KING_CROWN_TO_NODE_RATIO = 0.15;
+  const KING_CROWN_MIN_SCREEN_RADIUS = 7;
+  const KING_OPTION_RADIUS_MULTIPLIER = 0.5;
   const KING_OPTION_BOUNCE_SCALE = 0.18;
   const KING_OPTION_VERTICAL_SCALE = 0.55;
   const KING_OPTION_VERTICAL_EXTRA = 6;
   const KING_CROWN_FILL_COLOR = 0xffd700;
+  const KING_MOVE_PREVIEW_COLOR = 0xffd85c;
+  const KING_MOVE_PREVIEW_ALPHA = 0.42;
+  const KING_MOVE_PREVIEW_INVALID_COLOR = 0x000000;
+  const KING_MOVE_PREVIEW_INVALID_ALPHA = 0.55;
+  const KING_MOVE_PREVIEW_WIDTH = 10;
   const KING_CROWN_DEFAULT_HEALTH = 300;
   let kingCrownDefaultMax = KING_CROWN_DEFAULT_HEALTH;
   const KING_ATTACK_ALERT_LINGER_SEC = 2.5;
@@ -225,6 +249,133 @@
     const dg = Math.round(g * factor);
     const db = Math.round(b * factor);
     return (dr << 16) | (dg << 8) | db;
+  }
+
+  function normalizeAngleRadians(angle) {
+    if (!Number.isFinite(angle)) return 0;
+    let a = angle;
+    while (a > Math.PI) a -= Math.PI * 2;
+    while (a < -Math.PI) a += Math.PI * 2;
+    return a;
+  }
+
+  // Get angles of all pipes connected to a node (from the node's perspective)
+  // Angle 0 = straight up (negative Y direction), positive = clockwise
+  function getPipeAnglesForNode(nodeId) {
+    const node = nodes.get(nodeId);
+    if (!node) return [];
+    const angles = [];
+    edges.forEach((edge) => {
+      let otherNodeId = null;
+      if (edge.source === nodeId) {
+        otherNodeId = edge.target;
+      } else if (edge.target === nodeId) {
+        otherNodeId = edge.source;
+      }
+      if (otherNodeId == null) return;
+      const otherNode = nodes.get(otherNodeId);
+      if (!otherNode) return;
+      // Calculate angle from this node to the other node
+      const dx = otherNode.x - node.x;
+      const dy = otherNode.y - node.y;
+      // atan2 gives angle where 0 = right, positive = counterclockwise
+      // We want 0 = up (negative Y), positive = clockwise
+      // So we rotate by -90 degrees and negate
+      const rawAngle = Math.atan2(dy, dx);
+      // Convert: up (-PI/2 in atan2) should be 0, right (0 in atan2) should be PI/2
+      const pipeAngle = normalizeAngleRadians(rawAngle + Math.PI / 2);
+      angles.push(pipeAngle);
+    });
+    return angles;
+  }
+
+  // Compute the optimal crown rotation angle to avoid overlapping with pipes
+  // Returns the angle in radians that the crown should be rotated from its default position
+  function computeOptimalCrownAngle(nodeId) {
+    const pipeAngles = getPipeAnglesForNode(nodeId);
+    const minSeparation = KING_CROWN_MIN_PIPE_ANGLE_SEPARATION;
+    
+    // If no pipes, crown stays at top (angle 0)
+    if (pipeAngles.length === 0) {
+      return 0;
+    }
+
+    // Helper to check if a crown angle is too close to any pipe
+    function isTooCloseToAnyPipe(crownAngle) {
+      for (const pipeAngle of pipeAngles) {
+        const diff = Math.abs(normalizeAngleRadians(crownAngle - pipeAngle));
+        if (diff < minSeparation) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    // Start at top (0 radians) and check if it's valid
+    let currentAngle = 0;
+    if (!isTooCloseToAnyPipe(currentAngle)) {
+      return 0;
+    }
+
+    // Rotate counterclockwise (negative direction in our coordinate system)
+    // in small increments until we find a valid position or complete 360 degrees
+    const stepSize = Math.PI / 36; // 5 degree increments
+    const maxSteps = Math.ceil((2 * Math.PI) / stepSize);
+    
+    for (let i = 1; i <= maxSteps; i++) {
+      // Move counterclockwise (negative rotation)
+      currentAngle = normalizeAngleRadians(-i * stepSize);
+      if (!isTooCloseToAnyPipe(currentAngle)) {
+        return currentAngle;
+      }
+    }
+
+    // If we've gone all the way around and still can't find a valid spot,
+    // just return 0 (top position)
+    return 0;
+  }
+
+  // Update the stored crown angle for a node (call when king moves to node or pipe is added)
+  function updateCrownAngleForNode(nodeId) {
+    const node = nodes.get(nodeId);
+    if (!node || node.kingOwnerId == null) {
+      kingCrownAngleOffsets.delete(nodeId);
+      return;
+    }
+    const optimalAngle = computeOptimalCrownAngle(nodeId);
+    kingCrownAngleOffsets.set(nodeId, optimalAngle);
+  }
+
+  // Check if any king is on a node and update crown angle if needed (call after pipe changes)
+  function updateCrownAngleIfKingOnNode(nodeId) {
+    const node = nodes.get(nodeId);
+    if (node && node.kingOwnerId != null) {
+      updateCrownAngleForNode(nodeId);
+    }
+  }
+
+  // Get the rotated crown center position for hitbox detection
+  // Takes into account the crown's rotation offset to avoid pipes
+  function getRotatedCrownCenter(nodeId, nodeScreenX, nodeScreenY, layout) {
+    if (!layout) return { x: nodeScreenX, y: nodeScreenY };
+    const baseCenter = {
+      x: layout.centerX ?? nodeScreenX,
+      y: layout.centerY ?? nodeScreenY,
+    };
+    const rotationAngle = kingCrownAngleOffsets.get(nodeId) || 0;
+    if (Math.abs(rotationAngle) < 1e-3) {
+      return baseCenter;
+    }
+    // Rotate the crown center around the node center
+    const pivot = { x: nodeScreenX, y: nodeScreenY };
+    const cos = Math.cos(rotationAngle);
+    const sin = Math.sin(rotationAngle);
+    const relX = baseCenter.x - pivot.x;
+    const relY = baseCenter.y - pivot.y;
+    return {
+      x: pivot.x + relX * cos - relY * sin,
+      y: pivot.y + relX * sin + relY * cos,
+    };
   }
   
   // UI background bars
@@ -323,6 +474,7 @@
         derivedMode: LEGACY_DEFAULT_MODE || 'basic',
         winCondition: 'king',
         kingCrownHealth: KING_CROWN_DEFAULT_HEALTH,
+        kingMovementMode: 'basic',
         resources: 'standard',
         lonelyNode: 'sinks',
         nodeGrowthRate: 0.7,
@@ -331,14 +483,14 @@
       }
     : {
         screen: 'warp',
-        brass: 'flowing',
+        brass: 'cross',
         brassStart: 'owned',
-        breakMode: 'any',
+        breakMode: 'brass',
         bridgeCost: 1.0,
         gameStart: 'hidden-split',
         startingNodeJuice: 300,
-        passiveIncome: 0,
-        neutralCaptureGold: 12,
+        passiveIncome: 0.90,
+        neutralCaptureGold: 3,
         ringJuiceToGoldRatio: 10,
         ringPayoutGold: 2,
         warpGemCount: 3,
@@ -347,8 +499,9 @@
         reverseGemCount: 6,
         winCondition: 'king',
         kingCrownHealth: KING_CROWN_DEFAULT_HEALTH,
+        kingMovementMode: 'smash',
         resources: 'standard',
-        lonelyNode: 'sinks',
+        lonelyNode: 'nothing',
         nodeGrowthRate: 0.2,
         startingFlowRate: 0.004,
         secondaryFlowRate: 0.7,
@@ -665,9 +818,23 @@
     return value.trim().toLowerCase() === 'gems' ? 'gems' : 'standard';
   }
 
+  function normalizeKingMovementMode(value) {
+    if (typeof value !== 'string') return 'basic';
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'smash') return 'smash';
+    if (normalized === 'weak-smash' || normalized === 'weaksmash' || normalized === 'weak') return 'weak-smash';
+    if (normalized === 'standard') return 'basic';
+    return 'basic';
+  }
+
   function normalizeLonelyNodeMode(value) {
     if (typeof value !== 'string') return 'nothing';
     return value.trim().toLowerCase() === 'sinks' ? 'sinks' : 'nothing';
+  }
+
+  function isKingSmashMode(mode = kingMovementMode) {
+    const normalized = normalizeKingMovementMode(mode);
+    return normalized === 'smash' || normalized === 'weak-smash';
   }
 
   function normalizeBrassSetting(value) {
@@ -1286,13 +1453,16 @@
         } else {
           isActive = target === current;
         }
-      } else if (setting === 'bridgeCost') {
-        isActive = Number(value) === currentCost;
       } else if (setting === 'winCondition') {
         const normalized = normalizeWinCondition(value);
         isActive = normalized === normalizeWinCondition(selectedSettings.winCondition);
       } else if (setting === 'resources') {
         isActive = normalizeResources(value) === currentResources;
+      } else if (setting === 'kingMovementMode') {
+        const normalized = normalizeKingMovementMode(value);
+        isActive = normalized === normalizeKingMovementMode(selectedSettings.kingMovementMode);
+      } else if (setting === 'bridgeCost') {
+        isActive = Number(value) === currentCost;
       } else if (setting === 'lonelyNode') {
         const normalized = normalizeLonelyNodeMode(value);
         isActive = normalized === normalizeLonelyNodeMode(selectedSettings.lonelyNode);
@@ -1430,6 +1600,11 @@
     } else {
       next.resources = normalizeResources(next.resources);
     }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'kingMovementMode')) {
+      next.kingMovementMode = normalizeKingMovementMode(overrides.kingMovementMode);
+    } else {
+      next.kingMovementMode = normalizeKingMovementMode(next.kingMovementMode);
+    }
     if (Object.prototype.hasOwnProperty.call(overrides, 'lonelyNode')) {
       next.lonelyNode = normalizeLonelyNodeMode(overrides.lonelyNode);
     } else {
@@ -1455,6 +1630,7 @@
 
     selectedSettings = next;
     setCurrentResourceMode(selectedSettings.resources);
+    kingMovementMode = normalizeKingMovementMode(selectedSettings.kingMovementMode);
     kingCrownDefaultMax = coerceKingCrownHealth(selectedSettings.kingCrownHealth);
     selectedMode = deriveModeFromSettings(selectedSettings);
     updateModeOptionButtonStates();
@@ -1502,6 +1678,7 @@
       derivedMode: selectedMode,
       winCondition: selectedSettings.winCondition || 'dominate',
       resources: normalizeResources(selectedSettings.resources),
+      kingMovementMode: normalizeKingMovementMode(selectedSettings.kingMovementMode),
       lonelyNode: normalizeLonelyNodeMode(selectedSettings.lonelyNode),
     };
   }
@@ -1537,6 +1714,7 @@
     if (typeof payload.lonelyNode === 'string') overrides.lonelyNode = payload.lonelyNode;
     if (Object.prototype.hasOwnProperty.call(payload, 'winCondition')) overrides.winCondition = payload.winCondition;
     if (Object.prototype.hasOwnProperty.call(payload, 'resources')) overrides.resources = payload.resources;
+    if (Object.prototype.hasOwnProperty.call(payload, 'kingMovementMode')) overrides.kingMovementMode = payload.kingMovementMode;
     applySelectedSettings(overrides);
   }
 
@@ -4356,6 +4534,14 @@ function clearBridgeSelection() {
     return 1 - Math.pow(1 - t, 3);
   }
 
+  function easeInOutCubic(t) {
+    const clamped = Math.max(0, Math.min(1, t));
+    if (clamped < 0.5) {
+      return 4 * clamped * clamped * clamped;
+    }
+    return 1 - Math.pow(-2 * clamped + 2, 3) / 2;
+  }
+
   function updateNodeAnimations() {
     let needsRedraw = false;
     nodes.forEach((node) => {
@@ -4396,6 +4582,31 @@ function clearBridgeSelection() {
     return needsRedraw;
   }
 
+  function updateKingCrownFlights() {
+    if (kingCrownFlights.length === 0) return false;
+    let anyActive = false;
+    for (let i = kingCrownFlights.length - 1; i >= 0; i -= 1) {
+      const flight = kingCrownFlights[i];
+      if (!flight) {
+        kingCrownFlights.splice(i, 1);
+        continue;
+      }
+      const timing = resolveKingCrownFlightTiming(flight);
+      const startTime = Number(flight.startTime) || 0;
+      const elapsedTicks = timing.tickSeconds > 0 ? (animationTime - startTime) / timing.tickSeconds : Infinity;
+      if (!Number.isFinite(elapsedTicks) || elapsedTicks >= timing.totalTicks) {
+        if (Number.isFinite(flight.toNodeId)) {
+          kingCrownFlightDestinations.delete(flight.toNodeId);
+        }
+        kingCrownFlights.splice(i, 1);
+        anyActive = true;
+      } else {
+        anyActive = true;
+      }
+    }
+    return anyActive;
+  }
+
   function updateSinkingNodes() {
     if (sinkingNodes.size === 0) return false;
     const finished = [];
@@ -4422,6 +4633,7 @@ function clearBridgeSelection() {
     // Update animation timer for juice flow
     animationTime += 1/60; // Assuming 60 FPS, increment by frame time
     const nodesAnimating = updateNodeAnimations();
+    const kingFlightsActive = updateKingCrownFlights();
 
     // Update money indicators
     updateMoneyIndicators();
@@ -4465,6 +4677,7 @@ function clearBridgeSelection() {
       prePipeStateChanged ||
       kingTargetsAnimating ||
       kingSelectionPending ||
+      kingFlightsActive ||
       redrawForKingAlert ||
       sinkingActive
     ) {
@@ -4647,6 +4860,7 @@ function clearBridgeSelection() {
     fallenKingMarkers.clear();
     sinkingNodes.clear();
     kingNodesByPlayer.clear();
+    clearKingCrownFlights();
     clearKingAttackAlert();
     kingAttackWasActive = false;
     kingCrownDefaultMax = coerceKingCrownHealth(selectedSettings.kingCrownHealth);
@@ -5656,10 +5870,25 @@ function clearBridgeSelection() {
 
   function rebuildKingNodes() {
     kingNodesByPlayer.clear();
-    if (winCondition !== 'king') return;
+    if (winCondition !== 'king') {
+      // Clear all crown angles if not in king mode
+      kingCrownAngleOffsets.clear();
+      return;
+    }
+    // Track which nodes currently have kings
+    const currentKingNodes = new Set();
     nodes.forEach((node, nodeId) => {
       if (node && Number.isFinite(node.kingOwnerId)) {
         kingNodesByPlayer.set(Number(node.kingOwnerId), nodeId);
+        currentKingNodes.add(nodeId);
+        // Update crown angle offset to avoid pipe overlap
+        updateCrownAngleForNode(nodeId);
+      }
+    });
+    // Clean up crown angles for nodes that no longer have kings
+    kingCrownAngleOffsets.forEach((_, nodeId) => {
+      if (!currentKingNodes.has(nodeId)) {
+        kingCrownAngleOffsets.delete(nodeId);
       }
     });
   }
@@ -5701,6 +5930,10 @@ function clearBridgeSelection() {
       };
       applyEdgeWarpData(record, edge.warp ?? edge, nodes.get(edge.source), nodes.get(edge.target));
       edges.set(edgeId, record);
+      
+      // Update crown angles if a king is on either endpoint of this new pipe
+      updateCrownAngleIfKingOnNode(edge.source);
+      updateCrownAngleIfKingOnNode(edge.target);
       
       // Show cost indicator for bridge building
       const shouldShowCost = builtByMe && Math.abs(reportedCost) > 1e-6;
@@ -5872,6 +6105,9 @@ function forceRemoveEdge(edgeId) {
   const id = toEdgeId(edgeId);
   if (id == null) return;
   const existingEdge = edges.get(id);
+  // Capture source and target before removing, for crown angle updates
+  const sourceNodeId = existingEdge ? existingEdge.source : null;
+  const targetNodeId = existingEdge ? existingEdge.target : null;
   if (existingEdge && existingEdge.removing) {
     delete existingEdge.removing;
   }
@@ -5886,6 +6122,9 @@ function forceRemoveEdge(edgeId) {
   if (hoveredEdgeId === id) {
     hoveredEdgeId = null;
   }
+  // Update crown angles for any king nodes that were connected to this removed edge
+  if (sourceNodeId != null) updateCrownAngleIfKingOnNode(sourceNodeId);
+  if (targetNodeId != null) updateCrownAngleIfKingOnNode(targetNodeId);
 }
 
 function buildRemovalSteps(count) {
@@ -6445,6 +6684,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     edges.clear();
     nodes.clear();
     kingNodesByPlayer.clear();
+    clearKingCrownFlights();
     clearKingAttackAlert();
     kingAttackWasActive = false;
     hoveredNodeId = null;
@@ -6457,6 +6697,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     edgeRemovalAnimations.clear();
     brassPreviewIntersections.clear();
     bridgePreviewWillBreakPipes = false;
+    kingMovePreviewCrossingEdges.clear();
     clearAllPrePipes('sandbox', { skipRedraw: true });
     moneyIndicators = [];
     playerStats.forEach((stats) => {
@@ -6495,9 +6736,202 @@ function fallbackRemoveEdgesForNode(nodeId) {
     kingMoveTargetRenderInfo.clear();
     kingMoveTargetHoveredId = null;
     kingMovePendingDestinationId = null;
+    kingMovePreviewLine = null;
+    kingMoveTargetCosts.clear();
+    kingMoveCostDisplayActive = false;
+    kingMovePreviewCrossingEdges.clear();
+    hideBridgeCostDisplay();
     if (!skipRedraw) {
       redrawStatic();
     }
+  }
+
+  function clearKingCrownFlights() {
+    kingCrownFlights.length = 0;
+    kingCrownFlightDestinations.clear();
+  }
+
+  function removeKingCrownFlightsForNode(nodeId) {
+    if (!Number.isFinite(nodeId)) return;
+    for (let i = kingCrownFlights.length - 1; i >= 0; i -= 1) {
+      const flight = kingCrownFlights[i];
+      if (!flight) continue;
+      if (flight.toNodeId === nodeId || flight.fromNodeId === nodeId) {
+        kingCrownFlights.splice(i, 1);
+      }
+    }
+    kingCrownFlightDestinations.delete(nodeId);
+  }
+
+  function computeKingCrownFlightTiming(fromX, fromY, toX, toY) {
+    let worldDistance = Math.hypot(toX - fromX, toY - fromY);
+    if ((!Number.isFinite(worldDistance) || worldDistance <= 0) && view) {
+      const [screenStartX, screenStartY] = worldToScreen(fromX, fromY);
+      const [screenEndX, screenEndY] = worldToScreen(toX, toY);
+      const screenDistance = Math.hypot(screenEndX - screenStartX, screenEndY - screenStartY);
+      if (Number.isFinite(screenDistance) && screenDistance > 0) {
+        const scale = Math.max(1e-3, Math.min(view.scaleX || 0, view.scaleY || 0)) || 1;
+        worldDistance = screenDistance / scale;
+      }
+    }
+    if (!Number.isFinite(worldDistance) || worldDistance <= 0) {
+      worldDistance = 1;
+    }
+
+    const ticksPerUnit = Math.max(1e-4, Number(KING_CROWN_TICKS_PER_UNIT_DISTANCE) || 0.01);
+    let travelTicks = Math.round(worldDistance * ticksPerUnit);
+    travelTicks = Math.max(
+      KING_CROWN_MIN_TRAVEL_TICKS,
+      Math.min(
+        KING_CROWN_MAX_TRAVEL_TICKS,
+        Number.isFinite(travelTicks) ? travelTicks : KING_CROWN_MIN_TRAVEL_TICKS
+      )
+    );
+
+    const spinBase = Math.round(travelTicks * KING_CROWN_SPIN_TICKS_RATIO);
+    const spinTicks = Math.max(
+      KING_CROWN_SPIN_TICKS_MIN,
+      Math.min(
+        KING_CROWN_SPIN_TICKS_MAX,
+        Number.isFinite(spinBase) ? spinBase : KING_CROWN_SPIN_TICKS_MIN
+      )
+    );
+    const preSpinTicks = spinTicks;
+    const postSpinTicks = spinTicks;
+    const totalTicks = preSpinTicks + travelTicks + postSpinTicks;
+
+    const tickSeconds = Math.max(
+      1e-3,
+      Number.isFinite(tickIntervalSec) && tickIntervalSec > 0 ? tickIntervalSec : KING_CROWN_DEFAULT_SECONDS_PER_TICK
+    );
+
+    return {
+      tickSeconds,
+      travelTicks,
+      preSpinTicks,
+      postSpinTicks,
+      totalTicks,
+    };
+  }
+
+  function computeKingCrownRotation(fromX, fromY, toX, toY) {
+    const [startScreenX, startScreenY] = worldToScreen(fromX, fromY);
+    const [endScreenX, endScreenY] = worldToScreen(toX, toY);
+    let dx = endScreenX - startScreenX;
+    let dy = endScreenY - startScreenY;
+    if (!Number.isFinite(dx) || !Number.isFinite(dy) || (Math.abs(dx) < 1e-4 && Math.abs(dy) < 1e-4)) {
+      dx = toX - fromX;
+      dy = toY - fromY;
+    }
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
+      return 0;
+    }
+    const heading = Math.atan2(dy, dx);
+    return normalizeAngleRadians(heading + Math.PI / 2);
+  }
+
+  function beginKingCrownFlight(options = {}) {
+    const {
+      playerId,
+      fromNodeId,
+      toNodeId,
+      startX,
+      startY,
+      endX,
+      endY,
+      crownHealth,
+      crownMax,
+    } = options;
+    if (
+      !Number.isFinite(playerId) ||
+      !Number.isFinite(startX) ||
+      !Number.isFinite(startY) ||
+      !Number.isFinite(endX) ||
+      !Number.isFinite(endY) ||
+      fromNodeId === toNodeId
+    ) {
+      return false;
+    }
+    const dx = endX - startX;
+    const dy = endY - startY;
+    if (Math.abs(dx) < 1e-3 && Math.abs(dy) < 1e-3) {
+      return false;
+    }
+    const timing = computeKingCrownFlightTiming(startX, startY, endX, endY);
+    const headingRotation = computeKingCrownRotation(startX, startY, endX, endY);
+    
+    // Get starting crown angle from origin node (or 0 if not stored)
+    const startAngleOffset = Number.isFinite(fromNodeId) ? (kingCrownAngleOffsets.get(fromNodeId) || 0) : 0;
+    
+    // Pre-compute the optimal ending angle for destination node
+    const endAngleOffset = Number.isFinite(toNodeId) ? computeOptimalCrownAngle(toNodeId) : 0;
+    // Store this so the static crown will use it when it appears
+    if (Number.isFinite(toNodeId)) {
+      kingCrownAngleOffsets.set(toNodeId, endAngleOffset);
+    }
+    
+    if (Number.isFinite(toNodeId)) {
+      removeKingCrownFlightsForNode(toNodeId);
+    }
+    kingCrownFlights.push({
+      playerId,
+      fromNodeId,
+      toNodeId,
+      startX,
+      startY,
+      endX,
+      endY,
+      startTime: animationTime,
+      tickSeconds: Number.isFinite(timing?.tickSeconds) ? timing.tickSeconds : KING_CROWN_DEFAULT_SECONDS_PER_TICK,
+      travelTicks: Number.isFinite(timing?.travelTicks) ? timing.travelTicks : KING_CROWN_MIN_TRAVEL_TICKS,
+      preSpinTicks: Number.isFinite(timing?.preSpinTicks) ? timing.preSpinTicks : 0,
+      postSpinTicks: Number.isFinite(timing?.postSpinTicks) ? timing.postSpinTicks : 0,
+      totalTicks: Number.isFinite(timing?.totalTicks)
+        ? timing.totalTicks
+        : (Number.isFinite(timing?.travelTicks) ? timing.travelTicks : KING_CROWN_MIN_TRAVEL_TICKS),
+      rotationTarget: headingRotation,
+      startAngleOffset,
+      endAngleOffset,
+      crownHealth,
+      crownMax,
+    });
+    if (Number.isFinite(toNodeId)) {
+      kingCrownFlightDestinations.add(toNodeId);
+      destroyCrownHealthDisplay(toNodeId);
+    }
+    return true;
+  }
+
+  function resolveKingCrownFlightTiming(flight) {
+    if (!flight) {
+      return {
+        tickSeconds: Number.isFinite(tickIntervalSec) && tickIntervalSec > 0 ? tickIntervalSec : KING_CROWN_DEFAULT_SECONDS_PER_TICK,
+        travelTicks: KING_CROWN_MIN_TRAVEL_TICKS,
+        preSpinTicks: 0,
+        postSpinTicks: 0,
+        totalTicks: KING_CROWN_MIN_TRAVEL_TICKS,
+      };
+    }
+    const tickSeconds = Math.max(
+      1e-3,
+      Number.isFinite(flight.tickSeconds) && flight.tickSeconds > 0
+        ? flight.tickSeconds
+        : (Number.isFinite(tickIntervalSec) && tickIntervalSec > 0 ? tickIntervalSec : KING_CROWN_DEFAULT_SECONDS_PER_TICK)
+    );
+    const travelTicks = Math.max(
+      KING_CROWN_MIN_TRAVEL_TICKS,
+      Number.isFinite(flight.travelTicks) ? flight.travelTicks : KING_CROWN_MIN_TRAVEL_TICKS
+    );
+    const preSpinTicks = Math.max(0, Number.isFinite(flight.preSpinTicks) ? flight.preSpinTicks : 0);
+    const postSpinTicks = Math.max(0, Number.isFinite(flight.postSpinTicks) ? flight.postSpinTicks : 0);
+    let totalTicks = Number.isFinite(flight.totalTicks) ? flight.totalTicks : 0;
+    if (totalTicks <= 0) {
+      totalTicks = preSpinTicks + travelTicks + postSpinTicks;
+    }
+    if (totalTicks <= 0) {
+      totalTicks = travelTicks;
+    }
+    return { tickSeconds, travelTicks, preSpinTicks, postSpinTicks, totalTicks };
   }
 
   function startKingSelection(nodeId) {
@@ -6514,6 +6948,12 @@ function fallbackRemoveEdgesForNode(nodeId) {
     kingMoveTargetRenderInfo.clear();
     kingMoveTargetHoveredId = null;
     kingMovePendingDestinationId = null;
+    kingMovePreviewLine = null;
+    kingMoveTargetCosts.clear();
+    kingMoveCostDisplayActive = false;
+    kingMovePreviewCrossingEdges.clear();
+    hideBridgeCostDisplay();
+    updateKingMovePreviewLine();
     redrawStatic();
 
     ws.send(JSON.stringify({
@@ -6532,6 +6972,9 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
     kingMovePendingDestinationId = nodeId;
     kingMoveOptionsPending = true;
+    kingMovePreviewLine = null;
+    kingMoveCostDisplayActive = false;
+    hideBridgeCostDisplay();
     redrawStatic();
 
     ws.send(JSON.stringify({
@@ -6549,6 +6992,10 @@ function fallbackRemoveEdgesForNode(nodeId) {
       return;
     }
 
+    if (typeof msg?.movementMode === 'string') {
+      kingMovementMode = normalizeKingMovementMode(msg.movementMode);
+    }
+
     const rawTargets = Array.isArray(msg?.targets) ? msg.targets : [];
     const targets = [];
     rawTargets.forEach((value) => {
@@ -6564,6 +7011,31 @@ function fallbackRemoveEdgesForNode(nodeId) {
     kingMoveOptionsPending = false;
     kingMovePendingDestinationId = null;
     kingMoveTargetHoveredId = null;
+    kingMoveTargetCosts.clear();
+    kingMovePreviewCrossingEdges.clear();
+    const rawTargetCosts = Array.isArray(msg?.targetCosts) ? msg.targetCosts : [];
+    rawTargetCosts.forEach((entry) => {
+      if (!Array.isArray(entry) || entry.length < 2) return;
+      const id = Number(entry[0]);
+      const cost = Number(entry[1]);
+      if (!Number.isFinite(id) || !Number.isFinite(cost)) return;
+      kingMoveTargetCosts.set(id, cost);
+    });
+    if (isKingSmashMode() && kingMoveTargetCosts.size === 0) {
+      const originNode = nodes.get(kingSelectedNodeId);
+      if (originNode) {
+        kingMoveTargetsList.forEach((targetId) => {
+          if (kingMoveTargetCosts.has(targetId)) return;
+          const targetNode = nodes.get(targetId);
+          if (!targetNode) return;
+          const cost = calculateBridgeCost(originNode, targetNode, false);
+          if (Number.isFinite(cost)) {
+            kingMoveTargetCosts.set(targetId, cost);
+          }
+        });
+      }
+    }
+    updateKingMovePreviewLine();
     redrawStatic();
   }
 
@@ -6571,6 +7043,11 @@ function fallbackRemoveEdgesForNode(nodeId) {
     const message = (msg && typeof msg.message === 'string') ? msg.message : 'Unable to move king';
     showErrorMessage(message);
     kingMovePendingDestinationId = null;
+    kingMovePreviewLine = null;
+    kingMoveTargetCosts.clear();
+    kingMoveCostDisplayActive = false;
+    kingMovePreviewCrossingEdges.clear();
+    hideBridgeCostDisplay();
     clearKingSelection();
   }
 
@@ -6588,22 +7065,26 @@ function fallbackRemoveEdgesForNode(nodeId) {
       return;
     }
 
-    if (Number.isFinite(fromNodeId)) {
-      kingMoveSuppressedNodes.add(fromNodeId);
-      const sourceNode = nodes.get(fromNodeId);
-      if (sourceNode) {
-        sourceNode.kingOwnerId = null;
-        sourceNode.isKing = false;
-        sourceNode.kingCrownHealth = 0;
-        sourceNode.kingCrownMax = 0;
-        sourceNode.kingLastOwnerId = null;
-        sourceNode.kingGraveOwnerId = null;
-        sourceNode.kingCrownFallen = false;
-      }
+    if (typeof msg?.movementMode === 'string') {
+      kingMovementMode = normalizeKingMovementMode(msg.movementMode);
     }
 
+    const sourceNode = Number.isFinite(fromNodeId) ? nodes.get(fromNodeId) : null;
     const targetNode = nodes.get(toNodeId);
+
+    if (sourceNode && Number.isFinite(fromNodeId)) {
+      kingMoveSuppressedNodes.add(fromNodeId);
+      sourceNode.kingOwnerId = null;
+      sourceNode.isKing = false;
+      sourceNode.kingCrownHealth = 0;
+      sourceNode.kingCrownMax = 0;
+      sourceNode.kingLastOwnerId = null;
+      sourceNode.kingGraveOwnerId = null;
+      sourceNode.kingCrownFallen = false;
+    }
+
     if (targetNode) {
+      kingCrownFlightDestinations.delete(toNodeId);
       kingMoveSuppressedNodes.add(toNodeId);
       targetNode.kingOwnerId = playerId;
       targetNode.isKing = true;
@@ -6637,9 +7118,40 @@ function fallbackRemoveEdgesForNode(nodeId) {
       }
       targetNode.kingCrownMax = Number.isFinite(resolvedCrownMax) ? Math.max(0, resolvedCrownMax) : 0;
       targetNode.kingCrownHealth = Number.isFinite(resolvedCrownHealth) ? Math.max(0, resolvedCrownHealth) : targetNode.kingCrownMax;
+
+      if (sourceNode) {
+        beginKingCrownFlight({
+          playerId,
+          fromNodeId,
+          toNodeId,
+          startX: sourceNode.x,
+          startY: sourceNode.y,
+          endX: targetNode.x,
+          endY: targetNode.y,
+          crownHealth: targetNode.kingCrownHealth,
+          crownMax: targetNode.kingCrownMax,
+        });
+      }
+    }
+
+    if (playerId === myPlayerId) {
+      const moveCost = Number(msg?.cost);
+      if (Number.isFinite(moveCost) && moveCost > 0) {
+        const indicatorNode = sourceNode || targetNode;
+        if (indicatorNode) {
+          createMoneyIndicator(
+            indicatorNode.x,
+            indicatorNode.y - 6,
+            `-$${formatCost(moveCost)}`,
+            MONEY_SPEND_COLOR,
+            1800
+          );
+        }
+      }
     }
 
     kingMovePendingDestinationId = null;
+    kingMovePreviewLine = null;
     kingNodesByPlayer.set(playerId, toNodeId);
     if (playerId === myPlayerId) {
       clearKingSelection({ skipRedraw: true });
@@ -6948,11 +7460,14 @@ function fallbackRemoveEdgesForNode(nodeId) {
     graphicsNodes.strokePath();
   }
 
-  function computePlacedKingCrownLayout(screenX, screenY, crownRadius) {
+  function computePlacedKingCrownLayout(screenX, screenY, crownRadius, actualNodeRadius = null) {
     const radius = Math.max(1, crownRadius);
-    const nodeRadiusEquivalent = Math.max(1, radius / KING_CROWN_TO_NODE_RATIO);
-    const verticalOffset = Math.max(6, nodeRadiusEquivalent * 0.35);
-    const baseBottomY = screenY - nodeRadiusEquivalent - verticalOffset;
+    // Use actual node radius if provided, otherwise fall back to computed equivalent
+    const nodeRadiusEquivalent = actualNodeRadius != null && Number.isFinite(actualNodeRadius) && actualNodeRadius > 0
+      ? actualNodeRadius
+      : Math.max(1, radius / KING_CROWN_TO_NODE_RATIO);
+    // Position crown so its bottom sits right at the top edge of the node
+    const baseBottomY = screenY - nodeRadiusEquivalent;
     const layout = createKingCrownLayout(screenX, baseBottomY, radius);
     layout.nodeRadius = nodeRadiusEquivalent;
     return layout;
@@ -6986,20 +7501,38 @@ function fallbackRemoveEdgesForNode(nodeId) {
       crownHealth: crownHealthOpt = null,
       crownMax: crownMaxOpt = null,
       nodeId = null,
+      rotationRadians: rotationOverride = 0,
+      rotationPivot: rotationPivotOverride = null,
+      nodeRadius: actualNodeRadius = null,
+      travelMode = false, // When true, reverse colors: yellow border, player color fill
     } = options;
-    const layout = computePlacedKingCrownLayout(nx, ny, radius);
+    const layout = computePlacedKingCrownLayout(nx, ny, radius, actualNodeRadius);
     if (!layout) return null;
 
-    const strokeColor = Number.isFinite(ownerColor) ? ownerColor : 0x000000;
+    const playerColor = Number.isFinite(ownerColor) ? ownerColor : 0x000000;
     const primaryColor = KING_CROWN_FILL_COLOR;
-    const highlightColor = Number.isFinite(overrideHighlightColor) ? overrideHighlightColor : primaryColor;
-    const fillColor = highlighted ? highlightColor : primaryColor;
-    const baseHex = `#${primaryColor.toString(16).padStart(6, '0')}`;
-    const emptyFillColor = hexToInt(lightenColor(baseHex, 0.35));
-    const outlineWidth = highlighted ? 3.0 : 2.4;
-    const outlineAlpha = highlighted ? 0.98 : 0.9;
-    const emptyFillAlpha = highlighted ? 0.3 : 0.18;
-    const liquidFillAlpha = highlighted ? 0.96 : 0.85;
+    
+    // In travel mode: yellow border, player color body, yellow spike tips
+    // Normal mode: player color border, yellow fill (based on health)
+    let strokeColor, fillColor, emptyFillColor, spikeFillColor;
+    if (travelMode) {
+      strokeColor = primaryColor; // Yellow border
+      fillColor = playerColor; // Player color for body fill
+      emptyFillColor = playerColor; // Also player color (fully filled body)
+      spikeFillColor = primaryColor; // Yellow spike tips
+    } else {
+      strokeColor = playerColor;
+      const highlightColor = Number.isFinite(overrideHighlightColor) ? overrideHighlightColor : primaryColor;
+      fillColor = highlighted ? highlightColor : primaryColor;
+      const baseHex = `#${primaryColor.toString(16).padStart(6, '0')}`;
+      emptyFillColor = hexToInt(lightenColor(baseHex, 0.35));
+      spikeFillColor = fillColor; // Same as body fill in normal mode
+    }
+    
+    const outlineWidth = (highlighted || travelMode) ? 3.0 : 2.4;
+    const outlineAlpha = (highlighted || travelMode) ? 0.98 : 0.9;
+    const emptyFillAlpha = travelMode ? 0.96 : (highlighted ? 0.3 : 0.18); // Full opacity in travel mode
+    const liquidFillAlpha = (highlighted || travelMode) ? 0.96 : 0.85;
 
     let crownMaxValue = Number.isFinite(crownMaxOpt) ? Math.max(0, crownMaxOpt) : 0;
     let crownHealthValue = Number.isFinite(crownHealthOpt) ? Math.max(0, crownHealthOpt) : NaN;
@@ -7025,7 +7558,19 @@ function fallbackRemoveEdgesForNode(nodeId) {
       }
     }
 
-    const bodyOutline = layout.bodyOutlinePoints || layout.outlinePoints;
+    const rotationRadians = Number.isFinite(rotationOverride) ? rotationOverride : 0;
+    const rotationPivot = rotationPivotOverride || { x: nx, y: ny };
+    const hasRotation = Math.abs(rotationRadians) > 1e-3;
+    const transformPoint = hasRotation
+      ? (pt) => rotatePointAround(pt, rotationPivot, rotationRadians)
+      : (pt) => pt;
+    const transformPoints = (points) => {
+      if (!Array.isArray(points)) return points;
+      if (!hasRotation) return points;
+      return points.map(transformPoint);
+    };
+
+    const bodyOutline = transformPoints(layout.bodyOutlinePoints || layout.outlinePoints);
     if (bodyOutline) {
       fillCrownPolygon(bodyOutline, emptyFillColor, emptyFillAlpha);
     }
@@ -7033,13 +7578,23 @@ function fallbackRemoveEdgesForNode(nodeId) {
     if (bodyFillRatio > 0) {
       const fillPoints = buildCrownFillPolygon(layout, Math.min(1, bodyFillRatio));
       if (fillPoints) {
-        fillCrownPolygon(fillPoints, fillColor, liquidFillAlpha);
+        fillCrownPolygon(transformPoints(fillPoints), fillColor, liquidFillAlpha);
       }
     }
 
-    if (tipFillRatio > 0 && Array.isArray(layout.spikes)) {
-      const clampedTip = Math.min(1, tipFillRatio);
-      layout.spikes.forEach((spike) => {
+    // In travel mode, always fill spikes fully with yellow
+    // In normal mode, fill spikes based on health ratio
+    const shouldFillSpikes = travelMode || (tipFillRatio > 0 && Array.isArray(layout.spikes));
+    if (shouldFillSpikes && Array.isArray(layout.spikes)) {
+      const clampedTip = travelMode ? 1 : Math.min(1, tipFillRatio);
+      const spikes = hasRotation
+        ? layout.spikes.map((spike) => ({
+          tip: transformPoint(spike.tip),
+          leftBase: transformPoint(spike.leftBase),
+          rightBase: transformPoint(spike.rightBase),
+        }))
+        : layout.spikes;
+      spikes.forEach((spike) => {
         if (!spike || !spike.tip || !spike.leftBase || !spike.rightBase) return;
         const { tip, leftBase, rightBase } = spike;
         if (clampedTip >= 0.999) {
@@ -7049,7 +7604,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
               { x: rightBase.x, y: rightBase.y },
               { x: tip.x, y: tip.y },
             ],
-            fillColor,
+            spikeFillColor,
             liquidFillAlpha
           );
           return;
@@ -7069,17 +7624,18 @@ function fallbackRemoveEdgesForNode(nodeId) {
             rightInterp,
             leftInterp,
           ],
-          fillColor,
+          spikeFillColor,
           liquidFillAlpha
         );
       });
     }
 
-    strokeCrownPolygon(layout.outlinePoints, outlineWidth, strokeColor, outlineAlpha);
+    const outlinePoints = transformPoints(layout.outlinePoints);
+    strokeCrownPolygon(outlinePoints, outlineWidth, strokeColor, outlineAlpha);
 
     if (highlighted && Number.isFinite(overrideHighlightColor)) {
       strokeCrownPolygon(
-        layout.outlinePoints,
+        outlinePoints,
         Math.max(1, outlineWidth - 1),
         overrideHighlightColor,
         0.5
@@ -7088,8 +7644,12 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
     // Display crown health text inside the crown near the top
     if (sceneRef && nodeId != null && Number.isFinite(crownHealthValue)) {
-      const textX = layout.centerX || nx;
-      const textY = (layout.bounds?.top || ny) + 28; // Position inside the crown near the top
+      // Calculate text position and apply rotation if needed
+      const baseTextX = layout.centerX || nx;
+      const baseTextY = (layout.bounds?.top || ny) + 28; // Position inside the crown near the top
+      const rotatedTextPos = transformPoint({ x: baseTextX, y: baseTextY });
+      const textX = rotatedTextPos.x;
+      const textY = rotatedTextPos.y;
       
       let crownHealthDisplay = crownHealthDisplays.get(nodeId);
       
@@ -7105,11 +7665,13 @@ function fallbackRemoveEdgesForNode(nodeId) {
             color: '#000000',
           })
           .setOrigin(0.5, 0) // center horizontally, anchor at top
-          .setDepth(1001);
+          .setDepth(1001)
+          .setRotation(rotationRadians);
           crownHealthDisplays.set(nodeId, crownHealthDisplay);
         } else {
           crownHealthDisplay.setText(healthText);
           crownHealthDisplay.setPosition(textX, textY);
+          crownHealthDisplay.setRotation(rotationRadians);
           crownHealthDisplay.setVisible(true);
           crownHealthDisplay.setAlpha(1); // Reset alpha in case it was flickering
           // Stop any existing tween
@@ -7130,11 +7692,13 @@ function fallbackRemoveEdgesForNode(nodeId) {
             color: '#FF0000',
           })
           .setOrigin(0.5, 0) // center horizontally, anchor at top
-          .setDepth(1001);
+          .setDepth(1001)
+          .setRotation(rotationRadians);
           crownHealthDisplays.set(nodeId, crownHealthDisplay);
         } else {
           crownHealthDisplay.setText(skullText);
           crownHealthDisplay.setPosition(textX, textY);
+          crownHealthDisplay.setRotation(rotationRadians);
           crownHealthDisplay.setStyle({ fontSize: '20px', color: '#FF0000' });
           crownHealthDisplay.setVisible(true);
         }
@@ -7156,6 +7720,26 @@ function fallbackRemoveEdgesForNode(nodeId) {
     }
 
     return layout;
+  }
+
+  function rotatePointAround(point, pivot, radians) {
+    if (!point) return point;
+    const angle = Number.isFinite(radians) ? radians : 0;
+    if (Math.abs(angle) < 1e-4) return { x: point.x, y: point.y };
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    const px = Number(point.x);
+    const py = Number(point.y);
+    if (!Number.isFinite(px) || !Number.isFinite(py)) return { x: point.x, y: point.y };
+    const cx = Number(pivot?.x);
+    const cy = Number(pivot?.y);
+    if (!Number.isFinite(cx) || !Number.isFinite(cy)) return { x: point.x, y: point.y };
+    const relX = px - cx;
+    const relY = py - cy;
+    return {
+      x: cx + relX * cos - relY * sin,
+      y: cy + relX * sin + relY * cos,
+    };
   }
 
   function drawKingMovePreviewCrown(nx, baseBottomY, radius, options = {}) {
@@ -7193,6 +7777,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
   function drawKingMoveTargetsOverlay() {
     if (!graphicsNodes) return;
     kingMoveTargetRenderInfo.clear();
+    // In smash modes, don't show crown previews - player clicks nodes directly
+    if (isKingSmashMode()) return;
     if (!kingSelectionActive || kingMoveTargetsList.length === 0) return;
     if (!view) return;
 
@@ -7210,9 +7796,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
       const bounceMagnitude = Math.max(3, crownRadius * KING_OPTION_BOUNCE_SCALE);
       const bounce = Math.sin(animationTime * 2.6 + index * 0.8) * bounceMagnitude;
 
-      const verticalGap = nodeRadius + crownRadius * KING_OPTION_VERTICAL_SCALE + KING_OPTION_VERTICAL_EXTRA;
-      const crownOffset = -(verticalGap) - bounce;
-      const crownAnchorY = screenY + crownOffset;
+      // Position crown so its bottom sits right at the top edge of the node
+      const crownAnchorY = screenY - nodeRadius - bounce;
       const defaultCenterY = crownAnchorY - crownRadius * 0.7;
 
       const isHovered = kingMoveTargetHoveredId === nodeId;
@@ -7240,6 +7825,245 @@ function fallbackRemoveEdgesForNode(nodeId) {
         bounds: layout?.bounds ?? null,
         radius: crownRadius,
       });
+    });
+  }
+
+  function updateKingMovePreviewLine() {
+    const prev = kingMovePreviewLine;
+    if (!kingSelectionActive || kingMovePendingDestinationId != null) {
+      if (prev) {
+        kingMovePreviewLine = null;
+        return true;
+      }
+      return false;
+    }
+    const selectedNode = kingSelectedNodeId != null ? nodes.get(kingSelectedNodeId) : null;
+    if (!selectedNode) {
+      if (prev) {
+        kingMovePreviewLine = null;
+        return true;
+      }
+      return false;
+    }
+    const wx = mouseWorldX;
+    const wy = mouseWorldY;
+    if (!Number.isFinite(wx) || !Number.isFinite(wy) || !view) {
+      if (prev) {
+        kingMovePreviewLine = null;
+        return true;
+      }
+      return false;
+    }
+    const [pointerScreenX, pointerScreenY] = worldToScreen(wx, wy);
+    if (!Number.isFinite(pointerScreenX) || !Number.isFinite(pointerScreenY)) {
+      if (prev) {
+        kingMovePreviewLine = null;
+        return true;
+      }
+      return false;
+    }
+    const baseScale = Math.max(1e-6, Math.min(view.scaleX || 0, view.scaleY || 0) || 1);
+    const tolerance = 18 / baseScale;
+    const lockedNodeId = pickNearestNode(wx, wy, tolerance);
+    const lockedTargetId = (lockedNodeId != null && lockedNodeId !== kingSelectedNodeId) ? lockedNodeId : null;
+    
+    // Calculate validity differently for smash mode vs basic mode
+    let lockedInvalid = false;
+    let lockedValid = false;
+    if (lockedTargetId != null) {
+      if (isKingSmashMode()) {
+        // In smash mode, check ownership and affordability dynamically
+        const lockedNode = nodes.get(lockedTargetId);
+        if (lockedNode) {
+          const isOwned = lockedNode.owner === myPlayerId;
+          const cost = calculateBridgeCost(selectedNode, lockedNode, false);
+          const canAfford = goldValue >= cost;
+          lockedInvalid = !isOwned || !canAfford;
+          lockedValid = isOwned && canAfford;
+        } else {
+          lockedInvalid = true;
+        }
+      } else {
+        // Basic mode: use predetermined target list
+        const hasTargets = kingMoveTargets.size > 0;
+        lockedInvalid = hasTargets && !kingMoveTargets.has(lockedTargetId);
+        lockedValid = !lockedInvalid && hasTargets;
+      }
+    }
+    const color = lockedInvalid ? KING_MOVE_PREVIEW_INVALID_COLOR : KING_MOVE_PREVIEW_COLOR;
+    const alpha = lockedInvalid ? KING_MOVE_PREVIEW_INVALID_ALPHA : KING_MOVE_PREVIEW_ALPHA;
+    const next = {
+      startX: selectedNode.x,
+      startY: selectedNode.y,
+      endX: wx,
+      endY: wy,
+      color,
+      alpha,
+      lockedNodeId: lockedTargetId,
+      lockedInvalid,
+      lockedValid,
+    };
+    const changed = !prev ||
+      prev.startX !== next.startX ||
+      prev.startY !== next.startY ||
+      prev.endX !== next.endX ||
+      prev.endY !== next.endY ||
+      prev.color !== next.color ||
+      prev.alpha !== next.alpha ||
+      prev.lockedNodeId !== next.lockedNodeId ||
+      prev.lockedInvalid !== next.lockedInvalid ||
+      prev.lockedValid !== next.lockedValid;
+    if (changed) {
+      kingMovePreviewLine = next;
+      return true;
+    }
+    return false;
+  }
+
+  function drawKingMovePreviewLine() {
+    if (!graphicsNodes || !kingSelectionActive) return;
+    const line = kingMovePreviewLine;
+    if (!line) return;
+    if (!view) return;
+    const selectedNode = kingSelectedNodeId != null ? nodes.get(kingSelectedNodeId) : null;
+    if (!selectedNode) return;
+    const [sx, sy] = worldToScreen(line.startX, line.startY);
+    let [ex, ey] = worldToScreen(line.endX, line.endY);
+    if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(ex) || !Number.isFinite(ey)) return;
+    const dx = ex - sx;
+    const dy = ey - sy;
+    const len = Math.hypot(dx, dy);
+    if (!Number.isFinite(len) || len < 1) return;
+    const baseScale = Math.max(1e-6, Math.min(view.scaleX || 0, view.scaleY || 0) || 1);
+    const startRadius = Math.max(4, calculateNodeRadius(selectedNode, baseScale) + computeStandardKingCrownRadius(baseScale) * 0.35);
+    if (len <= startRadius) return;
+    const ux = dx / len;
+    const uy = dy / len;
+    const clippedSx = sx + ux * startRadius;
+    const clippedSy = sy + uy * startRadius;
+    const shortenEnd = Math.min(24, len * 0.12);
+    const clippedEx = ex - ux * shortenEnd;
+    const clippedEy = ey - uy * shortenEnd;
+    graphicsNodes.lineStyle(KING_MOVE_PREVIEW_WIDTH, line.color ?? KING_MOVE_PREVIEW_COLOR, line.alpha ?? KING_MOVE_PREVIEW_ALPHA);
+    graphicsNodes.beginPath();
+    graphicsNodes.moveTo(clippedSx, clippedSy);
+    graphicsNodes.lineTo(clippedEx, clippedEy);
+    graphicsNodes.strokePath();
+  }
+
+  function maybeShowKingMoveCostDisplay() {
+    // Always show cost when king selection is active in smash mode
+    if (!isKingSmashMode()) {
+      kingMoveCostDisplayActive = false;
+      return false;
+    }
+    if (!kingSelectionActive) {
+      kingMoveCostDisplayActive = false;
+      return false;
+    }
+    const preview = kingMovePreviewLine;
+    if (!preview) {
+      kingMoveCostDisplayActive = false;
+      return false;
+    }
+    const selectedNode = kingSelectedNodeId != null ? nodes.get(kingSelectedNodeId) : null;
+    if (!selectedNode) {
+      kingMoveCostDisplayActive = false;
+      return false;
+    }
+
+    // Calculate distance-based cost using the same normalization as bridge building
+    const baseWidth = screen && Number.isFinite(screen.width) ? screen.width : 275.0;
+    const baseHeight = screen && Number.isFinite(screen.height) ? screen.height : 108.0;
+    const largestSpan = Math.max(1, baseWidth, baseHeight);
+    const scale = 100 / largestSpan;
+    
+    const dx = (preview.endX - preview.startX) * scale;
+    const dy = (preview.endY - preview.startY) * scale;
+    const normalizedDistance = Math.hypot(dx, dy);
+    
+    const cost = Math.max(1, Math.round(BRIDGE_BASE_COST + normalizedDistance * BRIDGE_COST_PER_UNIT));
+    const canAfford = goldValue >= cost;
+    
+    // Calculate midpoint for display
+    const midX = (preview.startX + preview.endX) / 2;
+    const midY = (preview.startY + preview.endY) / 2;
+    const [sx, sy] = worldToScreen(midX, midY);
+    
+    const text = `$${formatCost(cost)}`;
+    const textColor = canAfford ? MONEY_SPEND_COLOR : '#222222';
+    const strokeColor = canAfford ? MONEY_SPEND_STROKE : 'rgba(255,255,255,0.85)';
+    
+    if (!bridgeCostDisplay) {
+      bridgeCostDisplay = sceneRef.add.text(sx, sy - 20, text, {
+        fontFamily: 'monospace',
+        fontSize: '28px',
+        fontStyle: 'bold',
+        color: textColor,
+        stroke: strokeColor,
+        strokeThickness: canAfford ? 3 : 2,
+      })
+      .setOrigin(0.5, 0.5)
+      .setDepth(1000);
+    } else {
+      bridgeCostDisplay.setText(text);
+      bridgeCostDisplay.setPosition(sx, sy - 20);
+      bridgeCostDisplay.setColor(textColor);
+      bridgeCostDisplay.setStroke(strokeColor, canAfford ? 3 : 2);
+      bridgeCostDisplay.setFontSize('28px');
+      bridgeCostDisplay.setFontStyle('bold');
+      bridgeCostDisplay.setVisible(true);
+    }
+    
+    kingMoveCostDisplayActive = true;
+    return true;
+  }
+
+  function updateKingMovePreviewIntersections() {
+    kingMovePreviewCrossingEdges.clear();
+    
+    // Only show crossing edges in smash modes
+    if (!isKingSmashMode()) return;
+    if (!kingSelectionActive) return;
+    
+    const preview = kingMovePreviewLine;
+    if (!preview) return;
+    
+    const selectedNode = kingSelectedNodeId != null ? nodes.get(kingSelectedNodeId) : null;
+    if (!selectedNode) return;
+    
+    // Build the king move segment
+    const candidateSegment = {
+      sx: preview.startX,
+      sy: preview.startY,
+      ex: preview.endX,
+      ey: preview.endY,
+    };
+    
+    edges.forEach((edge, edgeId) => {
+      if (!edge) return;
+      if (edge.removing) return;
+      // Don't mark edges connected to the selected node
+      if (edge.source === kingSelectedNodeId || edge.target === kingSelectedNodeId) return;
+      // Don't mark edges connected to the locked target
+      if (preview.lockedNodeId != null && (edge.source === preview.lockedNodeId || edge.target === preview.lockedNodeId)) return;
+      // Don't mark brass edges (they can't be destroyed)
+      if (edgeBehavesAsBrass(edge)) return;
+      
+      const existingSegments = getEdgeWarpSegments(edge);
+      if (!existingSegments.length) return;
+      
+      for (const existing of existingSegments) {
+        if (!existing) continue;
+        if ([candidateSegment.sx, candidateSegment.sy, candidateSegment.ex, candidateSegment.ey, 
+             existing.sx, existing.sy, existing.ex, existing.ey].every((value) => Number.isFinite(value)) &&
+          segmentsIntersect(candidateSegment.sx, candidateSegment.sy, candidateSegment.ex, candidateSegment.ey, 
+                           existing.sx, existing.sy, existing.ex, existing.ey)
+        ) {
+          kingMovePreviewCrossingEdges.add(edgeId);
+          return; // Found intersection, no need to check more segments for this edge
+        }
+      }
     });
   }
 
@@ -7500,25 +8324,37 @@ function fallbackRemoveEdgesForNode(nodeId) {
       const shouldDrawFallenKing = kingOwnerId == null && fallenOwnerId != null;
       const hideKingVisual = shouldHideCrownForHiddenStart(n);
       if (winCondition === 'king') {
-        if (hideKingVisual) {
+        const suppressKingVisual = !hideKingVisual && kingOwnerId != null && kingCrownFlightDestinations.has(id);
+        if (hideKingVisual || suppressKingVisual) {
           if (crownHealthDisplays.has(id)) {
             destroyCrownHealthDisplay(id);
           }
         } else if (kingOwnerId != null || shouldDrawFallenKing) {
           const crownOwnerId = kingOwnerId != null ? kingOwnerId : fallenOwnerId;
           const crownColor = ownerToColor(crownOwnerId);
-          const isSelectedKing = kingOwnerId != null && kingSelectionActive && kingSelectedNodeId === id;
+          // Crown is in "travel mode" (reversed colors) when selected, until destination is chosen
+          const isInTravelMode = kingOwnerId != null && kingSelectionActive && kingSelectedNodeId === id && kingMovePendingDestinationId == null;
           const selectionColor = ownerToSecondaryColor(myPlayerId) || ownerToColor(myPlayerId) || crownColor || 0x000000;
           const kingCrownRadius = computeStandardKingCrownRadius(baseScale);
           if (kingOwnerId != null && kingAttackAlertActive && kingAttackNodeId === id) {
             drawKingDistressWaves(nx, ny, kingCrownRadius, crownColor);
           }
+          // Get stored crown angle offset to avoid pipe overlap, or compute if not yet stored
+          let crownAngleOffset = kingCrownAngleOffsets.get(id);
+          if (crownAngleOffset == null && kingOwnerId != null) {
+            crownAngleOffset = computeOptimalCrownAngle(id);
+            kingCrownAngleOffsets.set(id, crownAngleOffset);
+          }
           drawKingCrown(nx, ny, kingCrownRadius, crownColor, {
-            highlighted: isSelectedKing,
+            highlighted: false, // No longer use highlighted, use travelMode instead
             highlightColor: selectionColor,
             crownHealth: kingOwnerId != null && Number.isFinite(n.kingCrownHealth) ? n.kingCrownHealth : 0,
             crownMax: kingOwnerId != null && Number.isFinite(n.kingCrownMax) ? n.kingCrownMax : null,
             nodeId: id,
+            rotationRadians: crownAngleOffset || 0,
+            rotationPivot: { x: nx, y: ny },
+            nodeRadius: r,
+            travelMode: isInTravelMode,
           });
         } else if (crownHealthDisplays.has(id)) {
           destroyCrownHealthDisplay(id);
@@ -7535,8 +8371,9 @@ function fallbackRemoveEdgesForNode(nodeId) {
       }
       
       // Hover effect: show if node can be targeted for flow
-      // Only show this when no ability is active to avoid conflicting with ability-specific highlights
-      if (hoveredNodeId === id && myPicked && !activeAbility) {
+      // Only show this when no ability is active and king selection not active to avoid conflicting highlights
+      const kingMoveLockedOnThis = kingSelectionActive && kingMovePreviewLine && kingMovePreviewLine.lockedNodeId === id;
+      if (hoveredNodeId === id && myPicked && !activeAbility && !kingMoveLockedOnThis) {
         if (sandboxHoverEnabled || canTargetNodeForFlow(id)) {
           const myColor = ownerToColor(myPlayerId);
           graphicsNodes.lineStyle(3, myColor, 0.8);
@@ -7581,6 +8418,17 @@ function fallbackRemoveEdgesForNode(nodeId) {
         graphicsNodes.strokeCircle(nx, ny, r + 3);
       }
       
+      // King move target lock: show yellow outline for valid, black for invalid
+      if (kingSelectionActive && kingMovePreviewLine && kingMovePreviewLine.lockedNodeId === id) {
+        if (kingMovePreviewLine.lockedValid) {
+          graphicsNodes.lineStyle(3, KING_MOVE_PREVIEW_COLOR, 0.9); // yellow highlight for valid
+          graphicsNodes.strokeCircle(nx, ny, r + 3);
+        } else if (kingMovePreviewLine.lockedInvalid) {
+          graphicsNodes.lineStyle(3, 0x000000, 0.8); // black highlight for invalid
+          graphicsNodes.strokeCircle(nx, ny, r + 3);
+        }
+      }
+      
       // Targeting visual indicator: pulsing ring (grows then snaps back), darkens as it grows
       if (persistentTargeting && currentTargetNodeId === id) {
         // Suppress showing the ring if this node has an outgoing edge by me that is on/flowing
@@ -7618,13 +8466,20 @@ function fallbackRemoveEdgesForNode(nodeId) {
     }
 
     drawSinkingNodes();
+    drawKingCrownFlights();
     drawFallenKingMarkers();
 
+    drawKingMovePreviewLine();
     drawKingMoveTargetsOverlay();
 
     // After drawing nodes / previews:
-    if (!(activeAbility === 'bridge1way' && bridgeFirstNode !== null && hoveredNodeId !== null)) {
+    const keepKingMoveCost = maybeShowKingMoveCostDisplay();
+    const shouldKeepBridgeCostDisplay = (activeAbility === 'bridge1way' && bridgeFirstNode !== null && hoveredNodeId !== null) || keepKingMoveCost;
+    if (!shouldKeepBridgeCostDisplay) {
       hideBridgeCostDisplay();
+    }
+    if (!keepKingMoveCost) {
+      kingMoveCostDisplayActive = false;
     }
 
     
@@ -7706,6 +8561,117 @@ function fallbackRemoveEdgesForNode(nodeId) {
         graphicsNodes.lineStyle(2, 0xffffff, ringAlpha);
         graphicsNodes.strokeCircle(nx, ny, radius + 4);
       }
+    });
+  }
+
+  function drawKingCrownFlights() {
+    if (!graphicsNodes || kingCrownFlights.length === 0) return;
+    const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
+    kingCrownFlights.forEach((flight) => {
+      if (
+        !flight ||
+        !Number.isFinite(flight.startX) ||
+        !Number.isFinite(flight.startY) ||
+        !Number.isFinite(flight.endX) ||
+        !Number.isFinite(flight.endY)
+      ) {
+        return;
+      }
+      const timing = resolveKingCrownFlightTiming(flight);
+      const startTime = Number(flight.startTime) || 0;
+      const [startScreenX, startScreenY] = worldToScreen(flight.startX, flight.startY);
+      const [endScreenX, endScreenY] = worldToScreen(flight.endX, flight.endY);
+      const elapsedTicks = timing.tickSeconds > 0
+        ? Math.max(0, (animationTime - startTime) / timing.tickSeconds)
+        : Infinity;
+      const travelStartTick = timing.preSpinTicks;
+      const travelEndTick = timing.preSpinTicks + timing.travelTicks;
+      let currentX = flight.startX;
+      let currentY = flight.startY;
+      
+      // Look up source and destination nodes to get actual radii
+      const sourceNode = Number.isFinite(flight.fromNodeId) ? nodes.get(flight.fromNodeId) : null;
+      const destNode = Number.isFinite(flight.toNodeId) ? nodes.get(flight.toNodeId) : null;
+      const sourceNodeRadius = sourceNode ? Math.max(1, calculateNodeRadius(sourceNode, baseScale)) : null;
+      const destNodeRadius = destNode ? Math.max(1, calculateNodeRadius(destNode, baseScale)) : null;
+      
+      // Get the crown's starting and ending angle offsets (to avoid pipe overlap)
+      const startAngleOffset = Number.isFinite(flight.startAngleOffset) ? flight.startAngleOffset : 0;
+      const endAngleOffset = Number.isFinite(flight.endAngleOffset) ? flight.endAngleOffset : 0;
+      const travelHeading = Number.isFinite(flight.rotationTarget) ? flight.rotationTarget : 0;
+      
+      let rotationRadians = travelHeading;
+      let rotationPivot = null;
+      let currentNodeRadius = null; // Track which node radius to use for crown positioning
+      if (elapsedTicks < travelStartTick) {
+        // Pre-spin: interpolate from startAngleOffset to travelHeading
+        const spinProgress = Math.max(0, Math.min(1, travelStartTick <= 0 ? 1 : elapsedTicks / travelStartTick));
+        const eased = easeInOutCubic(spinProgress);
+        rotationRadians = startAngleOffset + (travelHeading - startAngleOffset) * eased;
+        rotationPivot = { x: startScreenX, y: startScreenY };
+        currentNodeRadius = sourceNodeRadius;
+      } else if (elapsedTicks < travelEndTick) {
+        // Travel phase: maintain travel heading
+        const travelProgress = Math.max(
+          0,
+          Math.min(1, timing.travelTicks <= 0 ? 1 : (elapsedTicks - travelStartTick) / timing.travelTicks)
+        );
+        const easedTravel = easeOutCubic(travelProgress);
+        currentX = flight.startX + (flight.endX - flight.startX) * easedTravel;
+        currentY = flight.startY + (flight.endY - flight.startY) * easedTravel;
+        rotationRadians = travelHeading;
+        rotationPivot = null;
+        // During travel, interpolate the node radius for smooth crown size transition
+        if (sourceNodeRadius != null && destNodeRadius != null) {
+          currentNodeRadius = sourceNodeRadius + (destNodeRadius - sourceNodeRadius) * easedTravel;
+        } else {
+          currentNodeRadius = sourceNodeRadius || destNodeRadius;
+        }
+      } else {
+        // Post-spin: interpolate from travelHeading to endAngleOffset
+        const postElapsed = elapsedTicks - travelEndTick;
+        const postTicks = timing.postSpinTicks;
+        const spinProgress = Math.max(
+          0,
+          Math.min(1, postTicks <= 0 ? 1 : Math.min(postElapsed / postTicks, 1))
+        );
+        const eased = easeInOutCubic(spinProgress);
+        rotationRadians = travelHeading + (endAngleOffset - travelHeading) * eased;
+        currentX = flight.endX;
+        currentY = flight.endY;
+        rotationPivot = { x: endScreenX, y: endScreenY };
+        currentNodeRadius = destNodeRadius;
+      }
+      const [screenX, screenY] = worldToScreen(currentX, currentY);
+      if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return;
+      if (!rotationPivot || !Number.isFinite(rotationPivot.x) || !Number.isFinite(rotationPivot.y)) {
+        if (elapsedTicks < travelStartTick && Number.isFinite(startScreenX) && Number.isFinite(startScreenY)) {
+          rotationPivot = { x: startScreenX, y: startScreenY };
+        } else if (elapsedTicks >= travelEndTick && Number.isFinite(endScreenX) && Number.isFinite(endScreenY)) {
+          rotationPivot = { x: endScreenX, y: endScreenY };
+        } else {
+          rotationPivot = { x: screenX, y: screenY };
+        }
+      }
+      const crownRadius = computeStandardKingCrownRadius(baseScale);
+      const playerColor = ownerToColor(flight.playerId);
+      
+      // Crown is in travel mode (reversed colors: yellow border, player fill) until post-spin is complete
+      // Health should only show after the crown has finished its post-spin (settled at destination)
+      const postSpinComplete = elapsedTicks >= travelEndTick + timing.postSpinTicks;
+      const showHealth = postSpinComplete;
+      const usesTravelMode = !postSpinComplete; // Travel mode until fully settled
+      
+      drawKingCrown(screenX, screenY, crownRadius, playerColor, {
+        highlighted: false,
+        crownHealth: showHealth ? flight.crownHealth : null,
+        crownMax: showHealth ? flight.crownMax : null,
+        nodeId: null,
+        rotationRadians,
+        rotationPivot,
+        nodeRadius: currentNodeRadius,
+        travelMode: usesTravelMode,
+      });
     });
   }
 
@@ -7865,10 +8831,13 @@ function fallbackRemoveEdgesForNode(nodeId) {
       if (!marker) return;
       const [nx, ny] = worldToScreen(marker.x, marker.y);
       const crownRadius = computeStandardKingCrownRadius(baseScale);
+      const node = nodes.get(nodeId);
+      const nodeRadius = node ? Math.max(1, calculateNodeRadius(node, baseScale)) : null;
       drawKingCrown(nx, ny, crownRadius, ownerToColor(marker.ownerId), {
         crownHealth: 0,
         crownMax: 0,
         nodeId,
+        nodeRadius,
       });
     });
   }
@@ -8808,6 +9777,53 @@ function fallbackRemoveEdgesForNode(nodeId) {
         return;
       }
       const [pointerScreenX, pointerScreenY] = worldToScreen(wx, wy);
+      
+      // In smash modes, click nodes directly instead of crown previews
+      if (isKingSmashMode()) {
+        // First check if clicking the origin crown (don't clear selection)
+        const originNode = nodes.get(kingSelectedNodeId);
+        if (originNode) {
+          const [originScreenX, originScreenY] = worldToScreen(originNode.x, originNode.y);
+          const originCrownRadius = computeStandardKingCrownRadius(baseScale);
+          const originNodeRadius = Math.max(1, calculateNodeRadius(originNode, baseScale));
+          const originLayout = computePlacedKingCrownLayout(originScreenX, originScreenY, originCrownRadius, originNodeRadius);
+          // Use rotated crown center for hitbox detection
+          const rotatedCenter = getRotatedCrownCenter(kingSelectedNodeId, originScreenX, originScreenY, originLayout);
+          const dx = pointerScreenX - rotatedCenter.x;
+          const dy = pointerScreenY - rotatedCenter.y;
+          const hitRadius = originLayout?.hitRadius ?? (originCrownRadius + 10);
+          const withinRadius = dx * dx + dy * dy <= hitRadius * hitRadius;
+          if (withinRadius) {
+            return;
+          }
+        }
+        
+        // Check if clicking a destination node
+        const clickedNodeId = pickNearestNode(wx, wy, 18 / baseScale);
+        if (clickedNodeId != null && clickedNodeId !== kingSelectedNodeId) {
+          const clickedNode = nodes.get(clickedNodeId);
+          const selectedNode = nodes.get(kingSelectedNodeId);
+          if (clickedNode && selectedNode && clickedNode.owner === myPlayerId) {
+            // Check if player can afford the move
+            const cost = calculateBridgeCost(selectedNode, clickedNode, false);
+            if (goldValue >= cost) {
+              sendKingMoveRequest(clickedNodeId);
+              return;
+            } else {
+              showErrorMessage('Not enough gold for king movement');
+              return;
+            }
+          } else if (clickedNode && clickedNode.owner !== myPlayerId) {
+            showErrorMessage('King can only move to your own nodes');
+            return;
+          }
+        }
+        
+        clearKingSelection();
+        return;
+      }
+      
+      // Basic mode: use crown previews
       const crownTargetId = pickKingMoveTargetFromScreen(pointerScreenX, pointerScreenY);
       if (crownTargetId != null) {
         sendKingMoveRequest(crownTargetId);
@@ -8817,12 +9833,15 @@ function fallbackRemoveEdgesForNode(nodeId) {
       if (originNode) {
         const [originScreenX, originScreenY] = worldToScreen(originNode.x, originNode.y);
         const originCrownRadius = computeStandardKingCrownRadius(baseScale);
-        const originLayout = computePlacedKingCrownLayout(originScreenX, originScreenY, originCrownRadius);
-        const withinBounds = originLayout && isPointWithinRect(pointerScreenX, pointerScreenY, originLayout.bounds);
-        const dx = pointerScreenX - (originLayout?.centerX ?? originScreenX);
-        const dy = pointerScreenY - (originLayout?.centerY ?? originScreenY);
-        const withinRadius = originLayout ? (dx * dx + dy * dy <= originLayout.hitRadius * originLayout.hitRadius) : false;
-        if (withinBounds || withinRadius) {
+        const originNodeRadius = Math.max(1, calculateNodeRadius(originNode, baseScale));
+        const originLayout = computePlacedKingCrownLayout(originScreenX, originScreenY, originCrownRadius, originNodeRadius);
+        // Use rotated crown center for hitbox detection
+        const rotatedCenter = getRotatedCrownCenter(kingSelectedNodeId, originScreenX, originScreenY, originLayout);
+        const dx = pointerScreenX - rotatedCenter.x;
+        const dy = pointerScreenY - rotatedCenter.y;
+        const hitRadius = originLayout?.hitRadius ?? (originCrownRadius + 10);
+        const withinRadius = dx * dx + dy * dy <= hitRadius * hitRadius;
+        if (withinRadius) {
           return;
         }
       }
@@ -9081,7 +10100,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
       }
     }
 
-    if (kingSelectionActive && view) {
+    // In smash modes, no crown previews to hover over
+    if (kingSelectionActive && view && !isKingSmashMode()) {
       const [pointerScreenX, pointerScreenY] = worldToScreen(wx, wy);
       const hoveredTargetId = pickKingMoveTargetFromScreen(pointerScreenX, pointerScreenY);
       if (hoveredTargetId !== kingMoveTargetHoveredId) {
@@ -9090,6 +10110,15 @@ function fallbackRemoveEdgesForNode(nodeId) {
       }
     } else if (!kingSelectionActive && kingMoveTargetHoveredId !== null) {
       kingMoveTargetHoveredId = null;
+      needsRedraw = true;
+    } else if (isKingSmashMode() && kingMoveTargetHoveredId !== null) {
+      kingMoveTargetHoveredId = null;
+      needsRedraw = true;
+    }
+
+    const previewChanged = updateKingMovePreviewLine();
+    if (previewChanged) {
+      updateKingMovePreviewIntersections();
       needsRedraw = true;
     }
 
@@ -9121,12 +10150,15 @@ function fallbackRemoveEdgesForNode(nodeId) {
           const [pointerX, pointerY] = getPointerScreenCoords(ev);
           const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
           const crownRadius = computeStandardKingCrownRadius(baseScale);
-          const layout = computePlacedKingCrownLayout(screenX, screenY, crownRadius);
-          const withinBounds = layout && isPointWithinRect(pointerX, pointerY, layout.bounds);
-          const dx = pointerX - (layout?.centerX ?? screenX);
-          const dy = pointerY - (layout?.centerY ?? screenY);
-          const withinRadius = layout ? (dx * dx + dy * dy <= layout.hitRadius * layout.hitRadius) : false;
-          if (withinBounds || withinRadius) {
+          const kingNodeRadius = Math.max(1, calculateNodeRadius(kingNode, baseScale));
+          const layout = computePlacedKingCrownLayout(screenX, screenY, crownRadius, kingNodeRadius);
+          // Use rotated crown center for hitbox detection
+          const rotatedCenter = getRotatedCrownCenter(myKingNodeId, screenX, screenY, layout);
+          const dx = pointerX - rotatedCenter.x;
+          const dy = pointerY - rotatedCenter.y;
+          const hitRadius = layout?.hitRadius ?? (crownRadius + 10);
+          const withinRadius = dx * dx + dy * dy <= hitRadius * hitRadius;
+          if (withinRadius) {
             startKingSelection(myKingNodeId);
             ev.preventDefault();
             ev.stopPropagation();
@@ -9138,6 +10170,13 @@ function fallbackRemoveEdgesForNode(nodeId) {
     }
 
     if (kingMovePendingDestinationId != null) {
+      return;
+    }
+
+    // In smash modes, destination is handled via node clicks in the main click handler
+    // This mousedown handler only handles crown preview clicks (basic mode)
+    if (isKingSmashMode()) {
+      // Don't handle here - let the main click handler process node clicks
       return;
     }
 
@@ -10631,11 +11670,19 @@ function drawPreviewTriangle(cx, cy, baseW, height, angle, color, useBrass = fal
       }
     }
 
-    const removalHighlight = (!removal &&
+    const bridgeRemovalHighlight = (!removal &&
       activeAbility === 'bridge1way' &&
       bridgePreviewWillBreakPipes &&
       brassPreviewIntersections.has(edgeId)
     );
+    
+    const kingMoveRemovalHighlight = (!removal &&
+      kingSelectionActive &&
+      isKingSmashMode() &&
+      kingMovePreviewCrossingEdges.has(edgeId)
+    );
+    
+    const removalHighlight = bridgeRemovalHighlight || kingMoveRemovalHighlight;
 
     const triangleOverrideColor = hoverColor;
     const triangleHoverFlag = !removal && (hoverAllowed || removalHighlight);
