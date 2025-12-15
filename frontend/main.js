@@ -7590,6 +7590,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
   function drawKingMoveTargetsOverlay() {
     if (!graphicsNodes) return;
     kingMoveTargetRenderInfo.clear();
+    // In smash modes, don't show crown previews - player clicks nodes directly
+    if (isKingSmashMode()) return;
     if (!kingSelectionActive || kingMoveTargetsList.length === 0) return;
     if (!view) return;
 
@@ -7676,9 +7678,31 @@ function fallbackRemoveEdgesForNode(nodeId) {
     const baseScale = Math.max(1e-6, Math.min(view.scaleX || 0, view.scaleY || 0) || 1);
     const tolerance = 18 / baseScale;
     const lockedNodeId = pickNearestNode(wx, wy, tolerance);
-    const hasTargets = kingMoveTargets.size > 0;
     const lockedTargetId = (lockedNodeId != null && lockedNodeId !== kingSelectedNodeId) ? lockedNodeId : null;
-    const lockedInvalid = hasTargets && lockedTargetId != null && !kingMoveTargets.has(lockedTargetId);
+    
+    // Calculate validity differently for smash mode vs basic mode
+    let lockedInvalid = false;
+    let lockedValid = false;
+    if (lockedTargetId != null) {
+      if (isKingSmashMode()) {
+        // In smash mode, check ownership and affordability dynamically
+        const lockedNode = nodes.get(lockedTargetId);
+        if (lockedNode) {
+          const isOwned = lockedNode.owner === myPlayerId;
+          const cost = calculateBridgeCost(selectedNode, lockedNode, false);
+          const canAfford = goldValue >= cost;
+          lockedInvalid = !isOwned || !canAfford;
+          lockedValid = isOwned && canAfford;
+        } else {
+          lockedInvalid = true;
+        }
+      } else {
+        // Basic mode: use predetermined target list
+        const hasTargets = kingMoveTargets.size > 0;
+        lockedInvalid = hasTargets && !kingMoveTargets.has(lockedTargetId);
+        lockedValid = !lockedInvalid && hasTargets;
+      }
+    }
     const color = lockedInvalid ? KING_MOVE_PREVIEW_INVALID_COLOR : KING_MOVE_PREVIEW_COLOR;
     const alpha = lockedInvalid ? KING_MOVE_PREVIEW_INVALID_ALPHA : KING_MOVE_PREVIEW_ALPHA;
     const next = {
@@ -7690,6 +7714,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
       alpha,
       lockedNodeId: lockedTargetId,
       lockedInvalid,
+      lockedValid,
     };
     const changed = !prev ||
       prev.startX !== next.startX ||
@@ -7699,7 +7724,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
       prev.color !== next.color ||
       prev.alpha !== next.alpha ||
       prev.lockedNodeId !== next.lockedNodeId ||
-      prev.lockedInvalid !== next.lockedInvalid;
+      prev.lockedInvalid !== next.lockedInvalid ||
+      prev.lockedValid !== next.lockedValid;
     if (changed) {
       kingMovePreviewLine = next;
       return true;
@@ -8145,8 +8171,9 @@ function fallbackRemoveEdgesForNode(nodeId) {
       }
       
       // Hover effect: show if node can be targeted for flow
-      // Only show this when no ability is active to avoid conflicting with ability-specific highlights
-      if (hoveredNodeId === id && myPicked && !activeAbility) {
+      // Only show this when no ability is active and king selection not active to avoid conflicting highlights
+      const kingMoveLockedOnThis = kingSelectionActive && kingMovePreviewLine && kingMovePreviewLine.lockedNodeId === id;
+      if (hoveredNodeId === id && myPicked && !activeAbility && !kingMoveLockedOnThis) {
         if (sandboxHoverEnabled || canTargetNodeForFlow(id)) {
           const myColor = ownerToColor(myPlayerId);
           graphicsNodes.lineStyle(3, myColor, 0.8);
@@ -8189,6 +8216,17 @@ function fallbackRemoveEdgesForNode(nodeId) {
       if (hoveredNodeId === id && activeAbility === 'destroy' && n.owner === myPlayerId) {
         graphicsNodes.lineStyle(3, 0x000000, 0.8); // black highlight
         graphicsNodes.strokeCircle(nx, ny, r + 3);
+      }
+      
+      // King move target lock: show yellow outline for valid, black for invalid
+      if (kingSelectionActive && kingMovePreviewLine && kingMovePreviewLine.lockedNodeId === id) {
+        if (kingMovePreviewLine.lockedValid) {
+          graphicsNodes.lineStyle(3, KING_MOVE_PREVIEW_COLOR, 0.9); // yellow highlight for valid
+          graphicsNodes.strokeCircle(nx, ny, r + 3);
+        } else if (kingMovePreviewLine.lockedInvalid) {
+          graphicsNodes.lineStyle(3, 0x000000, 0.8); // black highlight for invalid
+          graphicsNodes.strokeCircle(nx, ny, r + 3);
+        }
       }
       
       // Targeting visual indicator: pulsing ring (grows then snaps back), darkens as it grows
@@ -9506,6 +9544,51 @@ function fallbackRemoveEdgesForNode(nodeId) {
         return;
       }
       const [pointerScreenX, pointerScreenY] = worldToScreen(wx, wy);
+      
+      // In smash modes, click nodes directly instead of crown previews
+      if (isKingSmashMode()) {
+        // First check if clicking the origin crown (don't clear selection)
+        const originNode = nodes.get(kingSelectedNodeId);
+        if (originNode) {
+          const [originScreenX, originScreenY] = worldToScreen(originNode.x, originNode.y);
+          const originCrownRadius = computeStandardKingCrownRadius(baseScale);
+          const originNodeRadius = Math.max(1, calculateNodeRadius(originNode, baseScale));
+          const originLayout = computePlacedKingCrownLayout(originScreenX, originScreenY, originCrownRadius, originNodeRadius);
+          const withinBounds = originLayout && isPointWithinRect(pointerScreenX, pointerScreenY, originLayout.bounds);
+          const dx = pointerScreenX - (originLayout?.centerX ?? originScreenX);
+          const dy = pointerScreenY - (originLayout?.centerY ?? originScreenY);
+          const withinRadius = originLayout ? (dx * dx + dy * dy <= originLayout.hitRadius * originLayout.hitRadius) : false;
+          if (withinBounds || withinRadius) {
+            return;
+          }
+        }
+        
+        // Check if clicking a destination node
+        const clickedNodeId = pickNearestNode(wx, wy, 18 / baseScale);
+        if (clickedNodeId != null && clickedNodeId !== kingSelectedNodeId) {
+          const clickedNode = nodes.get(clickedNodeId);
+          const selectedNode = nodes.get(kingSelectedNodeId);
+          if (clickedNode && selectedNode && clickedNode.owner === myPlayerId) {
+            // Check if player can afford the move
+            const cost = calculateBridgeCost(selectedNode, clickedNode, false);
+            if (goldValue >= cost) {
+              sendKingMoveRequest(clickedNodeId);
+              return;
+            } else {
+              showErrorMessage('Not enough gold for king movement');
+              return;
+            }
+          } else if (clickedNode && clickedNode.owner !== myPlayerId) {
+            showErrorMessage('King can only move to your own nodes');
+            return;
+          }
+        }
+        
+        clearKingSelection();
+        return;
+      }
+      
+      // Basic mode: use crown previews
       const crownTargetId = pickKingMoveTargetFromScreen(pointerScreenX, pointerScreenY);
       if (crownTargetId != null) {
         sendKingMoveRequest(crownTargetId);
@@ -9780,7 +9863,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
       }
     }
 
-    if (kingSelectionActive && view) {
+    // In smash modes, no crown previews to hover over
+    if (kingSelectionActive && view && !isKingSmashMode()) {
       const [pointerScreenX, pointerScreenY] = worldToScreen(wx, wy);
       const hoveredTargetId = pickKingMoveTargetFromScreen(pointerScreenX, pointerScreenY);
       if (hoveredTargetId !== kingMoveTargetHoveredId) {
@@ -9788,6 +9872,9 @@ function fallbackRemoveEdgesForNode(nodeId) {
         needsRedraw = true;
       }
     } else if (!kingSelectionActive && kingMoveTargetHoveredId !== null) {
+      kingMoveTargetHoveredId = null;
+      needsRedraw = true;
+    } else if (isKingSmashMode() && kingMoveTargetHoveredId !== null) {
       kingMoveTargetHoveredId = null;
       needsRedraw = true;
     }
@@ -9844,6 +9931,13 @@ function fallbackRemoveEdgesForNode(nodeId) {
     }
 
     if (kingMovePendingDestinationId != null) {
+      return;
+    }
+
+    // In smash modes, destination is handled via node clicks in the main click handler
+    // This mousedown handler only handles crown preview clicks (basic mode)
+    if (isKingSmashMode()) {
+      // Don't handle here - let the main click handler process node clicks
       return;
     }
 
