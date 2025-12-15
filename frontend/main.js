@@ -185,6 +185,12 @@
   let kingMoveTargetHoveredId = null;
   let kingMovePendingDestinationId = null;
   const kingMoveSuppressedNodes = new Set();
+  const kingCrownFlights = [];
+  const kingCrownFlightDestinations = new Set();
+
+  const KING_CROWN_TRAVEL_PIXELS_PER_SECOND = 620;
+  const KING_CROWN_MIN_TRAVEL_DURATION = 0.35;
+  const KING_CROWN_MAX_TRAVEL_DURATION = 1.5;
 
   const KING_STANDARD_NODE_SIZE = 80;
   const KING_STANDARD_RADIUS_BASE = 0.15 * Math.pow(KING_STANDARD_NODE_SIZE, 0.6);
@@ -4396,6 +4402,31 @@ function clearBridgeSelection() {
     return needsRedraw;
   }
 
+  function updateKingCrownFlights() {
+    if (kingCrownFlights.length === 0) return false;
+    let anyActive = false;
+    for (let i = kingCrownFlights.length - 1; i >= 0; i -= 1) {
+      const flight = kingCrownFlights[i];
+      if (!flight) {
+        kingCrownFlights.splice(i, 1);
+        continue;
+      }
+      const duration = Math.max(KING_CROWN_MIN_TRAVEL_DURATION, Number(flight.duration) || 0);
+      const startTime = Number(flight.startTime) || 0;
+      const elapsed = animationTime - startTime;
+      if (!Number.isFinite(elapsed) || elapsed >= duration) {
+        if (Number.isFinite(flight.toNodeId)) {
+          kingCrownFlightDestinations.delete(flight.toNodeId);
+        }
+        kingCrownFlights.splice(i, 1);
+        anyActive = true;
+      } else {
+        anyActive = true;
+      }
+    }
+    return anyActive;
+  }
+
   function updateSinkingNodes() {
     if (sinkingNodes.size === 0) return false;
     const finished = [];
@@ -4422,6 +4453,7 @@ function clearBridgeSelection() {
     // Update animation timer for juice flow
     animationTime += 1/60; // Assuming 60 FPS, increment by frame time
     const nodesAnimating = updateNodeAnimations();
+    const kingFlightsActive = updateKingCrownFlights();
 
     // Update money indicators
     updateMoneyIndicators();
@@ -4465,6 +4497,7 @@ function clearBridgeSelection() {
       prePipeStateChanged ||
       kingTargetsAnimating ||
       kingSelectionPending ||
+      kingFlightsActive ||
       redrawForKingAlert ||
       sinkingActive
     ) {
@@ -4647,6 +4680,7 @@ function clearBridgeSelection() {
     fallenKingMarkers.clear();
     sinkingNodes.clear();
     kingNodesByPlayer.clear();
+    clearKingCrownFlights();
     clearKingAttackAlert();
     kingAttackWasActive = false;
     kingCrownDefaultMax = coerceKingCrownHealth(selectedSettings.kingCrownHealth);
@@ -6445,6 +6479,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     edges.clear();
     nodes.clear();
     kingNodesByPlayer.clear();
+    clearKingCrownFlights();
     clearKingAttackAlert();
     kingAttackWasActive = false;
     hoveredNodeId = null;
@@ -6498,6 +6533,92 @@ function fallbackRemoveEdgesForNode(nodeId) {
     if (!skipRedraw) {
       redrawStatic();
     }
+  }
+
+  function clearKingCrownFlights() {
+    kingCrownFlights.length = 0;
+    kingCrownFlightDestinations.clear();
+  }
+
+  function removeKingCrownFlightsForNode(nodeId) {
+    if (!Number.isFinite(nodeId)) return;
+    for (let i = kingCrownFlights.length - 1; i >= 0; i -= 1) {
+      const flight = kingCrownFlights[i];
+      if (!flight) continue;
+      if (flight.toNodeId === nodeId || flight.fromNodeId === nodeId) {
+        kingCrownFlights.splice(i, 1);
+      }
+    }
+    kingCrownFlightDestinations.delete(nodeId);
+  }
+
+  function estimateKingCrownFlightDuration(fromX, fromY, toX, toY) {
+    const safeSpeed = Math.max(1e-3, Number(KING_CROWN_TRAVEL_PIXELS_PER_SECOND) || 0);
+    const [startScreenX, startScreenY] = worldToScreen(fromX, fromY);
+    const [endScreenX, endScreenY] = worldToScreen(toX, toY);
+    let distance = Math.hypot(endScreenX - startScreenX, endScreenY - startScreenY);
+    if (!Number.isFinite(distance) || distance <= 0) {
+      distance = Math.hypot(toX - fromX, toY - fromY);
+    }
+    if (!Number.isFinite(distance) || distance <= 0 || !Number.isFinite(safeSpeed) || safeSpeed <= 0) {
+      return KING_CROWN_MIN_TRAVEL_DURATION;
+    }
+    const duration = distance / safeSpeed;
+    return Math.max(
+      KING_CROWN_MIN_TRAVEL_DURATION,
+      Math.min(KING_CROWN_MAX_TRAVEL_DURATION, duration)
+    );
+  }
+
+  function beginKingCrownFlight(options = {}) {
+    const {
+      playerId,
+      fromNodeId,
+      toNodeId,
+      startX,
+      startY,
+      endX,
+      endY,
+      crownHealth,
+      crownMax,
+    } = options;
+    if (
+      !Number.isFinite(playerId) ||
+      !Number.isFinite(startX) ||
+      !Number.isFinite(startY) ||
+      !Number.isFinite(endX) ||
+      !Number.isFinite(endY) ||
+      fromNodeId === toNodeId
+    ) {
+      return false;
+    }
+    const dx = endX - startX;
+    const dy = endY - startY;
+    if (Math.abs(dx) < 1e-3 && Math.abs(dy) < 1e-3) {
+      return false;
+    }
+    const duration = estimateKingCrownFlightDuration(startX, startY, endX, endY);
+    if (Number.isFinite(toNodeId)) {
+      removeKingCrownFlightsForNode(toNodeId);
+    }
+    kingCrownFlights.push({
+      playerId,
+      fromNodeId,
+      toNodeId,
+      startX,
+      startY,
+      endX,
+      endY,
+      startTime: animationTime,
+      duration,
+      crownHealth,
+      crownMax,
+    });
+    if (Number.isFinite(toNodeId)) {
+      kingCrownFlightDestinations.add(toNodeId);
+      destroyCrownHealthDisplay(toNodeId);
+    }
+    return true;
   }
 
   function startKingSelection(nodeId) {
@@ -6588,22 +6709,22 @@ function fallbackRemoveEdgesForNode(nodeId) {
       return;
     }
 
-    if (Number.isFinite(fromNodeId)) {
+    const sourceNode = Number.isFinite(fromNodeId) ? nodes.get(fromNodeId) : null;
+    const targetNode = nodes.get(toNodeId);
+
+    if (sourceNode && Number.isFinite(fromNodeId)) {
       kingMoveSuppressedNodes.add(fromNodeId);
-      const sourceNode = nodes.get(fromNodeId);
-      if (sourceNode) {
-        sourceNode.kingOwnerId = null;
-        sourceNode.isKing = false;
-        sourceNode.kingCrownHealth = 0;
-        sourceNode.kingCrownMax = 0;
-        sourceNode.kingLastOwnerId = null;
-        sourceNode.kingGraveOwnerId = null;
-        sourceNode.kingCrownFallen = false;
-      }
+      sourceNode.kingOwnerId = null;
+      sourceNode.isKing = false;
+      sourceNode.kingCrownHealth = 0;
+      sourceNode.kingCrownMax = 0;
+      sourceNode.kingLastOwnerId = null;
+      sourceNode.kingGraveOwnerId = null;
+      sourceNode.kingCrownFallen = false;
     }
 
-    const targetNode = nodes.get(toNodeId);
     if (targetNode) {
+      kingCrownFlightDestinations.delete(toNodeId);
       kingMoveSuppressedNodes.add(toNodeId);
       targetNode.kingOwnerId = playerId;
       targetNode.isKing = true;
@@ -6637,6 +6758,20 @@ function fallbackRemoveEdgesForNode(nodeId) {
       }
       targetNode.kingCrownMax = Number.isFinite(resolvedCrownMax) ? Math.max(0, resolvedCrownMax) : 0;
       targetNode.kingCrownHealth = Number.isFinite(resolvedCrownHealth) ? Math.max(0, resolvedCrownHealth) : targetNode.kingCrownMax;
+
+      if (sourceNode) {
+        beginKingCrownFlight({
+          playerId,
+          fromNodeId,
+          toNodeId,
+          startX: sourceNode.x,
+          startY: sourceNode.y,
+          endX: targetNode.x,
+          endY: targetNode.y,
+          crownHealth: targetNode.kingCrownHealth,
+          crownMax: targetNode.kingCrownMax,
+        });
+      }
     }
 
     kingMovePendingDestinationId = null;
@@ -7500,7 +7635,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
       const shouldDrawFallenKing = kingOwnerId == null && fallenOwnerId != null;
       const hideKingVisual = shouldHideCrownForHiddenStart(n);
       if (winCondition === 'king') {
-        if (hideKingVisual) {
+        const suppressKingVisual = !hideKingVisual && kingOwnerId != null && kingCrownFlightDestinations.has(id);
+        if (hideKingVisual || suppressKingVisual) {
           if (crownHealthDisplays.has(id)) {
             destroyCrownHealthDisplay(id);
           }
@@ -7618,6 +7754,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     }
 
     drawSinkingNodes();
+    drawKingCrownFlights();
     drawFallenKingMarkers();
 
     drawKingMoveTargetsOverlay();
@@ -7706,6 +7843,41 @@ function fallbackRemoveEdgesForNode(nodeId) {
         graphicsNodes.lineStyle(2, 0xffffff, ringAlpha);
         graphicsNodes.strokeCircle(nx, ny, radius + 4);
       }
+    });
+  }
+
+  function drawKingCrownFlights() {
+    if (!graphicsNodes || kingCrownFlights.length === 0) return;
+    const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
+    kingCrownFlights.forEach((flight) => {
+      if (!flight) return;
+      if (
+        !Number.isFinite(flight.startX) ||
+        !Number.isFinite(flight.startY) ||
+        !Number.isFinite(flight.endX) ||
+        !Number.isFinite(flight.endY)
+      ) {
+        return;
+      }
+      const duration = Math.max(KING_CROWN_MIN_TRAVEL_DURATION, Number(flight.duration) || 0);
+      const startTime = Number(flight.startTime) || 0;
+      const elapsed = Math.max(0, animationTime - startTime);
+      const rawT = duration <= 0 ? 1 : Math.min(1, elapsed / duration);
+      const eased = easeOutCubic(rawT);
+      const currentX = flight.startX + (flight.endX - flight.startX) * eased;
+      const currentY = flight.startY + (flight.endY - flight.startY) * eased;
+      const [screenX, screenY] = worldToScreen(currentX, currentY);
+      if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return;
+      const crownRadius = computeStandardKingCrownRadius(baseScale);
+      const playerColor = ownerToColor(flight.playerId);
+      const accentColor = ownerToSecondaryColor(flight.playerId) || playerColor;
+      drawKingCrown(screenX, screenY, crownRadius, playerColor, {
+        highlighted: flight.playerId === myPlayerId,
+        highlightColor: accentColor,
+        crownHealth: flight.crownHealth,
+        crownMax: flight.crownMax,
+        nodeId: null,
+      });
     });
   }
 
