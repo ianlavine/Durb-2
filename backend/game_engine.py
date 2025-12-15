@@ -14,6 +14,7 @@ from .constants import (
     BRASS_INTENTIONAL_COST_MULTIPLIER,
     DEFAULT_GEM_COUNTS,
     DEFAULT_GAME_MODE,
+    DEFAULT_KING_MOVEMENT_MODE,
     OVERFLOW_PENDING_GOLD_PAYOUT,
     PRODUCTION_RATE_PER_NODE,
     MAX_TRANSFER_RATIO,
@@ -21,6 +22,12 @@ from .constants import (
     RESERVE_TRANSFER_RATIO,
     STARTING_NODE_JUICE,
     KING_CROWN_MAX_HEALTH,
+    KING_CROWN_MAX_TRAVEL_TICKS,
+    KING_CROWN_MIN_TRAVEL_TICKS,
+    KING_CROWN_SPIN_TICKS_MAX,
+    KING_CROWN_SPIN_TICKS_MIN,
+    KING_CROWN_SPIN_TICKS_RATIO,
+    KING_CROWN_TICKS_PER_UNIT_DISTANCE,
     CLASSIC_PRODUCTION_RATE_PER_NODE,
     CLASSIC_MAX_TRANSFER_RATIO,
     CLASSIC_INTAKE_TRANSFER_RATIO,
@@ -36,6 +43,7 @@ from .constants import (
     get_node_max_juice,
     get_overflow_juice_to_gold_ratio,
     normalize_game_mode,
+    normalize_king_movement_mode,
 )
 from .graph_generator import graph_generator
 from .models import Edge, Node, Player
@@ -401,6 +409,13 @@ class GameEngine:
         self.state.reserve_transfer_ratio = starting_flow_ratio
         self.state.intake_transfer_ratio = secondary_flow_ratio
 
+        king_movement_option = None
+        if isinstance(options, dict):
+            king_movement_option = options.get("kingMovementMode")
+        king_movement_mode = normalize_king_movement_mode(
+            king_movement_option if isinstance(king_movement_option, str) else DEFAULT_KING_MOVEMENT_MODE
+        )
+
         sanitized_options: Dict[str, Any] = {
             "screen": screen_variant,
             "brass": "right-click" if manual_brass_selection else "cross",
@@ -425,6 +440,7 @@ class GameEngine:
             "nodeGrowthRate": growth_rate_value,
             "startingFlowRate": starting_flow_ratio,
             "secondaryFlowRate": secondary_flow_ratio,
+            "kingMovementMode": king_movement_mode,
         }
         if resource_mode == "gems":
             sanitized_options["brass"] = "gem"
@@ -449,6 +465,7 @@ class GameEngine:
         self.state.overflow_pending_gold_payout = overflow_payout
         self.state.win_condition = win_condition
         self.state.king_crown_max_health = crown_health_value
+        self.state.king_movement_mode = king_movement_mode
         if win_condition != "king":
             self.state.player_king_nodes.clear()
 
@@ -651,6 +668,10 @@ class GameEngine:
         mode_settings["gameStart"] = "open"
         mode_settings["derivedMode"] = "sandbox"
         mode_settings["sandbox"] = True
+        mode_settings.setdefault(
+            "kingMovementMode",
+            getattr(self.state, "king_movement_mode", DEFAULT_KING_MOVEMENT_MODE),
+        )
         self.state.mode_settings = mode_settings
 
     def is_game_active(self) -> bool:
@@ -950,7 +971,7 @@ class GameEngine:
         self,
         token: str,
         origin_node_id: Optional[int] = None,
-    ) -> Tuple[bool, List[int], Optional[str], Optional[int]]:
+    ) -> Tuple[bool, List[int], Optional[str], Optional[int], List[Dict[str, Any]]]:
         """Return reachable nodes for the requesting player's king."""
         try:
             self.validate_game_active()
@@ -966,16 +987,48 @@ class GameEngine:
                 if origin_int != current_node_id:
                     raise GameValidationError("King location has changed")
 
+            movement_mode = normalize_king_movement_mode(
+                getattr(self.state, "king_movement_mode", DEFAULT_KING_MOVEMENT_MODE)
+            )
+
+            if movement_mode != "basic":
+                if not self.state:
+                    raise GameValidationError("No game state")
+                origin_node = self.state.nodes.get(current_node_id)
+                if not origin_node:
+                    raise GameValidationError("Invalid king node")
+                player_gold = float(self.state.player_gold.get(player_id, 0.0))
+                reachable_nodes: List[int] = []
+                target_details: List[Dict[str, Any]] = []
+                for node in self.state.nodes.values():
+                    if not node or node.id == current_node_id or node.owner != player_id:
+                        continue
+                    try:
+                        plan = self._plan_king_smash_move(player_id, origin_node, node, movement_mode)
+                    except GameValidationError:
+                        continue
+                    cost_value = int(plan.get("cost", 0))
+                    if cost_value > player_gold:
+                        continue
+                    reachable_nodes.append(node.id)
+                    target_details.append({
+                        "nodeId": int(node.id),
+                        "cost": cost_value,
+                    })
+                reachable_nodes.sort()
+                target_details.sort(key=lambda entry: entry.get("nodeId", 0))
+                return True, reachable_nodes, None, current_node_id, target_details
+
             reachable = sorted(
                 self._compute_king_reachable_nodes(
                     player_id=player_id,
                     origin_node_id=current_node_id,
                 )
             )
-            return True, reachable, None, current_node_id
+            return True, reachable, None, current_node_id, []
 
         except GameValidationError as exc:
-            return False, [], str(exc), None
+            return False, [], str(exc), None, []
 
     def handle_move_king(
         self,
@@ -995,12 +1048,35 @@ class GameEngine:
             if current_node_id == destination_node_id:
                 raise GameValidationError("King already occupies this node")
 
-            reachable = self._compute_king_reachable_nodes(
-                player_id=player_id,
-                origin_node_id=current_node_id,
+            movement_mode = normalize_king_movement_mode(
+                getattr(self.state, "king_movement_mode", DEFAULT_KING_MOVEMENT_MODE)
             )
-            if destination_node_id not in reachable:
-                raise GameValidationError("Destination not reachable")
+
+            smash_plan: Optional[Dict[str, Any]] = None
+            if movement_mode == "basic":
+                reachable = self._compute_king_reachable_nodes(
+                    player_id=player_id,
+                    origin_node_id=current_node_id,
+                )
+                if destination_node_id not in reachable:
+                    raise GameValidationError("Destination not reachable")
+            else:
+                origin_node = self.state.nodes.get(current_node_id) if self.state else None
+                if not origin_node:
+                    raise GameValidationError("Invalid king location")
+                smash_plan = self._plan_king_smash_move(
+                    player_id,
+                    origin_node,
+                    destination_node,
+                    movement_mode,
+                )
+                move_cost = int(smash_plan.get("cost", 0))
+                self.validate_sufficient_gold(player_id, move_cost)
+                if self.state:
+                    current_gold = float(self.state.player_gold.get(player_id, 0.0))
+                    self.state.player_gold[player_id] = max(0.0, current_gold - move_cost)
+                if smash_plan.get("removals"):
+                    self._schedule_king_smash_removals(smash_plan)
 
             crown_max_default = getattr(self.state, "king_crown_max_health", KING_CROWN_MAX_HEALTH)
             current_health = crown_max_default
@@ -1032,6 +1108,9 @@ class GameEngine:
                 "crownHealth": round(current_health, 3),
                 "crownMax": round(max(current_max_health, crown_max_default), 3),
             }
+            if smash_plan is not None:
+                payload["cost"] = int(smash_plan.get("cost", 0))
+            payload["movementMode"] = movement_mode
             return True, None, payload
 
         except GameValidationError as exc:
@@ -2098,6 +2177,102 @@ class GameEngine:
             cumulative += seg_len
 
         return None
+
+    def _compute_king_movement_timing(self, total_distance: float) -> Dict[str, int]:
+        distance = float(total_distance)
+        if not math.isfinite(distance) or distance <= 0.0:
+            distance = 1.0
+        ticks_per_unit = max(1e-3, float(KING_CROWN_TICKS_PER_UNIT_DISTANCE))
+        travel_ticks = int(round(distance * ticks_per_unit))
+        travel_ticks = max(KING_CROWN_MIN_TRAVEL_TICKS, min(KING_CROWN_MAX_TRAVEL_TICKS, travel_ticks))
+        spin_base = int(round(travel_ticks * KING_CROWN_SPIN_TICKS_RATIO))
+        spin_ticks = max(KING_CROWN_SPIN_TICKS_MIN, min(KING_CROWN_SPIN_TICKS_MAX, spin_base))
+        pre_spin = spin_ticks
+        post_spin = spin_ticks
+        total_ticks = pre_spin + travel_ticks + post_spin
+        return {
+            "preSpinTicks": pre_spin,
+            "travelTicks": max(1, travel_ticks),
+            "postSpinTicks": post_spin,
+            "totalTicks": max(1, total_ticks),
+        }
+
+    def _plan_king_smash_move(
+        self,
+        player_id: int,
+        origin_node: Node,
+        destination_node: Node,
+        movement_mode: str,
+    ) -> Dict[str, Any]:
+        if not self.state:
+            raise GameValidationError("No game state")
+        if destination_node.owner != player_id:
+            raise GameValidationError("Destination not controlled")
+
+        path_info = self._compute_warp_bridge_path(origin_node, destination_node)
+        candidate_segments = path_info.get("segments") or []
+        if not candidate_segments:
+            candidate_segments = [(origin_node.x, origin_node.y, destination_node.x, destination_node.y)]
+        warp_axis = path_info.get("warp_axis", "none") or "none"
+        total_world_distance = float(path_info.get("total_distance") or 0.0)
+        if total_world_distance <= 0.0:
+            total_world_distance = float(math.hypot(destination_node.x - origin_node.x, destination_node.y - origin_node.y))
+        if total_world_distance <= 0.0:
+            raise GameValidationError("Nodes overlap")
+
+        cost = self.calculate_bridge_cost(origin_node, destination_node, segments_override=candidate_segments)
+        intersecting_edges = self._find_intersecting_edges(origin_node, destination_node, candidate_segments)
+        removals: List[Tuple[int, float]] = []
+        for edge_id in intersecting_edges:
+            edge = self.state.edges.get(edge_id)
+            if not edge:
+                continue
+            behaves_like_brass = self._edge_behaves_like_brass(edge)
+            if movement_mode == "weak-smash" and behaves_like_brass:
+                raise GameValidationError("Cannot cross brass pipe")
+            distance = self._distance_to_first_intersection(candidate_segments, edge) or 0.0
+            removals.append((edge_id, max(0.0, distance)))
+
+        timing = self._compute_king_movement_timing(total_world_distance)
+        return {
+            "cost": int(cost),
+            "segments": [(float(sx), float(sy), float(ex), float(ey)) for sx, sy, ex, ey in candidate_segments],
+            "warp_axis": warp_axis,
+            "total_distance": float(total_world_distance),
+            "removals": removals,
+            "timing": timing,
+            "movement_mode": movement_mode,
+        }
+
+    def _schedule_king_smash_removals(self, plan: Dict[str, Any]) -> None:
+        if not self.state:
+            return
+        removals = plan.get("removals") or []
+        if not removals:
+            return
+        total_distance = float(plan.get("total_distance") or 0.0)
+        timing = plan.get("timing") or {}
+        travel_ticks = max(1, int(timing.get("travelTicks", KING_CROWN_MIN_TRAVEL_TICKS)))
+        pre_spin = max(0, int(timing.get("preSpinTicks", 0)))
+        if total_distance <= 0.0:
+            total_distance = float(travel_ticks)
+        distance_per_tick = total_distance / max(1, travel_ticks)
+        current_tick = int(getattr(self.state, "tick_count", 0))
+        pending = list(getattr(self.state, "pending_king_smash_removals", []) or [])
+        for edge_id, distance in removals:
+            try:
+                edge_int = int(edge_id)
+            except (TypeError, ValueError):
+                continue
+            dist_val = max(0.0, float(distance))
+            if distance_per_tick <= 0:
+                travel_offset = travel_ticks
+            else:
+                travel_offset = int(math.ceil(dist_val / max(distance_per_tick, 1e-9)))
+            tick_offset = pre_spin + max(1, travel_offset)
+            trigger_tick = current_tick + tick_offset
+            pending.append((edge_int, trigger_tick))
+        self.state.pending_king_smash_removals = pending
     
     def simulate_tick(self, tick_interval_seconds: float) -> Optional[int]:
         """

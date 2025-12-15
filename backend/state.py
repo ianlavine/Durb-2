@@ -8,6 +8,7 @@ from .constants import (
     BRIDGE_COST_PER_UNIT_DISTANCE,
     BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE,
     DEFAULT_GAME_MODE,
+    DEFAULT_KING_MOVEMENT_MODE,
     GAME_DURATION_SECONDS,
     GOLD_REWARD_FOR_ENEMY_CAPTURE,
     INTAKE_TRANSFER_RATIO,
@@ -81,6 +82,8 @@ class GraphState:
         self.mode_settings: Dict[str, Any] = {}
         self.resource_mode: str = "standard"
         self.gem_nodes: Dict[int, str] = {}
+        self.king_movement_mode: str = DEFAULT_KING_MOVEMENT_MODE
+        self.pending_king_smash_removals: List[Tuple[int, int]] = []
 
         # Replay helpers
         self.tick_count: int = 0
@@ -826,6 +829,19 @@ class GraphState:
                 self.remove_edges(ready_ids, record=True, reason="bridgeCross")
 
             e.pending_cross_removals = remaining
+
+        smash_pending = list(getattr(self, 'pending_king_smash_removals', []) or [])
+        if smash_pending:
+            ready_smash: List[int] = []
+            remaining_smash: List[Tuple[int, int]] = []
+            for edge_id, trigger_tick in smash_pending:
+                if self.tick_count >= trigger_tick:
+                    ready_smash.append(edge_id)
+                else:
+                    remaining_smash.append((edge_id, trigger_tick))
+            if ready_smash:
+                self.remove_edges(ready_smash, record=True, reason="kingSmash")
+            self.pending_king_smash_removals = remaining_smash
 
         # Update edge build progress and apply post-build on-state
         for e in list(self.edges.values()):

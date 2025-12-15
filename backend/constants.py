@@ -70,6 +70,14 @@ STARTING_NODE_JUICE: float = 150.0
 
 # King mode
 KING_CROWN_MAX_HEALTH: float = 150.0  # extra damage buffer before the king node itself is vulnerable
+KING_MOVEMENT_MODES: Tuple[str, ...] = ("basic", "smash", "weak-smash")
+DEFAULT_KING_MOVEMENT_MODE: str = "basic"
+KING_CROWN_TICKS_PER_UNIT_DISTANCE: float = 0.6
+KING_CROWN_MIN_TRAVEL_TICKS: int = 2
+KING_CROWN_MAX_TRAVEL_TICKS: int = 18
+KING_CROWN_SPIN_TICKS_RATIO: float = 0.35
+KING_CROWN_SPIN_TICKS_MIN: int = 2
+KING_CROWN_SPIN_TICKS_MAX: int = 5
 
 # Gem distribution defaults (counts per gem type when resources == 'gems')
 DEFAULT_GEM_COUNTS: Dict[str, int] = {
@@ -157,3 +165,17 @@ def get_node_max_juice(mode: str) -> float:
 def get_overflow_juice_to_gold_ratio(mode: str) -> float:
     """Return the juice-to-gold conversion ratio for overflow-style modes."""
     return OVERFLOW_JUICE_TO_GOLD_RATIO
+
+
+def normalize_king_movement_mode(value: str) -> str:
+    """Normalize king movement mode names."""
+    if not isinstance(value, str):
+        return DEFAULT_KING_MOVEMENT_MODE
+    lowered = value.strip().lower()
+    if lowered in {"smash"}:
+        return "smash"
+    if lowered in {"weak-smash", "weaksmash", "weak"}:
+        return "weak-smash"
+    if lowered in {"standard"}:
+        return "basic"
+    return "basic"

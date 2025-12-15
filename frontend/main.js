@@ -61,6 +61,7 @@
   let phase = 'picking';
   let currentResourceMode = 'standard';
   let currentBreakMode = 'flowing';
+  let kingMovementMode = 'basic';
   let brassGemModeActive = false;
   let pendingBrassGemSpend = false;
   let rageGemModeActive = false;
@@ -188,6 +189,9 @@
   const kingCrownFlights = [];
   const kingCrownFlightDestinations = new Set();
   let kingMovePreviewLine = null;
+  const kingMoveTargetCosts = new Map();
+  let kingMoveCostDisplayActive = false;
+  const kingMovePreviewCrossingEdges = new Set(); // edges that would be destroyed by king movement
 
   const KING_CROWN_TICKS_PER_UNIT_DISTANCE = 0.6; // mirrors backend pipe build speed
   const KING_CROWN_MIN_TRAVEL_TICKS = 2;
@@ -199,9 +203,9 @@
 
   const KING_STANDARD_NODE_SIZE = 80;
   const KING_STANDARD_RADIUS_BASE = 0.15 * Math.pow(KING_STANDARD_NODE_SIZE, 0.6);
-  const KING_CROWN_TO_NODE_RATIO = 0.4;
-  const KING_CROWN_MIN_SCREEN_RADIUS = 14;
-  const KING_OPTION_RADIUS_MULTIPLIER = 1.12;
+  const KING_CROWN_TO_NODE_RATIO = 0.2;
+  const KING_CROWN_MIN_SCREEN_RADIUS = 7;
+  const KING_OPTION_RADIUS_MULTIPLIER = 0.5;
   const KING_OPTION_BOUNCE_SCALE = 0.18;
   const KING_OPTION_VERTICAL_SCALE = 0.55;
   const KING_OPTION_VERTICAL_EXTRA = 6;
@@ -347,6 +351,7 @@
         derivedMode: LEGACY_DEFAULT_MODE || 'basic',
         winCondition: 'king',
         kingCrownHealth: KING_CROWN_DEFAULT_HEALTH,
+        kingMovementMode: 'basic',
         resources: 'standard',
         lonelyNode: 'sinks',
         nodeGrowthRate: 0.7,
@@ -371,6 +376,7 @@
         reverseGemCount: 6,
         winCondition: 'king',
         kingCrownHealth: KING_CROWN_DEFAULT_HEALTH,
+        kingMovementMode: 'basic',
         resources: 'standard',
         lonelyNode: 'sinks',
         nodeGrowthRate: 0.2,
@@ -689,9 +695,23 @@
     return value.trim().toLowerCase() === 'gems' ? 'gems' : 'standard';
   }
 
+  function normalizeKingMovementMode(value) {
+    if (typeof value !== 'string') return 'basic';
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'smash') return 'smash';
+    if (normalized === 'weak-smash' || normalized === 'weaksmash' || normalized === 'weak') return 'weak-smash';
+    if (normalized === 'standard') return 'basic';
+    return 'basic';
+  }
+
   function normalizeLonelyNodeMode(value) {
     if (typeof value !== 'string') return 'nothing';
     return value.trim().toLowerCase() === 'sinks' ? 'sinks' : 'nothing';
+  }
+
+  function isKingSmashMode(mode = kingMovementMode) {
+    const normalized = normalizeKingMovementMode(mode);
+    return normalized === 'smash' || normalized === 'weak-smash';
   }
 
   function normalizeBrassSetting(value) {
@@ -1310,13 +1330,16 @@
         } else {
           isActive = target === current;
         }
-      } else if (setting === 'bridgeCost') {
-        isActive = Number(value) === currentCost;
       } else if (setting === 'winCondition') {
         const normalized = normalizeWinCondition(value);
         isActive = normalized === normalizeWinCondition(selectedSettings.winCondition);
       } else if (setting === 'resources') {
         isActive = normalizeResources(value) === currentResources;
+      } else if (setting === 'kingMovementMode') {
+        const normalized = normalizeKingMovementMode(value);
+        isActive = normalized === normalizeKingMovementMode(selectedSettings.kingMovementMode);
+      } else if (setting === 'bridgeCost') {
+        isActive = Number(value) === currentCost;
       } else if (setting === 'lonelyNode') {
         const normalized = normalizeLonelyNodeMode(value);
         isActive = normalized === normalizeLonelyNodeMode(selectedSettings.lonelyNode);
@@ -1454,6 +1477,11 @@
     } else {
       next.resources = normalizeResources(next.resources);
     }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'kingMovementMode')) {
+      next.kingMovementMode = normalizeKingMovementMode(overrides.kingMovementMode);
+    } else {
+      next.kingMovementMode = normalizeKingMovementMode(next.kingMovementMode);
+    }
     if (Object.prototype.hasOwnProperty.call(overrides, 'lonelyNode')) {
       next.lonelyNode = normalizeLonelyNodeMode(overrides.lonelyNode);
     } else {
@@ -1479,6 +1507,7 @@
 
     selectedSettings = next;
     setCurrentResourceMode(selectedSettings.resources);
+    kingMovementMode = normalizeKingMovementMode(selectedSettings.kingMovementMode);
     kingCrownDefaultMax = coerceKingCrownHealth(selectedSettings.kingCrownHealth);
     selectedMode = deriveModeFromSettings(selectedSettings);
     updateModeOptionButtonStates();
@@ -1526,6 +1555,7 @@
       derivedMode: selectedMode,
       winCondition: selectedSettings.winCondition || 'dominate',
       resources: normalizeResources(selectedSettings.resources),
+      kingMovementMode: normalizeKingMovementMode(selectedSettings.kingMovementMode),
       lonelyNode: normalizeLonelyNodeMode(selectedSettings.lonelyNode),
     };
   }
@@ -1561,6 +1591,7 @@
     if (typeof payload.lonelyNode === 'string') overrides.lonelyNode = payload.lonelyNode;
     if (Object.prototype.hasOwnProperty.call(payload, 'winCondition')) overrides.winCondition = payload.winCondition;
     if (Object.prototype.hasOwnProperty.call(payload, 'resources')) overrides.resources = payload.resources;
+    if (Object.prototype.hasOwnProperty.call(payload, 'kingMovementMode')) overrides.kingMovementMode = payload.kingMovementMode;
     applySelectedSettings(overrides);
   }
 
@@ -6518,6 +6549,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     edgeRemovalAnimations.clear();
     brassPreviewIntersections.clear();
     bridgePreviewWillBreakPipes = false;
+    kingMovePreviewCrossingEdges.clear();
     clearAllPrePipes('sandbox', { skipRedraw: true });
     moneyIndicators = [];
     playerStats.forEach((stats) => {
@@ -6557,6 +6589,10 @@ function fallbackRemoveEdgesForNode(nodeId) {
     kingMoveTargetHoveredId = null;
     kingMovePendingDestinationId = null;
     kingMovePreviewLine = null;
+    kingMoveTargetCosts.clear();
+    kingMoveCostDisplayActive = false;
+    kingMovePreviewCrossingEdges.clear();
+    hideBridgeCostDisplay();
     if (!skipRedraw) {
       redrawStatic();
     }
@@ -6752,6 +6788,10 @@ function fallbackRemoveEdgesForNode(nodeId) {
     kingMoveTargetHoveredId = null;
     kingMovePendingDestinationId = null;
     kingMovePreviewLine = null;
+    kingMoveTargetCosts.clear();
+    kingMoveCostDisplayActive = false;
+    kingMovePreviewCrossingEdges.clear();
+    hideBridgeCostDisplay();
     updateKingMovePreviewLine();
     redrawStatic();
 
@@ -6772,6 +6812,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
     kingMovePendingDestinationId = nodeId;
     kingMoveOptionsPending = true;
     kingMovePreviewLine = null;
+    kingMoveCostDisplayActive = false;
+    hideBridgeCostDisplay();
     redrawStatic();
 
     ws.send(JSON.stringify({
@@ -6789,6 +6831,10 @@ function fallbackRemoveEdgesForNode(nodeId) {
       return;
     }
 
+    if (typeof msg?.movementMode === 'string') {
+      kingMovementMode = normalizeKingMovementMode(msg.movementMode);
+    }
+
     const rawTargets = Array.isArray(msg?.targets) ? msg.targets : [];
     const targets = [];
     rawTargets.forEach((value) => {
@@ -6804,6 +6850,30 @@ function fallbackRemoveEdgesForNode(nodeId) {
     kingMoveOptionsPending = false;
     kingMovePendingDestinationId = null;
     kingMoveTargetHoveredId = null;
+    kingMoveTargetCosts.clear();
+    kingMovePreviewCrossingEdges.clear();
+    const rawTargetCosts = Array.isArray(msg?.targetCosts) ? msg.targetCosts : [];
+    rawTargetCosts.forEach((entry) => {
+      if (!Array.isArray(entry) || entry.length < 2) return;
+      const id = Number(entry[0]);
+      const cost = Number(entry[1]);
+      if (!Number.isFinite(id) || !Number.isFinite(cost)) return;
+      kingMoveTargetCosts.set(id, cost);
+    });
+    if (isKingSmashMode() && kingMoveTargetCosts.size === 0) {
+      const originNode = nodes.get(kingSelectedNodeId);
+      if (originNode) {
+        kingMoveTargetsList.forEach((targetId) => {
+          if (kingMoveTargetCosts.has(targetId)) return;
+          const targetNode = nodes.get(targetId);
+          if (!targetNode) return;
+          const cost = calculateBridgeCost(originNode, targetNode, false);
+          if (Number.isFinite(cost)) {
+            kingMoveTargetCosts.set(targetId, cost);
+          }
+        });
+      }
+    }
     updateKingMovePreviewLine();
     redrawStatic();
   }
@@ -6813,6 +6883,10 @@ function fallbackRemoveEdgesForNode(nodeId) {
     showErrorMessage(message);
     kingMovePendingDestinationId = null;
     kingMovePreviewLine = null;
+    kingMoveTargetCosts.clear();
+    kingMoveCostDisplayActive = false;
+    kingMovePreviewCrossingEdges.clear();
+    hideBridgeCostDisplay();
     clearKingSelection();
   }
 
@@ -6828,6 +6902,10 @@ function fallbackRemoveEdgesForNode(nodeId) {
     if (!Number.isFinite(crownMax)) crownMax = null;
     if (!Number.isFinite(playerId) || !Number.isFinite(toNodeId)) {
       return;
+    }
+
+    if (typeof msg?.movementMode === 'string') {
+      kingMovementMode = normalizeKingMovementMode(msg.movementMode);
     }
 
     const sourceNode = Number.isFinite(fromNodeId) ? nodes.get(fromNodeId) : null;
@@ -6892,6 +6970,22 @@ function fallbackRemoveEdgesForNode(nodeId) {
           crownHealth: targetNode.kingCrownHealth,
           crownMax: targetNode.kingCrownMax,
         });
+      }
+    }
+
+    if (playerId === myPlayerId) {
+      const moveCost = Number(msg?.cost);
+      if (Number.isFinite(moveCost) && moveCost > 0) {
+        const indicatorNode = sourceNode || targetNode;
+        if (indicatorNode) {
+          createMoneyIndicator(
+            indicatorNode.x,
+            indicatorNode.y - 6,
+            `-$${formatCost(moveCost)}`,
+            MONEY_SPEND_COLOR,
+            1800
+          );
+        }
       }
     }
 
@@ -7580,7 +7674,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
     const tolerance = 18 / baseScale;
     const lockedNodeId = pickNearestNode(wx, wy, tolerance);
     const hasTargets = kingMoveTargets.size > 0;
-    const lockedInvalid = hasTargets && lockedNodeId != null && lockedNodeId !== kingSelectedNodeId && !kingMoveTargets.has(lockedNodeId);
+    const lockedTargetId = (lockedNodeId != null && lockedNodeId !== kingSelectedNodeId) ? lockedNodeId : null;
+    const lockedInvalid = hasTargets && lockedTargetId != null && !kingMoveTargets.has(lockedTargetId);
     const color = lockedInvalid ? KING_MOVE_PREVIEW_INVALID_COLOR : KING_MOVE_PREVIEW_COLOR;
     const alpha = lockedInvalid ? KING_MOVE_PREVIEW_INVALID_ALPHA : KING_MOVE_PREVIEW_ALPHA;
     const next = {
@@ -7590,6 +7685,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
       endY: wy,
       color,
       alpha,
+      lockedNodeId: lockedTargetId,
+      lockedInvalid,
     };
     const changed = !prev ||
       prev.startX !== next.startX ||
@@ -7597,7 +7694,9 @@ function fallbackRemoveEdgesForNode(nodeId) {
       prev.endX !== next.endX ||
       prev.endY !== next.endY ||
       prev.color !== next.color ||
-      prev.alpha !== next.alpha;
+      prev.alpha !== next.alpha ||
+      prev.lockedNodeId !== next.lockedNodeId ||
+      prev.lockedInvalid !== next.lockedInvalid;
     if (changed) {
       kingMovePreviewLine = next;
       return true;
@@ -7634,6 +7733,118 @@ function fallbackRemoveEdgesForNode(nodeId) {
     graphicsNodes.moveTo(clippedSx, clippedSy);
     graphicsNodes.lineTo(clippedEx, clippedEy);
     graphicsNodes.strokePath();
+  }
+
+  function maybeShowKingMoveCostDisplay() {
+    // Always show cost when king selection is active in smash mode
+    if (!isKingSmashMode()) {
+      kingMoveCostDisplayActive = false;
+      return false;
+    }
+    if (!kingSelectionActive) {
+      kingMoveCostDisplayActive = false;
+      return false;
+    }
+    const preview = kingMovePreviewLine;
+    if (!preview) {
+      kingMoveCostDisplayActive = false;
+      return false;
+    }
+    const selectedNode = kingSelectedNodeId != null ? nodes.get(kingSelectedNodeId) : null;
+    if (!selectedNode) {
+      kingMoveCostDisplayActive = false;
+      return false;
+    }
+
+    // Calculate distance-based cost from the preview line
+    const dx = preview.endX - preview.startX;
+    const dy = preview.endY - preview.startY;
+    const distance = Math.hypot(dx, dy);
+    
+    // Use the same cost calculation as bridge building
+    const cost = Math.max(1, Math.floor(distance));
+    const canAfford = goldValue >= cost;
+    
+    // Calculate midpoint for display
+    const midX = (preview.startX + preview.endX) / 2;
+    const midY = (preview.startY + preview.endY) / 2;
+    const [sx, sy] = worldToScreen(midX, midY);
+    
+    const text = `$${formatCost(cost)}`;
+    const textColor = canAfford ? MONEY_SPEND_COLOR : '#222222';
+    const strokeColor = canAfford ? MONEY_SPEND_STROKE : 'rgba(255,255,255,0.85)';
+    
+    if (!bridgeCostDisplay) {
+      bridgeCostDisplay = sceneRef.add.text(sx, sy - 20, text, {
+        fontFamily: 'monospace',
+        fontSize: '28px',
+        fontStyle: 'bold',
+        color: textColor,
+        stroke: strokeColor,
+        strokeThickness: canAfford ? 3 : 2,
+      })
+      .setOrigin(0.5, 0.5)
+      .setDepth(1000);
+    } else {
+      bridgeCostDisplay.setText(text);
+      bridgeCostDisplay.setPosition(sx, sy - 20);
+      bridgeCostDisplay.setColor(textColor);
+      bridgeCostDisplay.setStroke(strokeColor, canAfford ? 3 : 2);
+      bridgeCostDisplay.setFontSize('28px');
+      bridgeCostDisplay.setFontStyle('bold');
+      bridgeCostDisplay.setVisible(true);
+    }
+    
+    kingMoveCostDisplayActive = true;
+    return true;
+  }
+
+  function updateKingMovePreviewIntersections() {
+    kingMovePreviewCrossingEdges.clear();
+    
+    // Only show crossing edges in smash modes
+    if (!isKingSmashMode()) return;
+    if (!kingSelectionActive) return;
+    
+    const preview = kingMovePreviewLine;
+    if (!preview) return;
+    
+    const selectedNode = kingSelectedNodeId != null ? nodes.get(kingSelectedNodeId) : null;
+    if (!selectedNode) return;
+    
+    // Build the king move segment
+    const candidateSegment = {
+      sx: preview.startX,
+      sy: preview.startY,
+      ex: preview.endX,
+      ey: preview.endY,
+    };
+    
+    edges.forEach((edge, edgeId) => {
+      if (!edge) return;
+      if (edge.removing) return;
+      // Don't mark edges connected to the selected node
+      if (edge.source === kingSelectedNodeId || edge.target === kingSelectedNodeId) return;
+      // Don't mark edges connected to the locked target
+      if (preview.lockedNodeId != null && (edge.source === preview.lockedNodeId || edge.target === preview.lockedNodeId)) return;
+      // Don't mark brass edges (they can't be destroyed)
+      if (edgeBehavesAsBrass(edge)) return;
+      
+      const existingSegments = getEdgeWarpSegments(edge);
+      if (!existingSegments.length) return;
+      
+      for (const existing of existingSegments) {
+        if (!existing) continue;
+        if ([candidateSegment.sx, candidateSegment.sy, candidateSegment.ex, candidateSegment.ey, 
+             existing.sx, existing.sy, existing.ex, existing.ey].every((value) => Number.isFinite(value)) &&
+          segmentsIntersect(candidateSegment.sx, candidateSegment.sy, candidateSegment.ex, candidateSegment.ey, 
+                           existing.sx, existing.sy, existing.ex, existing.ey)
+        ) {
+          kingMovePreviewCrossingEdges.add(edgeId);
+          return; // Found intersection, no need to check more segments for this edge
+        }
+      }
+    });
   }
 
   function pickKingMoveTargetFromScreen(screenX, screenY) {
@@ -8020,8 +8231,13 @@ function fallbackRemoveEdgesForNode(nodeId) {
     drawKingMoveTargetsOverlay();
 
     // After drawing nodes / previews:
-    if (!(activeAbility === 'bridge1way' && bridgeFirstNode !== null && hoveredNodeId !== null)) {
+    const keepKingMoveCost = maybeShowKingMoveCostDisplay();
+    const shouldKeepBridgeCostDisplay = (activeAbility === 'bridge1way' && bridgeFirstNode !== null && hoveredNodeId !== null) || keepKingMoveCost;
+    if (!shouldKeepBridgeCostDisplay) {
       hideBridgeCostDisplay();
+    }
+    if (!keepKingMoveCost) {
+      kingMoveCostDisplayActive = false;
     }
 
     
@@ -9570,6 +9786,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
     const previewChanged = updateKingMovePreviewLine();
     if (previewChanged) {
+      updateKingMovePreviewIntersections();
       needsRedraw = true;
     }
 
@@ -11111,11 +11328,19 @@ function drawPreviewTriangle(cx, cy, baseW, height, angle, color, useBrass = fal
       }
     }
 
-    const removalHighlight = (!removal &&
+    const bridgeRemovalHighlight = (!removal &&
       activeAbility === 'bridge1way' &&
       bridgePreviewWillBreakPipes &&
       brassPreviewIntersections.has(edgeId)
     );
+    
+    const kingMoveRemovalHighlight = (!removal &&
+      kingSelectionActive &&
+      isKingSmashMode() &&
+      kingMovePreviewCrossingEdges.has(edgeId)
+    );
+    
+    const removalHighlight = bridgeRemovalHighlight || kingMoveRemovalHighlight;
 
     const triangleOverrideColor = hoverColor;
     const triangleHoverFlag = !removal && (hoverAllowed || removalHighlight);
