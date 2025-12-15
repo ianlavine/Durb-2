@@ -8589,6 +8589,12 @@ function fallbackRemoveEdgesForNode(nodeId) {
       let currentX = flight.startX;
       let currentY = flight.startY;
       
+      // Look up source and destination nodes to get actual radii
+      const sourceNode = Number.isFinite(flight.fromNodeId) ? nodes.get(flight.fromNodeId) : null;
+      const destNode = Number.isFinite(flight.toNodeId) ? nodes.get(flight.toNodeId) : null;
+      const sourceNodeRadius = sourceNode ? Math.max(1, calculateNodeRadius(sourceNode, baseScale)) : null;
+      const destNodeRadius = destNode ? Math.max(1, calculateNodeRadius(destNode, baseScale)) : null;
+      
       // Get the crown's starting and ending angle offsets (to avoid pipe overlap)
       const startAngleOffset = Number.isFinite(flight.startAngleOffset) ? flight.startAngleOffset : 0;
       const endAngleOffset = Number.isFinite(flight.endAngleOffset) ? flight.endAngleOffset : 0;
@@ -8596,12 +8602,14 @@ function fallbackRemoveEdgesForNode(nodeId) {
       
       let rotationRadians = travelHeading;
       let rotationPivot = null;
+      let currentNodeRadius = null; // Track which node radius to use for crown positioning
       if (elapsedTicks < travelStartTick) {
         // Pre-spin: interpolate from startAngleOffset to travelHeading
         const spinProgress = Math.max(0, Math.min(1, travelStartTick <= 0 ? 1 : elapsedTicks / travelStartTick));
         const eased = easeInOutCubic(spinProgress);
         rotationRadians = startAngleOffset + (travelHeading - startAngleOffset) * eased;
         rotationPivot = { x: startScreenX, y: startScreenY };
+        currentNodeRadius = sourceNodeRadius;
       } else if (elapsedTicks < travelEndTick) {
         // Travel phase: maintain travel heading
         const travelProgress = Math.max(
@@ -8613,6 +8621,12 @@ function fallbackRemoveEdgesForNode(nodeId) {
         currentY = flight.startY + (flight.endY - flight.startY) * easedTravel;
         rotationRadians = travelHeading;
         rotationPivot = null;
+        // During travel, interpolate the node radius for smooth crown size transition
+        if (sourceNodeRadius != null && destNodeRadius != null) {
+          currentNodeRadius = sourceNodeRadius + (destNodeRadius - sourceNodeRadius) * easedTravel;
+        } else {
+          currentNodeRadius = sourceNodeRadius || destNodeRadius;
+        }
       } else {
         // Post-spin: interpolate from travelHeading to endAngleOffset
         const postElapsed = elapsedTicks - travelEndTick;
@@ -8626,6 +8640,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
         currentX = flight.endX;
         currentY = flight.endY;
         rotationPivot = { x: endScreenX, y: endScreenY };
+        currentNodeRadius = destNodeRadius;
       }
       const [screenX, screenY] = worldToScreen(currentX, currentY);
       if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return;
@@ -8654,6 +8669,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
         nodeId: null,
         rotationRadians,
         rotationPivot,
+        nodeRadius: currentNodeRadius,
         travelMode: usesTravelMode,
       });
     });
