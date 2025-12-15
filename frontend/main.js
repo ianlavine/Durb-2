@@ -360,14 +360,14 @@
       }
     : {
         screen: 'warp',
-        brass: 'flowing',
+        brass: 'cross',
         brassStart: 'owned',
-        breakMode: 'any',
+        breakMode: 'brass',
         bridgeCost: 1.0,
         gameStart: 'hidden-split',
         startingNodeJuice: 300,
-        passiveIncome: 0,
-        neutralCaptureGold: 12,
+        passiveIncome: 0.90,
+        neutralCaptureGold: 3,
         ringJuiceToGoldRatio: 10,
         ringPayoutGold: 2,
         warpGemCount: 3,
@@ -376,9 +376,9 @@
         reverseGemCount: 6,
         winCondition: 'king',
         kingCrownHealth: KING_CROWN_DEFAULT_HEALTH,
-        kingMovementMode: 'basic',
+        kingMovementMode: 'smash',
         resources: 'standard',
-        lonelyNode: 'sinks',
+        lonelyNode: 'nothing',
         nodeGrowthRate: 0.2,
         startingFlowRate: 0.004,
         secondaryFlowRate: 0.7,
@@ -7803,13 +7803,17 @@ function fallbackRemoveEdgesForNode(nodeId) {
       return false;
     }
 
-    // Calculate distance-based cost from the preview line
-    const dx = preview.endX - preview.startX;
-    const dy = preview.endY - preview.startY;
-    const distance = Math.hypot(dx, dy);
+    // Calculate distance-based cost using the same normalization as bridge building
+    const baseWidth = screen && Number.isFinite(screen.width) ? screen.width : 275.0;
+    const baseHeight = screen && Number.isFinite(screen.height) ? screen.height : 108.0;
+    const largestSpan = Math.max(1, baseWidth, baseHeight);
+    const scale = 100 / largestSpan;
     
-    // Use the same cost calculation as bridge building
-    const cost = Math.max(1, Math.floor(distance));
+    const dx = (preview.endX - preview.startX) * scale;
+    const dy = (preview.endY - preview.startY) * scale;
+    const normalizedDistance = Math.hypot(dx, dy);
+    
+    const cost = Math.max(1, Math.round(BRIDGE_BASE_COST + normalizedDistance * BRIDGE_COST_PER_UNIT));
     const canAfford = goldValue >= cost;
     
     // Calculate midpoint for display

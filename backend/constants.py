@@ -56,10 +56,10 @@ OVERFLOW_PENDING_GOLD_PAYOUT: float = 2.0   # payout after 2 pending gold -> $2
 
 
 # Economy tuning
-GOLD_REWARD_FOR_NEUTRAL_CAPTURE: float = 10.0
+GOLD_REWARD_FOR_NEUTRAL_CAPTURE: float = 3.0
 GOLD_REWARD_FOR_ENEMY_CAPTURE: float = 0.0
-PASSIVE_INCOME_ENABLED: bool = False
-PASSIVE_GOLD_PER_TICK: float = 1.0 / 30.0
+PASSIVE_INCOME_ENABLED: bool = True
+PASSIVE_GOLD_PER_TICK: float = 0.09  # 0.90/s at 0.1s tick rate
 PASSIVE_GOLD_PER_SECOND: float = PASSIVE_GOLD_PER_TICK / TICK_INTERVAL_SECONDS
 STARTING_GOLD: float = 0.0
 
@@ -71,7 +71,7 @@ STARTING_NODE_JUICE: float = 150.0
 # King mode
 KING_CROWN_MAX_HEALTH: float = 150.0  # extra damage buffer before the king node itself is vulnerable
 KING_MOVEMENT_MODES: Tuple[str, ...] = ("basic", "smash", "weak-smash")
-DEFAULT_KING_MOVEMENT_MODE: str = "basic"
+DEFAULT_KING_MOVEMENT_MODE: str = "smash"
 KING_CROWN_TICKS_PER_UNIT_DISTANCE: float = 0.6
 KING_CROWN_MIN_TRAVEL_TICKS: int = 2
 KING_CROWN_MAX_TRAVEL_TICKS: int = 18
