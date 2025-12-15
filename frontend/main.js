@@ -193,6 +193,10 @@
   let kingMoveCostDisplayActive = false;
   const kingMovePreviewCrossingEdges = new Set(); // edges that would be destroyed by king movement
 
+  // Crown pipe avoidance: stores computed rotation angles for king crowns on each node
+  const kingCrownAngleOffsets = new Map(); // nodeId -> radians offset from top (0 = top)
+  const KING_CROWN_MIN_PIPE_ANGLE_SEPARATION = Math.PI / 4; // 45 degrees minimum separation between crown and any pipe
+
   const KING_CROWN_TICKS_PER_UNIT_DISTANCE = 0.6; // mirrors backend pipe build speed
   const KING_CROWN_MIN_TRAVEL_TICKS = 2;
   const KING_CROWN_MAX_TRAVEL_TICKS = 18;
@@ -203,7 +207,7 @@
 
   const KING_STANDARD_NODE_SIZE = 80;
   const KING_STANDARD_RADIUS_BASE = 0.15 * Math.pow(KING_STANDARD_NODE_SIZE, 0.6);
-  const KING_CROWN_TO_NODE_RATIO = 0.2;
+  const KING_CROWN_TO_NODE_RATIO = 0.15;
   const KING_CROWN_MIN_SCREEN_RADIUS = 7;
   const KING_OPTION_RADIUS_MULTIPLIER = 0.5;
   const KING_OPTION_BOUNCE_SCALE = 0.18;
@@ -253,6 +257,125 @@
     while (a > Math.PI) a -= Math.PI * 2;
     while (a < -Math.PI) a += Math.PI * 2;
     return a;
+  }
+
+  // Get angles of all pipes connected to a node (from the node's perspective)
+  // Angle 0 = straight up (negative Y direction), positive = clockwise
+  function getPipeAnglesForNode(nodeId) {
+    const node = nodes.get(nodeId);
+    if (!node) return [];
+    const angles = [];
+    edges.forEach((edge) => {
+      let otherNodeId = null;
+      if (edge.source === nodeId) {
+        otherNodeId = edge.target;
+      } else if (edge.target === nodeId) {
+        otherNodeId = edge.source;
+      }
+      if (otherNodeId == null) return;
+      const otherNode = nodes.get(otherNodeId);
+      if (!otherNode) return;
+      // Calculate angle from this node to the other node
+      const dx = otherNode.x - node.x;
+      const dy = otherNode.y - node.y;
+      // atan2 gives angle where 0 = right, positive = counterclockwise
+      // We want 0 = up (negative Y), positive = clockwise
+      // So we rotate by -90 degrees and negate
+      const rawAngle = Math.atan2(dy, dx);
+      // Convert: up (-PI/2 in atan2) should be 0, right (0 in atan2) should be PI/2
+      const pipeAngle = normalizeAngleRadians(rawAngle + Math.PI / 2);
+      angles.push(pipeAngle);
+    });
+    return angles;
+  }
+
+  // Compute the optimal crown rotation angle to avoid overlapping with pipes
+  // Returns the angle in radians that the crown should be rotated from its default position
+  function computeOptimalCrownAngle(nodeId) {
+    const pipeAngles = getPipeAnglesForNode(nodeId);
+    const minSeparation = KING_CROWN_MIN_PIPE_ANGLE_SEPARATION;
+    
+    // If no pipes, crown stays at top (angle 0)
+    if (pipeAngles.length === 0) {
+      return 0;
+    }
+
+    // Helper to check if a crown angle is too close to any pipe
+    function isTooCloseToAnyPipe(crownAngle) {
+      for (const pipeAngle of pipeAngles) {
+        const diff = Math.abs(normalizeAngleRadians(crownAngle - pipeAngle));
+        if (diff < minSeparation) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    // Start at top (0 radians) and check if it's valid
+    let currentAngle = 0;
+    if (!isTooCloseToAnyPipe(currentAngle)) {
+      return 0;
+    }
+
+    // Rotate counterclockwise (negative direction in our coordinate system)
+    // in small increments until we find a valid position or complete 360 degrees
+    const stepSize = Math.PI / 36; // 5 degree increments
+    const maxSteps = Math.ceil((2 * Math.PI) / stepSize);
+    
+    for (let i = 1; i <= maxSteps; i++) {
+      // Move counterclockwise (negative rotation)
+      currentAngle = normalizeAngleRadians(-i * stepSize);
+      if (!isTooCloseToAnyPipe(currentAngle)) {
+        return currentAngle;
+      }
+    }
+
+    // If we've gone all the way around and still can't find a valid spot,
+    // just return 0 (top position)
+    return 0;
+  }
+
+  // Update the stored crown angle for a node (call when king moves to node or pipe is added)
+  function updateCrownAngleForNode(nodeId) {
+    const node = nodes.get(nodeId);
+    if (!node || node.kingOwnerId == null) {
+      kingCrownAngleOffsets.delete(nodeId);
+      return;
+    }
+    const optimalAngle = computeOptimalCrownAngle(nodeId);
+    kingCrownAngleOffsets.set(nodeId, optimalAngle);
+  }
+
+  // Check if any king is on a node and update crown angle if needed (call after pipe changes)
+  function updateCrownAngleIfKingOnNode(nodeId) {
+    const node = nodes.get(nodeId);
+    if (node && node.kingOwnerId != null) {
+      updateCrownAngleForNode(nodeId);
+    }
+  }
+
+  // Get the rotated crown center position for hitbox detection
+  // Takes into account the crown's rotation offset to avoid pipes
+  function getRotatedCrownCenter(nodeId, nodeScreenX, nodeScreenY, layout) {
+    if (!layout) return { x: nodeScreenX, y: nodeScreenY };
+    const baseCenter = {
+      x: layout.centerX ?? nodeScreenX,
+      y: layout.centerY ?? nodeScreenY,
+    };
+    const rotationAngle = kingCrownAngleOffsets.get(nodeId) || 0;
+    if (Math.abs(rotationAngle) < 1e-3) {
+      return baseCenter;
+    }
+    // Rotate the crown center around the node center
+    const pivot = { x: nodeScreenX, y: nodeScreenY };
+    const cos = Math.cos(rotationAngle);
+    const sin = Math.sin(rotationAngle);
+    const relX = baseCenter.x - pivot.x;
+    const relY = baseCenter.y - pivot.y;
+    return {
+      x: pivot.x + relX * cos - relY * sin,
+      y: pivot.y + relX * sin + relY * cos,
+    };
   }
   
   // UI background bars
@@ -5747,10 +5870,25 @@ function clearBridgeSelection() {
 
   function rebuildKingNodes() {
     kingNodesByPlayer.clear();
-    if (winCondition !== 'king') return;
+    if (winCondition !== 'king') {
+      // Clear all crown angles if not in king mode
+      kingCrownAngleOffsets.clear();
+      return;
+    }
+    // Track which nodes currently have kings
+    const currentKingNodes = new Set();
     nodes.forEach((node, nodeId) => {
       if (node && Number.isFinite(node.kingOwnerId)) {
         kingNodesByPlayer.set(Number(node.kingOwnerId), nodeId);
+        currentKingNodes.add(nodeId);
+        // Update crown angle offset to avoid pipe overlap
+        updateCrownAngleForNode(nodeId);
+      }
+    });
+    // Clean up crown angles for nodes that no longer have kings
+    kingCrownAngleOffsets.forEach((_, nodeId) => {
+      if (!currentKingNodes.has(nodeId)) {
+        kingCrownAngleOffsets.delete(nodeId);
       }
     });
   }
@@ -5792,6 +5930,10 @@ function clearBridgeSelection() {
       };
       applyEdgeWarpData(record, edge.warp ?? edge, nodes.get(edge.source), nodes.get(edge.target));
       edges.set(edgeId, record);
+      
+      // Update crown angles if a king is on either endpoint of this new pipe
+      updateCrownAngleIfKingOnNode(edge.source);
+      updateCrownAngleIfKingOnNode(edge.target);
       
       // Show cost indicator for bridge building
       const shouldShowCost = builtByMe && Math.abs(reportedCost) > 1e-6;
@@ -5963,6 +6105,9 @@ function forceRemoveEdge(edgeId) {
   const id = toEdgeId(edgeId);
   if (id == null) return;
   const existingEdge = edges.get(id);
+  // Capture source and target before removing, for crown angle updates
+  const sourceNodeId = existingEdge ? existingEdge.source : null;
+  const targetNodeId = existingEdge ? existingEdge.target : null;
   if (existingEdge && existingEdge.removing) {
     delete existingEdge.removing;
   }
@@ -5977,6 +6122,9 @@ function forceRemoveEdge(edgeId) {
   if (hoveredEdgeId === id) {
     hoveredEdgeId = null;
   }
+  // Update crown angles for any king nodes that were connected to this removed edge
+  if (sourceNodeId != null) updateCrownAngleIfKingOnNode(sourceNodeId);
+  if (targetNodeId != null) updateCrownAngleIfKingOnNode(targetNodeId);
 }
 
 function buildRemovalSteps(count) {
@@ -6711,6 +6859,17 @@ function fallbackRemoveEdgesForNode(nodeId) {
     }
     const timing = computeKingCrownFlightTiming(startX, startY, endX, endY);
     const headingRotation = computeKingCrownRotation(startX, startY, endX, endY);
+    
+    // Get starting crown angle from origin node (or 0 if not stored)
+    const startAngleOffset = Number.isFinite(fromNodeId) ? (kingCrownAngleOffsets.get(fromNodeId) || 0) : 0;
+    
+    // Pre-compute the optimal ending angle for destination node
+    const endAngleOffset = Number.isFinite(toNodeId) ? computeOptimalCrownAngle(toNodeId) : 0;
+    // Store this so the static crown will use it when it appears
+    if (Number.isFinite(toNodeId)) {
+      kingCrownAngleOffsets.set(toNodeId, endAngleOffset);
+    }
+    
     if (Number.isFinite(toNodeId)) {
       removeKingCrownFlightsForNode(toNodeId);
     }
@@ -6731,6 +6890,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
         ? timing.totalTicks
         : (Number.isFinite(timing?.travelTicks) ? timing.travelTicks : KING_CROWN_MIN_TRAVEL_TICKS),
       rotationTarget: headingRotation,
+      startAngleOffset,
+      endAngleOffset,
       crownHealth,
       crownMax,
     });
@@ -7483,8 +7644,12 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
     // Display crown health text inside the crown near the top
     if (sceneRef && nodeId != null && Number.isFinite(crownHealthValue)) {
-      const textX = layout.centerX || nx;
-      const textY = (layout.bounds?.top || ny) + 28; // Position inside the crown near the top
+      // Calculate text position and apply rotation if needed
+      const baseTextX = layout.centerX || nx;
+      const baseTextY = (layout.bounds?.top || ny) + 28; // Position inside the crown near the top
+      const rotatedTextPos = transformPoint({ x: baseTextX, y: baseTextY });
+      const textX = rotatedTextPos.x;
+      const textY = rotatedTextPos.y;
       
       let crownHealthDisplay = crownHealthDisplays.get(nodeId);
       
@@ -7500,11 +7665,13 @@ function fallbackRemoveEdgesForNode(nodeId) {
             color: '#000000',
           })
           .setOrigin(0.5, 0) // center horizontally, anchor at top
-          .setDepth(1001);
+          .setDepth(1001)
+          .setRotation(rotationRadians);
           crownHealthDisplays.set(nodeId, crownHealthDisplay);
         } else {
           crownHealthDisplay.setText(healthText);
           crownHealthDisplay.setPosition(textX, textY);
+          crownHealthDisplay.setRotation(rotationRadians);
           crownHealthDisplay.setVisible(true);
           crownHealthDisplay.setAlpha(1); // Reset alpha in case it was flickering
           // Stop any existing tween
@@ -7525,11 +7692,13 @@ function fallbackRemoveEdgesForNode(nodeId) {
             color: '#FF0000',
           })
           .setOrigin(0.5, 0) // center horizontally, anchor at top
-          .setDepth(1001);
+          .setDepth(1001)
+          .setRotation(rotationRadians);
           crownHealthDisplays.set(nodeId, crownHealthDisplay);
         } else {
           crownHealthDisplay.setText(skullText);
           crownHealthDisplay.setPosition(textX, textY);
+          crownHealthDisplay.setRotation(rotationRadians);
           crownHealthDisplay.setStyle({ fontSize: '20px', color: '#FF0000' });
           crownHealthDisplay.setVisible(true);
         }
@@ -8170,12 +8339,19 @@ function fallbackRemoveEdgesForNode(nodeId) {
           if (kingOwnerId != null && kingAttackAlertActive && kingAttackNodeId === id) {
             drawKingDistressWaves(nx, ny, kingCrownRadius, crownColor);
           }
+          // Get stored crown angle offset to avoid pipe overlap, or compute if not yet stored
+          let crownAngleOffset = kingCrownAngleOffsets.get(id);
+          if (crownAngleOffset == null && kingOwnerId != null) {
+            crownAngleOffset = computeOptimalCrownAngle(id);
+            kingCrownAngleOffsets.set(id, crownAngleOffset);
+          }
           drawKingCrown(nx, ny, kingCrownRadius, crownColor, {
             highlighted: false, // No longer use highlighted, use travelMode instead
             highlightColor: selectionColor,
             crownHealth: kingOwnerId != null && Number.isFinite(n.kingCrownHealth) ? n.kingCrownHealth : 0,
             crownMax: kingOwnerId != null && Number.isFinite(n.kingCrownMax) ? n.kingCrownMax : null,
             nodeId: id,
+            rotationRadians: crownAngleOffset || 0,
             rotationPivot: { x: nx, y: ny },
             nodeRadius: r,
             travelMode: isInTravelMode,
@@ -8412,13 +8588,22 @@ function fallbackRemoveEdgesForNode(nodeId) {
       const travelEndTick = timing.preSpinTicks + timing.travelTicks;
       let currentX = flight.startX;
       let currentY = flight.startY;
-      let rotationRadians = Number.isFinite(flight.rotationTarget) ? flight.rotationTarget : 0;
+      
+      // Get the crown's starting and ending angle offsets (to avoid pipe overlap)
+      const startAngleOffset = Number.isFinite(flight.startAngleOffset) ? flight.startAngleOffset : 0;
+      const endAngleOffset = Number.isFinite(flight.endAngleOffset) ? flight.endAngleOffset : 0;
+      const travelHeading = Number.isFinite(flight.rotationTarget) ? flight.rotationTarget : 0;
+      
+      let rotationRadians = travelHeading;
       let rotationPivot = null;
       if (elapsedTicks < travelStartTick) {
+        // Pre-spin: interpolate from startAngleOffset to travelHeading
         const spinProgress = Math.max(0, Math.min(1, travelStartTick <= 0 ? 1 : elapsedTicks / travelStartTick));
-        rotationRadians = (Number.isFinite(flight.rotationTarget) ? flight.rotationTarget : 0) * easeInOutCubic(spinProgress);
+        const eased = easeInOutCubic(spinProgress);
+        rotationRadians = startAngleOffset + (travelHeading - startAngleOffset) * eased;
         rotationPivot = { x: startScreenX, y: startScreenY };
       } else if (elapsedTicks < travelEndTick) {
+        // Travel phase: maintain travel heading
         const travelProgress = Math.max(
           0,
           Math.min(1, timing.travelTicks <= 0 ? 1 : (elapsedTicks - travelStartTick) / timing.travelTicks)
@@ -8426,16 +8611,18 @@ function fallbackRemoveEdgesForNode(nodeId) {
         const easedTravel = easeOutCubic(travelProgress);
         currentX = flight.startX + (flight.endX - flight.startX) * easedTravel;
         currentY = flight.startY + (flight.endY - flight.startY) * easedTravel;
-        rotationRadians = Number.isFinite(flight.rotationTarget) ? flight.rotationTarget : 0;
+        rotationRadians = travelHeading;
         rotationPivot = null;
       } else {
+        // Post-spin: interpolate from travelHeading to endAngleOffset
         const postElapsed = elapsedTicks - travelEndTick;
         const postTicks = timing.postSpinTicks;
         const spinProgress = Math.max(
           0,
           Math.min(1, postTicks <= 0 ? 1 : Math.min(postElapsed / postTicks, 1))
         );
-        rotationRadians = (Number.isFinite(flight.rotationTarget) ? flight.rotationTarget : 0) * (1 - easeInOutCubic(spinProgress));
+        const eased = easeInOutCubic(spinProgress);
+        rotationRadians = travelHeading + (endAngleOffset - travelHeading) * eased;
         currentX = flight.endX;
         currentY = flight.endY;
         rotationPivot = { x: endScreenX, y: endScreenY };
@@ -9584,11 +9771,13 @@ function fallbackRemoveEdgesForNode(nodeId) {
           const originCrownRadius = computeStandardKingCrownRadius(baseScale);
           const originNodeRadius = Math.max(1, calculateNodeRadius(originNode, baseScale));
           const originLayout = computePlacedKingCrownLayout(originScreenX, originScreenY, originCrownRadius, originNodeRadius);
-          const withinBounds = originLayout && isPointWithinRect(pointerScreenX, pointerScreenY, originLayout.bounds);
-          const dx = pointerScreenX - (originLayout?.centerX ?? originScreenX);
-          const dy = pointerScreenY - (originLayout?.centerY ?? originScreenY);
-          const withinRadius = originLayout ? (dx * dx + dy * dy <= originLayout.hitRadius * originLayout.hitRadius) : false;
-          if (withinBounds || withinRadius) {
+          // Use rotated crown center for hitbox detection
+          const rotatedCenter = getRotatedCrownCenter(kingSelectedNodeId, originScreenX, originScreenY, originLayout);
+          const dx = pointerScreenX - rotatedCenter.x;
+          const dy = pointerScreenY - rotatedCenter.y;
+          const hitRadius = originLayout?.hitRadius ?? (originCrownRadius + 10);
+          const withinRadius = dx * dx + dy * dy <= hitRadius * hitRadius;
+          if (withinRadius) {
             return;
           }
         }
@@ -9630,11 +9819,13 @@ function fallbackRemoveEdgesForNode(nodeId) {
         const originCrownRadius = computeStandardKingCrownRadius(baseScale);
         const originNodeRadius = Math.max(1, calculateNodeRadius(originNode, baseScale));
         const originLayout = computePlacedKingCrownLayout(originScreenX, originScreenY, originCrownRadius, originNodeRadius);
-        const withinBounds = originLayout && isPointWithinRect(pointerScreenX, pointerScreenY, originLayout.bounds);
-        const dx = pointerScreenX - (originLayout?.centerX ?? originScreenX);
-        const dy = pointerScreenY - (originLayout?.centerY ?? originScreenY);
-        const withinRadius = originLayout ? (dx * dx + dy * dy <= originLayout.hitRadius * originLayout.hitRadius) : false;
-        if (withinBounds || withinRadius) {
+        // Use rotated crown center for hitbox detection
+        const rotatedCenter = getRotatedCrownCenter(kingSelectedNodeId, originScreenX, originScreenY, originLayout);
+        const dx = pointerScreenX - rotatedCenter.x;
+        const dy = pointerScreenY - rotatedCenter.y;
+        const hitRadius = originLayout?.hitRadius ?? (originCrownRadius + 10);
+        const withinRadius = dx * dx + dy * dy <= hitRadius * hitRadius;
+        if (withinRadius) {
           return;
         }
       }
@@ -9945,11 +10136,13 @@ function fallbackRemoveEdgesForNode(nodeId) {
           const crownRadius = computeStandardKingCrownRadius(baseScale);
           const kingNodeRadius = Math.max(1, calculateNodeRadius(kingNode, baseScale));
           const layout = computePlacedKingCrownLayout(screenX, screenY, crownRadius, kingNodeRadius);
-          const withinBounds = layout && isPointWithinRect(pointerX, pointerY, layout.bounds);
-          const dx = pointerX - (layout?.centerX ?? screenX);
-          const dy = pointerY - (layout?.centerY ?? screenY);
-          const withinRadius = layout ? (dx * dx + dy * dy <= layout.hitRadius * layout.hitRadius) : false;
-          if (withinBounds || withinRadius) {
+          // Use rotated crown center for hitbox detection
+          const rotatedCenter = getRotatedCrownCenter(myKingNodeId, screenX, screenY, layout);
+          const dx = pointerX - rotatedCenter.x;
+          const dy = pointerY - rotatedCenter.y;
+          const hitRadius = layout?.hitRadius ?? (crownRadius + 10);
+          const withinRadius = dx * dx + dy * dy <= hitRadius * hitRadius;
+          if (withinRadius) {
             startKingSelection(myKingNodeId);
             ev.preventDefault();
             ev.stopPropagation();
