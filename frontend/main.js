@@ -35,6 +35,7 @@
   const ENABLE_REPLAY_UPLOAD = false; // gate replay upload UI while retaining implementation
   const ENABLE_IDLE_EDGE_ANIMATION = false; // animate pipes that are on but not flowing
 
+  let sceneRef = null; // Must be declared before Phaser.Game is created
   const game = new Phaser.Game(config);
 
   let ws = null;
@@ -57,6 +58,11 @@
   let gameEnded = false;
   let overlayMsg = null;
   let goldDisplay = null; // gold number display in bottom right
+  let durbiumValue = 0;
+  let durbiumBarContainer = null;
+  let durbiumBarFill = null;
+  let durbiumBarLabel = null;
+  let durbiumBarMaxValue = 50;
   let myPlayerId = null;
   let phase = 'picking';
   let currentResourceMode = 'standard';
@@ -82,6 +88,11 @@
   let nodeMaxJuice = 50;
   let hoveredNodeId = null;
   let hoveredEdgeId = null;
+  let crownSmashOriginNodeId = null;
+  let crownSmashPending = false;
+  let lastCrownSmashPreviewTargetId = null;
+  let activeCrownFlights = [];
+  let crownSmashPreviewPath = null;
   
   // Abilities system
   let activeAbility = null; // null, 'bridge1way', 'reverse'
@@ -266,7 +277,7 @@
   let autoExpandToggle = null;
   let homeAutoExpandToggle = null;
   let myAutoExpand = false; // my player's auto-expand setting
-  let persistentAutoExpand = false; // persistent setting stored in localStorage
+  let persistentAutoExpand = true; // persistent setting stored in localStorage
   
   // Auto-attack system
   let autoAttackToggle = null;
@@ -311,10 +322,10 @@
         bridgeCost: 0.9,
         gameStart: 'open',
         startingNodeJuice: 300,
-        passiveIncome: 0,
-        neutralCaptureGold: 10,
+        passiveIncome: 0.7,
+        neutralCaptureGold: 1,
         ringJuiceToGoldRatio: 10,
-        ringPayoutGold: 2,
+        ringPayoutGold: 1,
         warpGemCount: 3,
         brassGemCount: 7,
         rageGemCount: 4,
@@ -323,32 +334,32 @@
         derivedMode: LEGACY_DEFAULT_MODE || 'basic',
         winCondition: 'king',
         kingCrownHealth: KING_CROWN_DEFAULT_HEALTH,
-        resources: 'standard',
-        lonelyNode: 'sinks',
+        resources: 'durbium',
+        lonelyNode: 'nothing',
         nodeGrowthRate: 0.7,
-        startingFlowRate: 0.01,
-        secondaryFlowRate: 0.75,
+        startingFlowRate: 0.004,
+        secondaryFlowRate: 0.7,
       }
     : {
         screen: 'warp',
-        brass: 'flowing',
+        brass: 'cross',
         brassStart: 'owned',
-        breakMode: 'any',
+        breakMode: 'brass',
         bridgeCost: 1.0,
         gameStart: 'hidden-split',
         startingNodeJuice: 300,
-        passiveIncome: 0,
-        neutralCaptureGold: 12,
+        passiveIncome: 0.7,
+        neutralCaptureGold: 1,
         ringJuiceToGoldRatio: 10,
-        ringPayoutGold: 2,
+        ringPayoutGold: 1,
         warpGemCount: 3,
         brassGemCount: 7,
         rageGemCount: 4,
         reverseGemCount: 6,
         winCondition: 'king',
         kingCrownHealth: KING_CROWN_DEFAULT_HEALTH,
-        resources: 'standard',
-        lonelyNode: 'sinks',
+        resources: 'durbium',
+        lonelyNode: 'nothing',
         nodeGrowthRate: 0.2,
         startingFlowRate: 0.004,
         secondaryFlowRate: 0.7,
@@ -471,6 +482,10 @@
   const MONEY_SPEND_COLOR = '#b87333';
   const MONEY_SPEND_STROKE = '#4e2a10';
   const MONEY_GAIN_COLOR = '#ffd700';
+  const DURBIUM_GAIN_COLOR = '#8de1ff';
+  const DURBIUM_BAR_CAP = 50;
+  const CROWN_SMASH_SPEED = 220;
+  const CROWN_SMASH_MIN_DURATION_SEC = 0.4;
   const RESOURCE_EMOJIS = {
     money: '',
     gem: {
@@ -514,6 +529,7 @@
     return {
       nodes: 0,
       gold: 0,
+      durbium: 0,
       gems: createEmptyGemCounts(),
     };
   }
@@ -662,7 +678,10 @@
 
   function normalizeResources(value) {
     if (typeof value !== 'string') return 'standard';
-    return value.trim().toLowerCase() === 'gems' ? 'gems' : 'standard';
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'gems') return 'gems';
+    if (normalized === 'durbium') return 'durbium';
+    return 'standard';
   }
 
   function normalizeLonelyNodeMode(value) {
@@ -710,6 +729,10 @@
     return normalizeResources(currentResourceMode) === 'gems';
   }
 
+  function isDurbiumResourceModeActive() {
+    return normalizeResources(currentResourceMode) === 'durbium';
+  }
+
   function setCurrentResourceMode(mode) {
     currentResourceMode = normalizeResources(mode);
     bridgePreviewWillBeBrass = computeInitialBrassPreviewState();
@@ -732,6 +755,10 @@
       }
     }
     updateModeOptionButtonStates();
+    updateResourceUiVisibility();
+    if (!isDurbiumResourceModeActive()) {
+      cancelCrownSmashMode({ skipRedraw: true });
+    }
   }
 
   function setCurrentBreakMode(mode) {
@@ -1036,6 +1063,47 @@
     }
   }
 
+  function updateResourceUiVisibility() {
+    if (!gemCountsDisplay || !gemCountsDisplay.isConnected) {
+      gemCountsDisplay = document.getElementById('gemCountsDisplay');
+    }
+    const gemActive = isMagicResourceModeActive();
+    if (gemCountsDisplay) {
+      gemCountsDisplay.style.display = gemActive ? 'flex' : 'none';
+    }
+    if (!durbiumBarContainer || !durbiumBarContainer.isConnected) {
+      durbiumBarContainer = document.getElementById('durbiumBar');
+      durbiumBarFill = document.getElementById('durbiumBarFill');
+      durbiumBarLabel = document.getElementById('durbiumBarLabel');
+    }
+    if (durbiumBarContainer) {
+      durbiumBarContainer.style.display = isDurbiumResourceModeActive() ? 'flex' : 'none';
+    }
+    updateDurbiumDisplay();
+  }
+
+  function updateDurbiumDisplay() {
+    if (!durbiumBarContainer || !durbiumBarContainer.isConnected) {
+      durbiumBarContainer = document.getElementById('durbiumBar');
+      durbiumBarFill = document.getElementById('durbiumBarFill');
+      durbiumBarLabel = document.getElementById('durbiumBarLabel');
+    }
+    if (!durbiumBarContainer) return;
+    const durbiumActive = isDurbiumResourceModeActive();
+    durbiumBarContainer.style.display = durbiumActive ? 'flex' : 'none';
+    if (!durbiumActive) return;
+    const numericValue = Math.max(0, Number(durbiumValue) || 0);
+    durbiumBarMaxValue = DURBIUM_BAR_CAP;
+    const targetMax = DURBIUM_BAR_CAP;
+    const fillPercent = targetMax > 0 ? Math.min(1, numericValue / targetMax) : 0;
+    if (durbiumBarFill) {
+      durbiumBarFill.style.width = `${Math.max(0, Math.min(100, fillPercent * 100))}%`;
+    }
+    if (durbiumBarLabel) {
+      durbiumBarLabel.textContent = `${formatCost(numericValue)} Du`;
+    }
+  }
+
   function handleGemCountsClick(ev) {
     if (!isMagicResourceModeActive()) return;
     const target = ev.target;
@@ -1212,7 +1280,13 @@
     const ringPayoutLabel = coerceRingPayout(settings.ringPayoutGold);
     const startJuiceLabel = coerceStartingNodeJuice(settings.startingNodeJuice);
     const winConLabel = normalizeWinCondition(settings.winCondition) === 'king' ? 'King' : 'Dominate';
-    const resourcesLabel = normalizeResources(settings.resources) === 'gems' ? 'Gems' : 'Standard';
+    const normalizedResources = normalizeResources(settings.resources);
+    let resourcesLabel = 'Standard';
+    if (normalizedResources === 'gems') {
+      resourcesLabel = 'Gems';
+    } else if (normalizedResources === 'durbium') {
+      resourcesLabel = 'Durbium';
+    }
     return `Resources ${resourcesLabel} · Win-Con ${winConLabel} · ${screenLabel} · ${brassLabel} · Break ${breakLabel} · ${startLabel} · ${startModeLabel} · ${costLabel} · Passive ${passiveLabel} · Neutral ${neutralLabel} · Ring ${ringRatioLabel}:${ringPayoutLabel} · Start ${startJuiceLabel}`;
   }
 
@@ -1671,7 +1745,6 @@
   // Money transparency system
   let moneyIndicators = []; // Array of {x, y, text, color, startTime, duration}
 
-  let sceneRef = null;
   let quitButton = null;
   let forfeitKeyListenerAttached = false;
   let sandboxResetButton = null;
@@ -2230,7 +2303,11 @@
   // Auto-expand persistence functions
   function loadPersistentAutoExpand() {
     const saved = localStorage.getItem('autoExpand');
-    persistentAutoExpand = saved === 'true';
+    if (saved == null) {
+      persistentAutoExpand = true;
+    } else {
+      persistentAutoExpand = saved === 'true';
+    }
     return persistentAutoExpand;
   }
 
@@ -2991,7 +3068,87 @@
     return selectedMode;
   }
 
-// Replace the whole function with this Phaser version:
+function normalizePathSegmentsForDisplay(pathInfo, fromNode, toNode) {
+  const segments = [];
+  if (pathInfo && Array.isArray(pathInfo.segments)) {
+    pathInfo.segments.forEach((segment) => {
+      let start = segment && segment.start;
+      let end = segment && segment.end;
+      if ((!start || !end) && Array.isArray(segment) && segment.length >= 4) {
+        start = { x: segment[0], y: segment[1] };
+        end = { x: segment[2], y: segment[3] };
+      } else if ((!start || !end) && segment) {
+        const sx = segment.sx ?? segment.x1 ?? segment.xStart ?? segment.x0;
+        const sy = segment.sy ?? segment.y1 ?? segment.yStart ?? segment.y0;
+        const ex = segment.ex ?? segment.x2 ?? segment.xEnd ?? segment.x1;
+        const ey = segment.ey ?? segment.y2 ?? segment.yEnd ?? segment.y1;
+        start = { x: sx, y: sy };
+        end = { x: ex, y: ey };
+      }
+      if (start && end && [start.x, start.y, end.x, end.y].every((value) => Number.isFinite(value))) {
+        segments.push({ start: { x: Number(start.x), y: Number(start.y) }, end: { x: Number(end.x), y: Number(end.y) } });
+      }
+    });
+  }
+  if (!segments.length && fromNode && toNode) {
+    segments.push({ start: { x: fromNode.x, y: fromNode.y }, end: { x: toNode.x, y: toNode.y } });
+  }
+  return segments;
+}
+
+function updateCostDisplayForPath(fromNode, toNode, pathInfo, text, options = {}) {
+  if (!sceneRef || !fromNode || !toNode) return;
+  const {
+    color = MONEY_SPEND_COLOR,
+    strokeColor = MONEY_SPEND_STROKE,
+    strokeThickness = 1,
+  } = options;
+  const normalizedSegments = normalizePathSegmentsForDisplay(pathInfo, fromNode, toNode);
+  let totalDistance = 0;
+  normalizedSegments.forEach((segment) => {
+    totalDistance += Math.hypot(segment.end.x - segment.start.x, segment.end.y - segment.start.y);
+  });
+
+  let anchorX = (fromNode.x + toNode.x) / 2;
+  let anchorY = (fromNode.y + toNode.y) / 2;
+  if (normalizedSegments.length && Number.isFinite(totalDistance) && totalDistance > 0) {
+    let remaining = totalDistance / 2;
+    for (const segment of normalizedSegments) {
+      const segDx = segment.end.x - segment.start.x;
+      const segDy = segment.end.y - segment.start.y;
+      const segLength = Math.hypot(segDx, segDy);
+      if (segLength >= remaining) {
+        const t = segLength > 0 ? remaining / segLength : 0;
+        anchorX = segment.start.x + segDx * t;
+        anchorY = segment.start.y + segDy * t;
+        break;
+      }
+      remaining -= segLength;
+    }
+  }
+
+  const [sx, sy] = worldToScreen(anchorX, anchorY);
+
+  if (!bridgeCostDisplay) {
+    bridgeCostDisplay = sceneRef.add.text(sx, sy - 20, text, {
+      fontFamily: 'monospace',
+      fontSize: '20px',
+      fontStyle: 'normal',
+      color,
+      stroke: strokeColor,
+      strokeThickness,
+    })
+    .setOrigin(0.5, 0.5)
+    .setDepth(1000);
+  } else {
+    bridgeCostDisplay.setText(text);
+    bridgeCostDisplay.setPosition(sx, sy - 20);
+    bridgeCostDisplay.setColor(color);
+    bridgeCostDisplay.setStroke(strokeColor, strokeThickness);
+    bridgeCostDisplay.setVisible(true);
+  }
+}
+
 function updateBridgeCostDisplay(fromNode, toNode, isBrass = false) {
   if (!sceneRef || !fromNode || !toNode) return;
 
@@ -2999,59 +3156,17 @@ function updateBridgeCostDisplay(fromNode, toNode, isBrass = false) {
     ? getActiveWarpPreference()
     : { allowWarp: true, preferredWrapAxis: null, preferredWrapDirection: null };
   const path = computeWarpBridgeSegments(fromNode, toNode, warpPreference);
-  let anchorX = (fromNode.x + toNode.x) / 2;
-  let anchorY = (fromNode.y + toNode.y) / 2;
-
-  if (path && Number.isFinite(path.totalWorldDistance) && path.totalWorldDistance > 0 && Array.isArray(path.segments)) {
-    if (path.wrapAxis && path.wrapAxis !== 'none' && path.segments.length >= 2) {
-      const postWrap = path.segments[path.segments.length - 1];
-      const segDx = postWrap.end.x - postWrap.start.x;
-      const segDy = postWrap.end.y - postWrap.start.y;
-      anchorX = postWrap.start.x + segDx * 0.5;
-      anchorY = postWrap.start.y + segDy * 0.5;
-    } else {
-      let halfDistance = path.totalWorldDistance / 2;
-      for (const segment of path.segments) {
-        const segDx = segment.end.x - segment.start.x;
-        const segDy = segment.end.y - segment.start.y;
-        const segLength = Math.hypot(segDx, segDy);
-        if (segLength >= halfDistance) {
-          const t = segLength > 0 ? halfDistance / segLength : 0;
-          anchorX = segment.start.x + segDx * t;
-          anchorY = segment.start.y + segDy * t;
-          break;
-        }
-        halfDistance -= segLength;
-      }
-    }
-  }
-
-  const [sx, sy] = worldToScreen(anchorX, anchorY);
-
   const cost = calculateBridgeCost(fromNode, toNode, isBrass, warpPreference);
   const canAfford = goldValue >= cost;
   const text = `$${formatCost(cost)}`;
   const textColor = canAfford ? MONEY_SPEND_COLOR : '#222222';
   const strokeColor = canAfford ? MONEY_SPEND_STROKE : 'rgba(255,255,255,0.85)';
 
-  if (!bridgeCostDisplay) {
-    bridgeCostDisplay = sceneRef.add.text(sx, sy - 20, text, {
-      fontFamily: 'monospace',
-      fontSize: '20px',
-      fontStyle: 'normal',
-      color: textColor,
-      stroke: strokeColor,
-      strokeThickness: canAfford ? 1 : 0,
-    })
-    .setOrigin(0.5, 0.5)
-    .setDepth(1000);
-  } else {
-    bridgeCostDisplay.setText(text);
-    bridgeCostDisplay.setPosition(sx, sy - 20);
-    bridgeCostDisplay.setColor(textColor);
-    bridgeCostDisplay.setStroke(strokeColor, canAfford ? 1 : 0);
-    bridgeCostDisplay.setVisible(true);
-  }
+  updateCostDisplayForPath(fromNode, toNode, path, text, {
+    color: textColor,
+    strokeColor,
+    strokeThickness: canAfford ? 1 : 0,
+  });
 }
 
 function hideBridgeCostDisplay() {
@@ -3074,6 +3189,168 @@ function clearBridgeSelection() {
   lastWarpAxis = null;
   lastWarpDirection = null;
   resetAutoWarpGemUnlock();
+}
+
+function calculateCrownSmashCost(originNode, targetNode) {
+  if (!originNode || !targetNode) return Infinity;
+  const cost = calculateBridgeCost(originNode, targetNode, false, { allowWarp: true });
+  if (!Number.isFinite(cost)) return Infinity;
+  return Math.max(1, Math.ceil(cost / 2));
+}
+
+  function startCrownSmashMode(originNodeId) {
+    if (!Number.isFinite(originNodeId)) return false;
+    if (crownSmashPending) {
+      showErrorMessage('Crown Smash already pending');
+      return false;
+    }
+    if (!isDurbiumResourceModeActive()) {
+      showErrorMessage('Crown Smash requires Durbium mode');
+      return false;
+    }
+    if (winCondition !== 'king') {
+      showErrorMessage('Only available in King mode');
+      return false;
+    }
+    const originNode = nodes.get(originNodeId);
+    if (!originNode || originNode.owner !== myPlayerId) {
+      showErrorMessage('Control your king first');
+      return false;
+    }
+    if (durbiumValue <= 0) {
+      showErrorMessage('Not enough durbium', 'money');
+      return false;
+    }
+    activeAbility = 'crownSmash';
+    crownSmashOriginNodeId = originNodeId;
+    crownSmashPending = false;
+    lastCrownSmashPreviewTargetId = null;
+    crownSmashPreviewPath = null;
+    hideBridgeCostDisplay();
+    redrawStatic();
+    const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
+    previewCrownSmashHover(mouseWorldX, mouseWorldY, baseScale);
+    return true;
+  }
+
+  function cancelCrownSmashMode(options = {}) {
+    if (activeAbility !== 'crownSmash') return;
+    const { skipRedraw = false } = options || {};
+    activeAbility = null;
+    crownSmashOriginNodeId = null;
+    crownSmashPending = false;
+    lastCrownSmashPreviewTargetId = null;
+    crownSmashPreviewPath = null;
+    hideBridgeCostDisplay();
+    if (!skipRedraw) redrawStatic();
+  }
+
+function previewCrownSmashHover(wx, wy, baseScale) {
+  if (activeAbility !== 'crownSmash') return;
+  const originNode = nodes.get(crownSmashOriginNodeId);
+  if (!originNode) {
+    cancelCrownSmashMode();
+    return;
+  }
+  const targetId = pickNearestNode(wx, wy, 18 / baseScale);
+  if (!Number.isFinite(targetId) || targetId === crownSmashOriginNodeId) {
+    const pseudoTarget = { x: wx, y: wy };
+    crownSmashPreviewPath = computeWarpBridgeSegments(originNode, pseudoTarget, { allowWarp: true });
+    if (lastCrownSmashPreviewTargetId != null) {
+      lastCrownSmashPreviewTargetId = null;
+      hideBridgeCostDisplay();
+    }
+    return;
+  }
+  const targetNode = nodes.get(targetId);
+  if (!targetNode || targetNode.owner !== myPlayerId) {
+    const pseudoTarget = { x: wx, y: wy };
+    crownSmashPreviewPath = computeWarpBridgeSegments(originNode, pseudoTarget, { allowWarp: true });
+    hideBridgeCostDisplay();
+    lastCrownSmashPreviewTargetId = null;
+    return;
+  }
+  const cost = calculateCrownSmashCost(originNode, targetNode);
+  lastCrownSmashPreviewTargetId = targetId;
+  crownSmashPreviewPath = computeWarpBridgeSegments(originNode, targetNode, { allowWarp: true });
+  const canAfford = durbiumValue >= cost;
+  updateCostDisplayForPath(originNode, targetNode, crownSmashPreviewPath, `${formatCost(cost)} Du`, {
+    color: canAfford ? DURBIUM_GAIN_COLOR : '#222222',
+    strokeColor: canAfford ? '#0b3545' : 'rgba(255,255,255,0.85)',
+    strokeThickness: canAfford ? 1 : 0,
+  });
+}
+
+function handleCrownSmashClick(wx, wy, baseScale) {
+  if (activeAbility !== 'crownSmash') return false;
+  const originNode = nodes.get(crownSmashOriginNodeId);
+  if (!originNode) {
+    cancelCrownSmashMode();
+    return true;
+  }
+  const targetId = pickNearestNode(wx, wy, 18 / baseScale);
+  if (!Number.isFinite(targetId) || targetId === crownSmashOriginNodeId) {
+    showErrorMessage('Select a different node');
+    return true;
+  }
+  const targetNode = nodes.get(targetId);
+  if (!targetNode || targetNode.owner !== myPlayerId) {
+    showErrorMessage('Choose one of your nodes');
+    return true;
+  }
+  const cost = calculateCrownSmashCost(originNode, targetNode);
+  if (!Number.isFinite(cost)) {
+    showErrorMessage('Invalid Crown Smash target');
+    return true;
+  }
+  if (durbiumValue < cost) {
+    showErrorMessage('Not enough durbium');
+    return true;
+  }
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    showErrorMessage('Disconnected from game');
+    return true;
+  }
+  if (crownSmashPending) {
+    return true;
+  }
+  const token = localStorage.getItem('token');
+  if (!token) {
+    showErrorMessage('Missing session token');
+    return true;
+  }
+  crownSmashPending = true;
+  startLocalCrownSmashFlight(crownSmashOriginNodeId, targetId);
+  ws.send(JSON.stringify({ type: 'crownSmash', targetNodeId: targetId, token }));
+  crownSmashPreviewPath = null;
+  lastCrownSmashPreviewTargetId = null;
+  hideBridgeCostDisplay();
+  cancelCrownSmashMode({ skipRedraw: true });
+  return true;
+}
+
+function startLocalCrownSmashFlight(originNodeId, targetNodeId) {
+  if (!Number.isFinite(originNodeId) || !Number.isFinite(targetNodeId)) return;
+  const originNode = nodes.get(originNodeId);
+  const targetNode = nodes.get(targetNodeId);
+  if (!originNode || !targetNode) return;
+  const path = computeWarpBridgeSegments(originNode, targetNode, { allowWarp: true });
+  if (!path || !Array.isArray(path.segments) || !path.segments.length) return;
+  const pathSegments = normalizePathSegmentsForDisplay(path, originNode, targetNode).map((segment) => [segment.start.x, segment.start.y, segment.end.x, segment.end.y]);
+  const payload = {
+    playerId: myPlayerId,
+    fromNodeId: originNodeId,
+    toNodeId: targetNodeId,
+    durbiumCost: calculateCrownSmashCost(originNode, targetNode),
+    path: {
+      segments: pathSegments,
+      warpAxis: path.wrapAxis || 'none',
+      totalDistance: path.totalWorldDistance || 0,
+    },
+    edgeHits: [],
+    localOnly: true,
+  };
+  startCrownSmashAnimation(payload);
 }
 
 
@@ -4148,6 +4425,9 @@ function clearBridgeSelection() {
       gemCountsDisplay.addEventListener('click', handleGemCountsClick);
       gemCountsClickHandlerBound = true;
     }
+    durbiumBarContainer = document.getElementById('durbiumBar');
+    durbiumBarFill = document.getElementById('durbiumBarFill');
+    durbiumBarLabel = document.getElementById('durbiumBarLabel');
     gemCountLabels.clear();
     if (gemCountsDisplay) {
       GEM_TYPE_ORDER.forEach((key) => {
@@ -4159,6 +4439,8 @@ function clearBridgeSelection() {
         }
       });
     }
+    updateResourceUiVisibility();
+    updateDurbiumDisplay();
     updateGemModeUi();
     updateGemCountsDisplay();
     
@@ -4350,6 +4632,9 @@ function clearBridgeSelection() {
       }
       redrawStatic();
     });
+
+    // Initial draw to set canvas pointerEvents='none' while menu is visible
+    redrawStatic();
   }
 
   function easeOutCubic(t) {
@@ -4428,6 +4713,7 @@ function clearBridgeSelection() {
 
     const prePipeStateChanged = updatePrePipesState();
     const sinkingActive = updateSinkingNodes();
+    const crownAnimating = updateCrownSmashAnimations();
     
     // Update game timer
     const remainingTime = updateTimer();
@@ -4466,7 +4752,8 @@ function clearBridgeSelection() {
       kingTargetsAnimating ||
       kingSelectionPending ||
       redrawForKingAlert ||
-      sinkingActive
+      sinkingActive ||
+      crownAnimating
     ) {
       redrawStatic();
     }
@@ -4557,6 +4844,8 @@ function clearBridgeSelection() {
       else if (msg.type === 'nodeDestroyed') handleNodeDestroyed(msg);
       else if (msg.type === 'destroyError') handleDestroyError(msg);
       else if (msg.type === 'nukeError') handleNukeError(msg);
+      else if (msg.type === 'crownSmashed') handleCrownSmashed(msg);
+      else if (msg.type === 'crownSmashError') handleCrownSmashError(msg);
       else if (msg.type === 'nodeCaptured') handleNodeCaptured(msg);
       else if (msg.type === 'nodeOverflowPayout') handleNodeOverflowPayout(msg);
       else if (msg.type === 'kingMoveOptions') handleKingMoveOptions(msg);
@@ -4660,6 +4949,11 @@ function clearBridgeSelection() {
     playerStats.clear();
     eliminatedPlayers.clear();
     playerOrder = [];
+    cancelCrownSmashMode({ skipRedraw: true });
+    activeCrownFlights = [];
+    durbiumValue = 0;
+    durbiumBarMaxValue = DURBIUM_BAR_CAP;
+    updateDurbiumDisplay();
     hoveredNodeId = null;
     hoveredEdgeId = null;
     edgeRemovalAnimations.clear();
@@ -4924,6 +5218,30 @@ function clearBridgeSelection() {
     } else {
       goldValue = 0;
     }
+
+    if (Array.isArray(msg.durbium)) {
+      const seen = new Set();
+      msg.durbium.forEach(([pid, value]) => {
+        const id = Number(pid);
+        if (!Number.isFinite(id)) return;
+        const stats = ensurePlayerStats(id);
+        stats.durbium = Math.max(0, Number(value) || 0);
+        if (id === myPlayerId) {
+          durbiumValue = stats.durbium;
+        }
+        seen.add(id);
+      });
+      playerStats.forEach((stats, id) => {
+        if (!stats) return;
+        if (!seen.has(id)) stats.durbium = 0;
+      });
+    } else {
+      durbiumValue = 0;
+      playerStats.forEach((stats) => {
+        if (stats) stats.durbium = 0;
+      });
+    }
+    updateDurbiumDisplay();
 
     if (typeof msg.winThreshold === 'number') winThreshold = msg.winThreshold;
     if (typeof msg.totalNodes === 'number') totalNodes = msg.totalNodes;
@@ -5579,6 +5897,25 @@ function clearBridgeSelection() {
       });
     }
 
+    if (Array.isArray(msg.durbium)) {
+      const seen = new Set();
+      msg.durbium.forEach(([pid, value]) => {
+        const id = Number(pid);
+        if (!Number.isFinite(id)) return;
+        const stats = ensurePlayerStats(id);
+        stats.durbium = Math.max(0, Number(value) || 0);
+        if (id === myPlayerId) {
+          durbiumValue = stats.durbium;
+        }
+        seen.add(id);
+      });
+      playerStats.forEach((stats, id) => {
+        if (!stats) return;
+        if (!seen.has(id)) stats.durbium = 0;
+      });
+      updateDurbiumDisplay();
+    }
+
     if (msg.counts) {
       Object.entries(msg.counts).forEach(([pid, count]) => {
         const id = Number(pid);
@@ -5638,9 +5975,13 @@ function clearBridgeSelection() {
       overlayMsg.style.display = 'none';
     }
     if (myEliminated && activeAbility) {
-      activeAbility = null;
-      clearBridgeSelection();
-      hideBridgeCostDisplay();
+      if (activeAbility === 'crownSmash') {
+        cancelCrownSmashMode({ skipRedraw: true });
+      } else {
+        activeAbility = null;
+        clearBridgeSelection();
+        hideBridgeCostDisplay();
+      }
     }
 
     if (statusText) {
@@ -6314,6 +6655,43 @@ function fallbackRemoveEdgesForNode(nodeId) {
     }
   }
 
+  function handleCrownSmashError(msg) {
+    const message = (msg && typeof msg.message === 'string') ? msg.message : 'Crown Smash failed';
+    showErrorMessage(message);
+    crownSmashPending = false;
+    crownSmashPreviewPath = null;
+    cancelCrownSmashMode();
+  }
+
+  function handleCrownSmashed(msg) {
+    if (!msg) return;
+    crownSmashPending = false;
+    startCrownSmashAnimation(msg);
+    lastCrownSmashPreviewTargetId = null;
+    hideBridgeCostDisplay();
+    crownSmashPreviewPath = null;
+    const playerId = Number(msg.playerId);
+    if (playerId === myPlayerId) {
+      const originNode = nodes.get(Number(msg.fromNodeId));
+      const indicatorX = originNode ? originNode.x : mouseWorldX;
+      const indicatorY = originNode ? originNode.y : mouseWorldY;
+      const cost = Math.max(0, Number(msg.durbiumCost) || 0);
+      if (cost > 0) {
+        createMoneyIndicator(
+          indicatorX,
+          indicatorY,
+          `-${formatCost(cost)} Du`,
+          DURBIUM_GAIN_COLOR,
+          2000,
+          { strokeColor: '#0b3545', strokeThickness: 2 }
+        );
+        durbiumValue = Math.max(0, durbiumValue - cost);
+        updateDurbiumDisplay();
+      }
+      cancelCrownSmashMode({ skipRedraw: true });
+    }
+  }
+
   function startNodeSinkAnimation(nodeId, snapshot) {
     if (!Number.isFinite(nodeId) || !snapshot) return;
     const normalizedOwner = snapshot.owner == null ? null : Number(snapshot.owner);
@@ -6660,6 +7038,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     const rewardKeyRaw = typeof msg.rewardKey === 'string' ? msg.rewardKey : null;
     const normalizedRewardType = normalizeNodeResourceType(rewardTypeRaw === 'gem' ? 'gem' : 'money');
     const neutralCaptureEnabled = coerceNeutralCaptureReward(selectedSettings.neutralCaptureGold) > 0;
+    const durbiumActive = isDurbiumResourceModeActive();
 
     if (normalizedRewardType === 'gem') {
       const normalizedKey = normalizeNodeResourceKey(rewardKeyRaw);
@@ -6689,11 +7068,12 @@ function fallbackRemoveEdgesForNode(nodeId) {
       return;
     }
 
+    const indicatorText = durbiumActive ? `+${formatCost(rewardValue)} Du` : `+$${formatCost(rewardValue)}`;
     createMoneyIndicator(
       node.x + offsetX,
       node.y + offsetY,
-      `+$${formatCost(rewardValue)}`,
-      MONEY_GAIN_COLOR,
+      indicatorText,
+      durbiumActive ? DURBIUM_GAIN_COLOR : MONEY_GAIN_COLOR,
       2000
     );
 
@@ -6713,11 +7093,13 @@ function fallbackRemoveEdgesForNode(nodeId) {
     if (!node) return;
     const offsetX = 2;
     const offsetY = -2;
+    const durbiumActive = isDurbiumResourceModeActive();
+    const indicatorText = durbiumActive ? `+${formatCost(amount)} Du` : `+$${formatCost(amount)}`;
     createMoneyIndicator(
       node.x + offsetX,
       node.y + offsetY,
-      `+$${formatCost(amount)}`,
-      MONEY_GAIN_COLOR,
+      indicatorText,
+      durbiumActive ? DURBIUM_GAIN_COLOR : MONEY_GAIN_COLOR,
       2000
     );
     playChaChing();
@@ -6978,14 +7360,15 @@ function fallbackRemoveEdgesForNode(nodeId) {
     }
   }
 
-  function drawKingCrown(nx, ny, radius, ownerColor, options = {}) {
-    if (!graphicsNodes) return null;
-    const {
+function drawKingCrown(nx, ny, radius, ownerColor, options = {}) {
+  if (!graphicsNodes) return null;
+  const {
       highlighted = false,
       highlightColor: overrideHighlightColor,
       crownHealth: crownHealthOpt = null,
       crownMax: crownMaxOpt = null,
       nodeId = null,
+      rotation = 0,
     } = options;
     const layout = computePlacedKingCrownLayout(nx, ny, radius);
     if (!layout) return null;
@@ -7025,7 +7408,16 @@ function fallbackRemoveEdgesForNode(nodeId) {
       }
     }
 
-    const bodyOutline = layout.bodyOutlinePoints || layout.outlinePoints;
+    const rotationCenterX = layout.centerX || nx;
+    const rotationCenterY = layout.centerY || ny;
+    const hasRotation = Number.isFinite(rotation) && rotation !== 0;
+    const outlinePoints = hasRotation
+      ? rotatePointList(layout.outlinePoints, rotationCenterX, rotationCenterY, rotation)
+      : layout.outlinePoints;
+    const bodyOutlineSource = layout.bodyOutlinePoints || layout.outlinePoints;
+    const bodyOutline = hasRotation
+      ? rotatePointList(bodyOutlineSource, rotationCenterX, rotationCenterY, rotation)
+      : bodyOutlineSource;
     if (bodyOutline) {
       fillCrownPolygon(bodyOutline, emptyFillColor, emptyFillAlpha);
     }
@@ -7033,7 +7425,10 @@ function fallbackRemoveEdgesForNode(nodeId) {
     if (bodyFillRatio > 0) {
       const fillPoints = buildCrownFillPolygon(layout, Math.min(1, bodyFillRatio));
       if (fillPoints) {
-        fillCrownPolygon(fillPoints, fillColor, liquidFillAlpha);
+        const rotatedFillPoints = hasRotation
+          ? rotatePointList(fillPoints, rotationCenterX, rotationCenterY, rotation)
+          : fillPoints;
+        fillCrownPolygon(rotatedFillPoints, fillColor, liquidFillAlpha);
       }
     }
 
@@ -7041,7 +7436,9 @@ function fallbackRemoveEdgesForNode(nodeId) {
       const clampedTip = Math.min(1, tipFillRatio);
       layout.spikes.forEach((spike) => {
         if (!spike || !spike.tip || !spike.leftBase || !spike.rightBase) return;
-        const { tip, leftBase, rightBase } = spike;
+        const tip = hasRotation ? rotatePoint(spike.tip, rotationCenterX, rotationCenterY, rotation) : spike.tip;
+        const leftBase = hasRotation ? rotatePoint(spike.leftBase, rotationCenterX, rotationCenterY, rotation) : spike.leftBase;
+        const rightBase = hasRotation ? rotatePoint(spike.rightBase, rotationCenterX, rotationCenterY, rotation) : spike.rightBase;
         if (clampedTip >= 0.999) {
           fillCrownPolygon(
             [
@@ -7075,11 +7472,11 @@ function fallbackRemoveEdgesForNode(nodeId) {
       });
     }
 
-    strokeCrownPolygon(layout.outlinePoints, outlineWidth, strokeColor, outlineAlpha);
+    strokeCrownPolygon(outlinePoints, outlineWidth, strokeColor, outlineAlpha);
 
     if (highlighted && Number.isFinite(overrideHighlightColor)) {
       strokeCrownPolygon(
-        layout.outlinePoints,
+        outlinePoints,
         Math.max(1, outlineWidth - 1),
         overrideHighlightColor,
         0.5
@@ -7156,6 +7553,193 @@ function fallbackRemoveEdgesForNode(nodeId) {
     }
 
     return layout;
+  }
+
+  function rotatePoint(point, centerX, centerY, angle) {
+    if (!point || !Number.isFinite(angle)) return point;
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    const dx = point.x - centerX;
+    const dy = point.y - centerY;
+    return {
+      x: centerX + dx * cos - dy * sin,
+      y: centerY + dx * sin + dy * cos,
+    };
+  }
+
+  function rotatePointList(points, centerX, centerY, angle) {
+    if (!Array.isArray(points) || !Number.isFinite(angle) || angle === 0) return points;
+    return points.map((pt) => rotatePoint(pt, centerX, centerY, angle));
+  }
+
+  function buildCrownFlightSegments(pathInfo, originNodeId, destinationNodeId) {
+    const originNode = nodes.get(originNodeId);
+    const destinationNode = nodes.get(destinationNodeId);
+    const normalized = normalizePathSegmentsForDisplay(pathInfo, originNode, destinationNode);
+    if (!normalized.length && originNode && destinationNode) {
+      normalized.push({ start: { x: originNode.x, y: originNode.y }, end: { x: destinationNode.x, y: destinationNode.y } });
+    }
+    return normalized.map((segment) => ({
+      start: { x: segment.start.x, y: segment.start.y },
+      end: { x: segment.end.x, y: segment.end.y },
+      length: Math.hypot(segment.end.x - segment.start.x, segment.end.y - segment.start.y),
+    }));
+  }
+
+  function startCrownSmashAnimation(payload = {}) {
+    const fromNodeId = Number(payload.fromNodeId);
+    const toNodeId = Number(payload.toNodeId);
+    const playerId = Number(payload.playerId);
+    if (!Number.isFinite(fromNodeId) || !Number.isFinite(toNodeId) || !Number.isFinite(playerId)) return;
+    const pathInfo = payload.path && typeof payload.path === 'object' ? payload.path : null;
+    const segments = buildCrownFlightSegments(pathInfo, fromNodeId, toNodeId);
+    if (!segments.length) return;
+    let totalDistance = Number(pathInfo?.totalDistance);
+    if (!Number.isFinite(totalDistance) || totalDistance <= 0) {
+      totalDistance = segments.reduce((sum, seg) => sum + Math.max(seg.length || 0, 0), 0);
+    }
+    if (!Number.isFinite(totalDistance) || totalDistance <= 0) {
+      totalDistance = Math.max(1, Math.hypot(segments[segments.length - 1].end.x - segments[0].start.x, segments[segments.length - 1].end.y - segments[0].start.y));
+    }
+    let duration = Math.max(CROWN_SMASH_MIN_DURATION_SEC, totalDistance / CROWN_SMASH_SPEED);
+    const hits = Array.isArray(payload.edgeHits)
+      ? payload.edgeHits.map((hit) => {
+          const edgeId = toEdgeId(hit.edgeId);
+          if (edgeId == null) return null;
+          const distance = Math.max(0, Number(hit.distance) || 0);
+          const triggerTime = totalDistance > 0 ? Math.min(duration, (distance / totalDistance) * duration) : 0;
+          return { edgeId, triggerTime, triggered: false };
+        }).filter(Boolean)
+      : [];
+
+    const initialSegment = segments[0];
+    const initialAngle = Math.atan2(initialSegment.end.y - initialSegment.start.y, initialSegment.end.x - initialSegment.start.x);
+    const isConfirmed = payload.localOnly !== true;
+    let existingFlight = null;
+    if (isConfirmed) {
+      existingFlight = activeCrownFlights.find((flight) => flight && !flight.confirmed && flight.playerId === playerId);
+    }
+
+    if (existingFlight) {
+      const elapsed = animationTime - existingFlight.startTime;
+      const progress = existingFlight.duration > 0 ? Math.min(1, Math.max(0, elapsed / existingFlight.duration)) : 0;
+      existingFlight.segments = segments;
+      existingFlight.totalDistance = totalDistance;
+      existingFlight.duration = Math.max(duration, CROWN_SMASH_MIN_DURATION_SEC);
+      existingFlight.startTime = animationTime - progress * existingFlight.duration;
+      existingFlight.edgeHits = hits;
+      existingFlight.currentAngle = initialAngle;
+      existingFlight.confirmed = true;
+      existingFlight.completed = false;
+    } else {
+      activeCrownFlights.push({
+        playerId,
+        fromNodeId,
+        toNodeId,
+        segments,
+        totalDistance,
+        duration,
+        startTime: animationTime,
+        edgeHits: hits,
+        currentX: initialSegment.start.x,
+        currentY: initialSegment.start.y,
+        currentAngle: initialAngle,
+        completed: false,
+        completeTime: 0,
+        confirmed: isConfirmed,
+      });
+    }
+    fallenKingMarkers.delete(fromNodeId);
+    destroyCrownHealthDisplay(fromNodeId);
+    if (Number.isFinite(fromNodeId)) kingMoveSuppressedNodes.add(fromNodeId);
+    redrawStatic();
+  }
+
+  function getPointAlongSegments(segments, distance) {
+    if (!Array.isArray(segments) || segments.length === 0) {
+      return null;
+    }
+    let remaining = Math.max(0, distance);
+    let lastSegment = segments[segments.length - 1];
+    for (const segment of segments) {
+      const segLength = Math.max(segment.length || 0, 0);
+      if (segLength >= remaining) {
+        const t = segLength > 0 ? remaining / segLength : 0;
+        const x = segment.start.x + (segment.end.x - segment.start.x) * t;
+        const y = segment.start.y + (segment.end.y - segment.start.y) * t;
+        const angle = Math.atan2(segment.end.y - segment.start.y, segment.end.x - segment.start.x);
+        return { x, y, angle };
+      }
+      remaining -= segLength;
+      lastSegment = segment;
+    }
+    if (lastSegment) {
+      const angle = Math.atan2(lastSegment.end.y - lastSegment.start.y, lastSegment.end.x - lastSegment.start.x);
+      return { x: lastSegment.end.x, y: lastSegment.end.y, angle };
+    }
+    return null;
+  }
+
+  function updateCrownSmashAnimations() {
+    if (activeCrownFlights.length === 0) return false;
+    const now = animationTime;
+    let needsRedraw = false;
+    activeCrownFlights.forEach((flight) => {
+      if (!flight) return;
+      const elapsed = Math.max(0, now - flight.startTime);
+      const progress = flight.duration > 0 ? Math.min(1, elapsed / flight.duration) : 1;
+      const travelDistance = flight.totalDistance > 0 ? progress * flight.totalDistance : 0;
+      const point = getPointAlongSegments(flight.segments, travelDistance);
+      if (point) {
+        flight.currentX = point.x;
+        flight.currentY = point.y;
+        flight.currentAngle = point.angle;
+        needsRedraw = true;
+      }
+      flight.edgeHits.forEach((hit) => {
+        if (!hit || hit.triggered) return;
+        if (elapsed >= hit.triggerTime) {
+          hit.triggered = true;
+          if (hit.edgeId != null) removeEdges([hit.edgeId], { reason: 'crown' });
+          needsRedraw = true;
+        }
+      });
+      if (progress >= 1) {
+        flight.completed = true;
+        flight.completeTime = now;
+        needsRedraw = true;
+      }
+    });
+    const before = activeCrownFlights.length;
+    activeCrownFlights = activeCrownFlights.filter((flight) => {
+      if (!flight) return false;
+      if (!flight.completed) return true;
+      return (flight.completeTime || 0) + 0.3 > now;
+    });
+    if (before !== activeCrownFlights.length) needsRedraw = true;
+    return needsRedraw || activeCrownFlights.length > 0;
+  }
+
+  function drawActiveCrownFlights(baseScale) {
+    if (!graphicsNodes || activeCrownFlights.length === 0) return;
+    const radius = computeStandardKingCrownRadius(baseScale);
+    activeCrownFlights.forEach((flight) => {
+      if (!flight || !Number.isFinite(flight.currentX) || !Number.isFinite(flight.currentY)) return;
+      const [screenX, screenY] = worldToScreen(flight.currentX, flight.currentY);
+      drawKingCrown(screenX, screenY, radius, ownerToColor(flight.playerId), {
+        highlighted: true,
+        highlightColor: ownerToColor(flight.playerId),
+        rotation: flight.currentAngle,
+        crownHealth: null,
+        crownMax: null,
+        nodeId: null,
+      });
+    });
+  }
+
+  function isNodeSuppressedByCrownFlight(nodeId) {
+    if (!Number.isFinite(nodeId)) return false;
+    return activeCrownFlights.some((flight) => flight && !flight.completed && (flight.toNodeId === nodeId || flight.fromNodeId === nodeId));
   }
 
   function drawKingMovePreviewCrown(nx, baseBottomY, radius, options = {}) {
@@ -7288,6 +7872,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
       // Hide UI bars when menu is visible
       if (topUiBar) topUiBar.style.display = 'none';
       if (bottomUiBar) bottomUiBar.style.display = 'none';
+      const canvas = getGameCanvas();
+      if (canvas) canvas.style.pointerEvents = 'none';
       nodeJuiceTexts.forEach((text) => {
         if (text) text.setVisible(false);
       });
@@ -7303,8 +7889,13 @@ function fallbackRemoveEdgesForNode(nodeId) {
     updateBrassPreviewIntersections();
 
     // Show UI bars when game is active
-    if (topUiBar) topUiBar.style.display = 'block';
+    if (topUiBar) {
+      const shouldShowResources = isMagicResourceModeActive() || isDurbiumResourceModeActive();
+      topUiBar.style.display = shouldShowResources ? 'flex' : 'none';
+    }
     if (bottomUiBar) bottomUiBar.style.display = 'flex';
+    const canvas = getGameCanvas();
+    if (canvas) canvas.style.pointerEvents = 'auto';
     
     // Draw border box around play area (warp border handles inner toggle)
     drawPlayAreaBorder();
@@ -7392,7 +7983,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
       const resourceType = normalizeNodeResourceType(n.resourceType);
       const resourceKey = resourceType === 'gem' ? normalizeNodeResourceKey(n.resourceKey) : null;
       const resourceEmoji = getResourceEmoji(resourceType, resourceKey);
-      const shouldShowEmoji = Boolean(resourceEmoji) && n.owner == null;
+      const shouldShowEmoji = Boolean(resourceEmoji) && n.owner == null && isMagicResourceModeActive();
       let emojiText = nodeResourceTexts.get(id);
       const canShowEmoji = shouldShowEmoji && sceneRef;
       if (canShowEmoji) {
@@ -7500,11 +8091,12 @@ function fallbackRemoveEdgesForNode(nodeId) {
       const shouldDrawFallenKing = kingOwnerId == null && fallenOwnerId != null;
       const hideKingVisual = shouldHideCrownForHiddenStart(n);
       if (winCondition === 'king') {
+        const suppressKingVisual = kingOwnerId != null && isNodeSuppressedByCrownFlight(id);
         if (hideKingVisual) {
           if (crownHealthDisplays.has(id)) {
             destroyCrownHealthDisplay(id);
           }
-        } else if (kingOwnerId != null || shouldDrawFallenKing) {
+        } else if ((kingOwnerId != null || shouldDrawFallenKing) && !suppressKingVisual) {
           const crownOwnerId = kingOwnerId != null ? kingOwnerId : fallenOwnerId;
           const crownColor = ownerToColor(crownOwnerId);
           const isSelectedKing = kingOwnerId != null && kingSelectionActive && kingSelectedNodeId === id;
@@ -7617,13 +8209,21 @@ function fallbackRemoveEdgesForNode(nodeId) {
       }
     }
 
+    const flightScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
+    drawActiveCrownFlights(flightScale);
+
     drawSinkingNodes();
     drawFallenKingMarkers();
 
     drawKingMoveTargetsOverlay();
 
     // After drawing nodes / previews:
-    if (!(activeAbility === 'bridge1way' && bridgeFirstNode !== null && hoveredNodeId !== null)) {
+    const shouldKeepCostDisplay = (
+      activeAbility === 'bridge1way' && bridgeFirstNode !== null && hoveredNodeId !== null
+    ) || (
+      activeAbility === 'crownSmash' && lastCrownSmashPreviewTargetId != null
+    );
+    if (!shouldKeepCostDisplay) {
       hideBridgeCostDisplay();
     }
 
@@ -7671,6 +8271,10 @@ function fallbackRemoveEdgesForNode(nodeId) {
       }
     }
     
+    if (activeAbility === 'crownSmash' && crownSmashPreviewPath && Array.isArray(crownSmashPreviewPath.segments)) {
+      drawCrownSmashPreviewPath();
+    }
+
     // Draw money indicators
     drawMoneyIndicators();
   }
@@ -8162,6 +8766,38 @@ function fallbackRemoveEdgesForNode(nodeId) {
     const wx = mouseWorldX;
     const wy = mouseWorldY;
 
+    if (activeAbility === 'crownSmash') {
+      cancelCrownSmashMode();
+      lastPointerDownButton = -1;
+      return;
+    }
+
+    const canAttemptCrownSmash = winCondition === 'king' && isDurbiumResourceModeActive() && phase === 'playing' && myPicked;
+    if (canAttemptCrownSmash) {
+      const myKingNodeId = kingNodesByPlayer.get(myPlayerId);
+      if (Number.isFinite(myKingNodeId)) {
+        const kingNode = nodes.get(myKingNodeId);
+        if (kingNode) {
+          // Use screen coordinates and crown layout for accurate hit detection (same as king selection)
+          const [screenX, screenY] = worldToScreen(kingNode.x, kingNode.y);
+          const [pointerX, pointerY] = getPointerScreenCoords(ev);
+          const crownRadius = computeStandardKingCrownRadius(baseScale);
+          const layout = computePlacedKingCrownLayout(screenX, screenY, crownRadius);
+          const withinBounds = layout && isPointWithinRect(pointerX, pointerY, layout.bounds);
+          const dx = pointerX - (layout?.centerX ?? screenX);
+          const dy = pointerY - (layout?.centerY ?? screenY);
+          const withinRadius = layout ? (dx * dx + dy * dy <= layout.hitRadius * layout.hitRadius) : false;
+          if (withinBounds || withinRadius) {
+            if (!startCrownSmashMode(myKingNodeId)) {
+              // message already shown
+            }
+            lastPointerDownButton = -1;
+            return;
+          }
+        }
+      }
+    }
+
     if (handleBridgeBuilding(wx, wy, baseScale, true)) {
       redrawStatic();
       lastPointerDownButton = -1;
@@ -8552,6 +9188,12 @@ function fallbackRemoveEdgesForNode(nodeId) {
       } else {
         scheduleSingleClickExecution(ev, wx, wy, baseScale);
       }
+      return;
+    }
+
+    if (activeAbility === 'crownSmash') {
+      handleCrownSmashClick(wx, wy, baseScale);
+      cancelPendingSingleClick();
       return;
     }
 
@@ -8988,6 +9630,10 @@ function fallbackRemoveEdgesForNode(nodeId) {
         clearKingSelection();
         return;
       }
+      if (activeAbility === 'crownSmash') {
+        cancelCrownSmashMode();
+        return;
+      }
       if (activeAbility) {
         activeAbility = null;
         clearBridgeSelection();
@@ -9044,7 +9690,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     let needsRedraw = false;
     
     // In bridge building or destroy mode, only check for node hover, not edge hover
-    if (activeAbility === 'bridge1way' || activeAbility === 'destroy') {
+    if (activeAbility === 'bridge1way' || activeAbility === 'destroy' || activeAbility === 'crownSmash') {
       const nodeId = pickNearestNode(wx, wy, 18 / baseScale);
       
       // Update hovered node
@@ -9081,6 +9727,13 @@ function fallbackRemoveEdgesForNode(nodeId) {
       }
     }
 
+    if (activeAbility === 'crownSmash') {
+      previewCrownSmashHover(wx, wy, baseScale);
+    } else if (lastCrownSmashPreviewTargetId != null) {
+      lastCrownSmashPreviewTargetId = null;
+      hideBridgeCostDisplay();
+    }
+
     if (kingSelectionActive && view) {
       const [pointerScreenX, pointerScreenY] = worldToScreen(wx, wy);
       const hoveredTargetId = pickKingMoveTargetFromScreen(pointerScreenX, pointerScreenY);
@@ -9106,6 +9759,9 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
   // Mouse down: detect king crown clicks separately
   window.addEventListener('mousedown', (ev) => {
+    if (activeAbility === 'crownSmash') {
+      return;
+    }
     if (!kingSelectionActive) {
       const myKingNodeId = kingNodesByPlayer.get(myPlayerId);
       if (
@@ -9252,6 +9908,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
   }
 
   function updateGemCountsDisplay() {
+    updateResourceUiVisibility();
     if (!gemCountsDisplay || gemCountLabels.size === 0) {
       gemCountsDisplay = document.getElementById('gemCountsDisplay');
       if (gemCountsDisplay && !gemCountsClickHandlerBound) {
@@ -9428,6 +10085,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
         stats.gems[key] = value >= 0 ? Math.floor(value) : 0;
       });
     }
+    stats.durbium = Math.max(0, Number(stats.durbium) || 0);
     return stats;
   }
 
@@ -9660,6 +10318,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
     playerOrder = [];
     playerStats.clear();
     eliminatedPlayers.clear();
+    cancelCrownSmashMode({ skipRedraw: true });
+    activeCrownFlights = [];
     progressSegments.clear();
     if (progressBarInner) progressBarInner.innerHTML = '';
     if (progressBarInner) progressBarInner.style.justifyContent = 'flex-start';
@@ -10308,6 +10968,48 @@ function drawBridgePreviewSegment(segment, color, baseScale, pipeType = 'normal'
       const useBrass = pipeType === 'gold';
       drawPreviewTriangle(cx, cy, triW, triH, angle, color, useBrass, pipeType, showWarpOutline);
     }
+}
+
+function drawCrownSmashPreviewPath() {
+  if (!graphicsNodes || !crownSmashPreviewPath || !Array.isArray(crownSmashPreviewPath.segments)) return;
+  const originNode = nodes.get(crownSmashOriginNodeId);
+  if (!originNode) return;
+  const targetNode = (lastCrownSmashPreviewTargetId != null)
+    ? nodes.get(lastCrownSmashPreviewTargetId)
+    : { x: mouseWorldX, y: mouseWorldY };
+  const normalizedSegments = normalizePathSegmentsForDisplay(crownSmashPreviewPath, originNode, targetNode);
+  if (!normalizedSegments.length) return;
+  const highlightColor = 0xfff3b0;
+  const alpha = 0.35;
+  const width = 14;
+  normalizedSegments.forEach((segment) => {
+    const start = segment.start;
+    const end = segment.end;
+    if (!start || !end) return;
+    const [sx, sy] = worldToScreen(start.x, start.y);
+    const [ex, ey] = worldToScreen(end.x, end.y);
+    const dx = ex - sx;
+    const dy = ey - sy;
+    const len = Math.hypot(dx, dy);
+    if (!Number.isFinite(len) || len < 2) return;
+    const ux = dx / len;
+    const uy = dy / len;
+    const px = -uy * width / 2;
+    const py = ux * width / 2;
+    graphicsNodes.fillStyle(highlightColor, alpha);
+    graphicsNodes.beginPath();
+    graphicsNodes.moveTo(sx + px, sy + py);
+    graphicsNodes.lineTo(ex + px, ey + py);
+    graphicsNodes.lineTo(ex - px, ey - py);
+    graphicsNodes.lineTo(sx - px, sy - py);
+    graphicsNodes.closePath();
+    graphicsNodes.fillPath();
+  });
+
+  const baseScale = view ? Math.min(view.scaleX, view.scaleY) : 1;
+  const [ox, oy] = worldToScreen(originNode.x, originNode.y);
+  graphicsNodes.lineStyle(4, highlightColor, 0.9);
+  graphicsNodes.strokeCircle(ox, oy, Math.max(6, calculateNodeRadius(originNode, baseScale) + 8));
 }
 
 function updateBrassPreviewIntersections() {

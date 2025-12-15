@@ -146,7 +146,7 @@ class GameEngine:
         self.state.starting_node_juice = STARTING_NODE_JUICE
         self.state.king_crown_max_health = KING_CROWN_MAX_HEALTH
 
-        resource_mode = "standard"
+        resource_mode = "durbium"
         growth_rate_value = PRODUCTION_RATE_PER_NODE
         growth_rate_overridden = False
         starting_flow_ratio = RESERVE_TRANSFER_RATIO
@@ -315,6 +315,8 @@ class GameEngine:
             resources_option = str(options.get("resources", "")).strip().lower()
             if resources_option == "gems":
                 resource_mode = "gems"
+            elif resources_option == "durbium":
+                resource_mode = "durbium"
             elif resources_option == "standard":
                 resource_mode = "standard"
 
@@ -458,7 +460,13 @@ class GameEngine:
         if not self.state:
             return
 
-        normalized = "gems" if str(resource_mode).strip().lower() == "gems" else "standard"
+        normalized_value = str(resource_mode).strip().lower()
+        if normalized_value == "gems":
+            normalized = "gems"
+        elif normalized_value == "durbium":
+            normalized = "durbium"
+        else:
+            normalized = "standard"
         nodes = list(self.state.nodes.values())
 
         if not nodes:
@@ -946,6 +954,55 @@ class GameEngine:
 
         return reachable
 
+    def _apply_king_move(
+        self,
+        player_id: int,
+        destination_node_id: int,
+        current_node_id: int,
+        destination_node: Optional[Node] = None,
+    ) -> Dict[str, Any]:
+        if not self.state:
+            raise GameValidationError("No game state")
+
+        if destination_node is None:
+            destination_node = self.state.nodes.get(destination_node_id)
+        if not destination_node:
+            raise GameValidationError("Destination not found")
+        if destination_node.owner != player_id:
+            raise GameValidationError("Destination must be controlled")
+        if current_node_id == destination_node_id:
+            raise GameValidationError("King already occupies this node")
+
+        crown_max_default = getattr(self.state, "king_crown_max_health", KING_CROWN_MAX_HEALTH)
+        current_health = crown_max_default
+        current_max_health = crown_max_default
+
+        current_node = self.state.nodes.get(current_node_id)
+        if current_node:
+            current_health = float(getattr(current_node, "king_crown_health", current_health))
+            current_max_health = float(getattr(current_node, "king_crown_max_health", current_max_health))
+            setattr(current_node, "king_owner_id", None)
+            setattr(current_node, "king_crown_health", 0.0)
+            setattr(current_node, "king_crown_max_health", 0.0)
+
+        if current_max_health <= 0.0:
+            current_max_health = crown_max_default
+        current_health = max(0.0, min(current_health, current_max_health))
+
+        setattr(destination_node, "king_owner_id", player_id)
+        setattr(destination_node, "king_crown_health", current_health)
+        setattr(destination_node, "king_crown_max_health", max(current_max_health, crown_max_default))
+
+        self.state.player_king_nodes[player_id] = destination_node_id
+
+        return {
+            "playerId": player_id,
+            "fromNodeId": current_node_id,
+            "toNodeId": destination_node_id,
+            "crownHealth": round(current_health, 3),
+            "crownMax": round(max(current_max_health, crown_max_default), 3),
+        }
+
     def get_king_move_options(
         self,
         token: str,
@@ -992,46 +1049,140 @@ class GameEngine:
             destination_node = self.validate_node_exists(destination_node_id)
             if destination_node.owner != player_id:
                 raise GameValidationError("Must move to a controlled node")
-            if current_node_id == destination_node_id:
-                raise GameValidationError("King already occupies this node")
-
             reachable = self._compute_king_reachable_nodes(
                 player_id=player_id,
                 origin_node_id=current_node_id,
             )
             if destination_node_id not in reachable:
                 raise GameValidationError("Destination not reachable")
+            payload = self._apply_king_move(
+                player_id,
+                destination_node_id,
+                current_node_id,
+                destination_node,
+            )
+            return True, None, payload
 
-            crown_max_default = getattr(self.state, "king_crown_max_health", KING_CROWN_MAX_HEALTH)
-            current_health = crown_max_default
-            current_max_health = crown_max_default
+        except GameValidationError as exc:
+            return False, str(exc), None
 
-            current_node = self.state.nodes.get(current_node_id) if self.state else None
-            if current_node:
-                current_health = float(getattr(current_node, "king_crown_health", current_health))
-                current_max_health = float(getattr(current_node, "king_crown_max_health", current_max_health))
-                setattr(current_node, "king_owner_id", None)
-                setattr(current_node, "king_crown_health", 0.0)
-                setattr(current_node, "king_crown_max_health", 0.0)
+    def handle_crown_smash(
+        self,
+        token: str,
+        destination_node_id: int,
+    ) -> Tuple[bool, Optional[str], Optional[Dict[str, Any]]]:
+        try:
+            self.validate_game_active()
+            player_id = self.validate_player(token)
+            self.validate_player_can_act(player_id)
+            if not self.state:
+                raise GameValidationError("No game state")
+            if str(getattr(self.state, "win_condition", "dominate") or "").strip().lower() != "king":
+                raise GameValidationError("Crown Smash only works in King mode")
 
-            if current_max_health <= 0.0:
-                current_max_health = crown_max_default
-            current_health = max(0.0, min(current_health, current_max_health))
+            resource_mode = str(getattr(self.state, "resource_mode", "standard") or "standard").strip().lower()
+            if resource_mode != "durbium":
+                raise GameValidationError("Crown Smash requires Durbium resources")
 
-            setattr(destination_node, "king_owner_id", player_id)
-            setattr(destination_node, "king_crown_health", current_health)
-            setattr(destination_node, "king_crown_max_health", max(current_max_health, crown_max_default))
+            origin_node_id = self._validate_king_context(player_id)
+            destination_node = self.validate_node_exists(destination_node_id)
+            if destination_node.owner != player_id:
+                raise GameValidationError("Destination must be controlled")
+            if origin_node_id == destination_node_id:
+                raise GameValidationError("Pick a different destination")
 
-            if self.state:
-                self.state.player_king_nodes[player_id] = destination_node_id
+            from_node = self.state.nodes.get(origin_node_id)
+            if not from_node:
+                raise GameValidationError("Invalid king location")
+
+            path_info = self._compute_warp_bridge_path(from_node, destination_node)
+            segments = path_info.get("segments") or []
+            if not segments:
+                segments = [(from_node.x, from_node.y, destination_node.x, destination_node.y)]
+            warp_axis = path_info.get("wrap_axis", "none") or "none"
+            total_world_distance = float(path_info.get("total_distance") or 0.0)
+
+            bridge_cost = self.calculate_bridge_cost(from_node, destination_node, segments_override=segments)
+            durbium_cost = max(1, math.ceil(bridge_cost / 2.0))
+
+            current_durbium = float(self.state.player_durbium.get(player_id, 0.0))
+            if current_durbium < durbium_cost:
+                raise GameValidationError("Not enough durbium")
+
+            intersecting_edges = self._find_intersecting_edges(from_node, destination_node, segments)
+            hit_events: List[Tuple[int, float]] = []
+            removed_edges: List[int] = []
+            if intersecting_edges:
+                for edge_id in intersecting_edges:
+                    edge = self.state.edges.get(edge_id)
+                    if not edge:
+                        continue
+                    distance = self._distance_to_first_intersection(segments, edge) or 0.0
+                    hit_events.append((edge_id, max(0.0, float(distance))))
+                hit_events.sort(key=lambda item: item[1])
+                edge_ids = [edge_id for edge_id, _ in hit_events]
+                removed_edges = self.state.remove_edges(edge_ids, record=True, reason="crownSmash")
+
+            self.state.player_durbium[player_id] = max(0.0, current_durbium - durbium_cost)
+
+            relocation_payload = self._apply_king_move(
+                player_id,
+                destination_node_id,
+                origin_node_id,
+                destination_node,
+            )
+
+            segment_payload: List[List[float]] = []
+            for segment in segments:
+                if isinstance(segment, tuple) or isinstance(segment, list):
+                    if len(segment) >= 4:
+                        sx, sy, ex, ey = segment[0], segment[1], segment[2], segment[3]
+                    else:
+                        continue
+                else:
+                    start = getattr(segment, "start", None)
+                    end = getattr(segment, "end", None)
+                    if start and end:
+                        sx = getattr(start, "x", None)
+                        sy = getattr(start, "y", None)
+                        ex = getattr(end, "x", None)
+                        ey = getattr(end, "y", None)
+                    else:
+                        sx = getattr(segment, "sx", None)
+                        sy = getattr(segment, "sy", None)
+                        ex = getattr(segment, "ex", None)
+                        ey = getattr(segment, "ey", None)
+                try:
+                    sx = float(sx)
+                    sy = float(sy)
+                    ex = float(ex)
+                    ey = float(ey)
+                except (TypeError, ValueError):
+                    continue
+                segment_payload.append([sx, sy, ex, ey])
+
+            if not segment_payload:
+                segment_payload.append([from_node.x, from_node.y, destination_node.x, destination_node.y])
 
             payload = {
                 "playerId": player_id,
-                "fromNodeId": current_node_id,
+                "fromNodeId": origin_node_id,
                 "toNodeId": destination_node_id,
-                "crownHealth": round(current_health, 3),
-                "crownMax": round(max(current_max_health, crown_max_default), 3),
+                "durbiumCost": durbium_cost,
+                "path": {
+                    "segments": segment_payload,
+                    "warpAxis": warp_axis,
+                    "totalDistance": total_world_distance,
+                },
+                "edgeHits": [
+                    {"edgeId": edge_id, "distance": round(distance, 4)}
+                    for edge_id, distance in hit_events
+                ],
+                "removedEdges": removed_edges,
+                "crownHealth": relocation_payload.get("crownHealth"),
+                "crownMax": relocation_payload.get("crownMax"),
             }
+
             return True, None, payload
 
         except GameValidationError as exc:

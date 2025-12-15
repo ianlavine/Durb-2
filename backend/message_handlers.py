@@ -62,6 +62,7 @@ class MessageRouter:
             "localTargeting": self.handle_local_targeting,
             "destroyNode": self.handle_destroy_node,
             "nukeNode": self.handle_nuke_node,
+            "crownSmash": self.handle_crown_smash,
             "kingRequestMoves": self.handle_king_request_moves,
             "kingMove": self.handle_king_move,
             "quitGame": self.handle_quit_game,
@@ -404,6 +405,8 @@ class MessageRouter:
             normalized_resources = resources_value.strip().lower()
             if normalized_resources == "gems":
                 settings["resources"] = "gems"
+            elif normalized_resources == "durbium":
+                settings["resources"] = "durbium"
             else:
                 settings["resources"] = "standard"
 
@@ -996,6 +999,72 @@ class MessageRouter:
                 "nodeId": int(node_id),
                 "removedEdges": removal_info.get("removedEdges", []) if removal_info else [],
                 "cost": cost,
+            },
+        )
+
+    async def handle_crown_smash(
+        self,
+        websocket: websockets.WebSocketServerProtocol,
+        msg: Dict[str, Any],
+        server_context: Dict[str, Any],
+    ) -> None:
+        token = msg.get("token")
+        target_node_id = msg.get("targetNodeId")
+        if target_node_id is None:
+            target_node_id = msg.get("nodeId")
+        if token is None or target_node_id is None:
+            return
+
+        game_info = self._get_game_info(token, server_context)
+        if not game_info:
+            return
+
+        engine = game_info["engine"]
+        success, error_msg, payload = engine.handle_crown_smash(token, int(target_node_id))
+        if not success or not payload:
+            await self._send_safe(
+                websocket,
+                json.dumps({"type": "crownSmashError", "message": error_msg or "Unable to use Crown Smash"}),
+            )
+            return
+
+        broadcast_payload = dict(payload)
+        broadcast_payload["type"] = "crownSmashed"
+        await self._broadcast_to_game(game_info, broadcast_payload)
+
+        try:
+            king_player_id = int(payload.get("playerId", 0))
+        except (TypeError, ValueError):
+            king_player_id = 0
+        try:
+            king_from_id = int(payload.get("fromNodeId", 0))
+        except (TypeError, ValueError):
+            king_from_id = 0
+        try:
+            king_to_id = int(payload.get("toNodeId", 0))
+        except (TypeError, ValueError):
+            king_to_id = 0
+        king_message = {
+            "type": "kingMoved",
+            "playerId": king_player_id,
+            "fromNodeId": king_from_id,
+            "toNodeId": king_to_id,
+            "crownHealth": payload.get("crownHealth"),
+            "crownMax": payload.get("crownMax"),
+        }
+        await self._broadcast_to_game(game_info, king_message)
+
+        self._record_game_event(
+            game_info,
+            token,
+            "crownSmash",
+            {
+                "targetNodeId": int(target_node_id),
+                "fromNodeId": int(payload.get("fromNodeId", 0)),
+                "durbiumCost": payload.get("durbiumCost"),
+                "path": payload.get("path"),
+                "edgeHits": payload.get("edgeHits", []),
+                "removedEdges": payload.get("removedEdges", []),
             },
         )
 
@@ -1654,6 +1723,36 @@ class MessageRouter:
                     )
                 else:
                     await self._send_safe(websocket, json.dumps({"type": "nodeDestroyed", "nodeId": int(node_id)}))
+        elif msg_type == "crownSmash":
+            target_node_id = msg.get("targetNodeId")
+            if target_node_id is None:
+                target_node_id = msg.get("nodeId")
+            if target_node_id is not None:
+                success, error_msg, payload = bot_game_engine.handle_crown_smash(token, int(target_node_id))
+                if not success or not payload:
+                    await self._send_safe(
+                        websocket,
+                        json.dumps({"type": "crownSmashError", "message": error_msg or "Unable to use Crown Smash"}),
+                    )
+                else:
+                    broadcast_payload = dict(payload)
+                    broadcast_payload["type"] = "crownSmashed"
+                    await self._broadcast_to_specific(
+                        server_context.get("bot_game_clients", {}).values(),
+                        json.dumps(broadcast_payload),
+                    )
+                    king_message = {
+                        "type": "kingMoved",
+                        "playerId": int(payload.get("playerId", 0)),
+                        "fromNodeId": int(payload.get("fromNodeId", 0)),
+                        "toNodeId": int(payload.get("toNodeId", 0)),
+                        "crownHealth": payload.get("crownHealth"),
+                        "crownMax": payload.get("crownMax"),
+                    }
+                    await self._broadcast_to_specific(
+                        server_context.get("bot_game_clients", {}).values(),
+                        json.dumps(king_message),
+                    )
 
         elif msg_type == "sandboxCreateNode":
             result = bot_game_engine.handle_sandbox_create_node(token, msg.get("x"), msg.get("y"))

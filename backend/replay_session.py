@@ -562,6 +562,25 @@ class ReplaySession:
                     if removal_info and removal_info.get("playerId") is not None:
                         message["playerId"] = removal_info.get("playerId")
                     await self._send_json(message)
+        elif event_type == "crownSmash":
+            target_node = _coerce_int(payload.get("targetNodeId", payload.get("nodeId")), -1)
+            if target_node >= 0:
+                success, _, smash_payload = self.engine.handle_crown_smash(token, target_node)
+                if success and smash_payload:
+                    crown_message = dict(smash_payload)
+                    crown_message["type"] = "crownSmashed"
+                    crown_message["replay"] = True
+                    await self._send_json(crown_message)
+                    king_message = {
+                        "type": "kingMoved",
+                        "playerId": int(smash_payload.get("playerId", 0)),
+                        "fromNodeId": int(smash_payload.get("fromNodeId", 0)),
+                        "toNodeId": int(smash_payload.get("toNodeId", 0)),
+                        "crownHealth": smash_payload.get("crownHealth"),
+                        "crownMax": smash_payload.get("crownMax"),
+                        "replay": True,
+                    }
+                    await self._send_json(king_message)
         elif event_type == "nukeNode":
             node_id = _coerce_int(payload.get("nodeId"), -1)
             if node_id >= 0:

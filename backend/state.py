@@ -40,6 +40,7 @@ class GraphState:
         self.players: Dict[int, Player] = {}
         # Economy and game flow
         self.player_gold: Dict[int, float] = {}
+        self.player_durbium: Dict[int, float] = {}
         self.player_gem_counts: Dict[int, Dict[str, int]] = {}
         # Phase: 'picking' (each player picks starting node) or 'playing'
         self.phase: str = "picking"
@@ -123,9 +124,10 @@ class GraphState:
         self.players[player.id] = player
         # Initialize player economy and pick status
         self.player_gold[player.id] = STARTING_GOLD
+        self.player_durbium[player.id] = 0.0
         self.players_who_picked[player.id] = False
         # Initialize auto-expand setting (default: off)
-        self.player_auto_expand[player.id] = False
+        self.player_auto_expand[player.id] = True
         # Initialize auto-attack setting (default: off)
         self.player_auto_attack[player.id] = False
         self.player_gem_counts[player.id] = {}
@@ -207,6 +209,29 @@ class GraphState:
             return False
         counts[normalized_key] = current - 1
         return True
+
+    def _is_durbium_mode_active(self) -> bool:
+        try:
+            mode = str(getattr(self, "resource_mode", "standard") or "standard").strip().lower()
+        except Exception:
+            mode = "standard"
+        return mode == "durbium"
+
+    def _increment_player_durbium(self, player_id: Any, amount: Any) -> None:
+        try:
+            pid = int(player_id)
+        except (TypeError, ValueError):
+            return
+        if pid not in self.players:
+            return
+        try:
+            numeric_amount = float(amount)
+        except (TypeError, ValueError):
+            return
+        if numeric_amount <= 0.0:
+            return
+        current = self.player_durbium.get(pid, 0.0)
+        self.player_durbium[pid] = max(0.0, current + numeric_amount)
 
     def get_player_node_counts(self) -> Dict[int, int]:
         """Return a mapping of player id to number of nodes they currently own."""
@@ -574,6 +599,7 @@ class GraphState:
             for pid, p in self.players.items()
         ]
         gold_arr = [[pid, round(self.player_gold.get(pid, 0.0), 4)] for pid in self.players.keys()]
+        durbium_arr = [[pid, round(self.player_durbium.get(pid, 0.0), 4)] for pid in self.players.keys()]
         picked_arr = [[pid, bool(self.players_who_picked.get(pid, False))] for pid in self.players.keys()]
         auto_expand_arr = [[pid, bool(self.player_auto_expand.get(pid, False))] for pid in self.players.keys()]
         auto_attack_arr = [[pid, bool(self.player_auto_attack.get(pid, False))] for pid in self.players.keys()]
@@ -622,6 +648,7 @@ class GraphState:
             },
             "phase": self.phase,
             "gold": gold_arr,
+            "durbium": durbium_arr,
             "picked": picked_arr,
             "winThreshold": win_threshold,
             "totalNodes": len(self.nodes),
@@ -675,6 +702,7 @@ class GraphState:
         ]
         counts = self.get_player_node_counts()
         gold_arr = [[pid, round(self.player_gold.get(pid, 0.0), 4)] for pid in self.players.keys()]
+        durbium_arr = [[pid, round(self.player_durbium.get(pid, 0.0), 4)] for pid in self.players.keys()]
         picked_arr = [[pid, bool(self.players_who_picked.get(pid, False))] for pid in self.players.keys()]
         auto_expand_arr = [[pid, bool(self.player_auto_expand.get(pid, False))] for pid in self.players.keys()]
         auto_attack_arr = [[pid, bool(self.player_auto_attack.get(pid, False))] for pid in self.players.keys()]
@@ -710,6 +738,7 @@ class GraphState:
             "totalNodes": len(self.nodes),
             "phase": self.phase,
             "gold": gold_arr,
+            "durbium": durbium_arr,
             "picked": picked_arr,
             "winThreshold": win_threshold,
             "autoExpand": auto_expand_arr,
@@ -748,6 +777,7 @@ class GraphState:
         node_max = getattr(self, "node_max_juice", get_node_max_juice(self.mode))
         normalized_mode = normalize_game_mode(self.mode)
         is_overflow_mode = normalized_mode in {"overflow", "nuke", "cross", "brass-old", "go", "warp", "semi", "flat", "i-warp", "i-semi", "i-flat"}
+        durbium_mode_active = self._is_durbium_mode_active()
         is_go_mode = normalized_mode == "go"
         for edge in self.edges.values():
             # Handle bridge build gating: while building, edge cannot be on/flowing
@@ -849,6 +879,7 @@ class GraphState:
         node_max = getattr(self, "node_max_juice", get_node_max_juice(self.mode))
         normalized_mode = normalize_game_mode(self.mode)
         is_overflow_mode = normalized_mode in {"overflow", "nuke", "cross", "brass-old", "go", "warp", "semi", "flat", "i-warp", "i-semi", "i-flat"}
+        durbium_mode_active = self._is_durbium_mode_active()
         overflow_ratio = getattr(
             self,
             "overflow_juice_to_gold_ratio",
@@ -1029,6 +1060,8 @@ class GraphState:
                     if payouts and node.owner is not None:
                         gold_award = payouts * payout_threshold
                         self.player_gold[node.owner] = self.player_gold.get(node.owner, 0.0) + gold_award
+                        if durbium_mode_active:
+                            self._increment_player_durbium(node.owner, gold_award)
                         self.pending_overflow_payouts.append({
                             "nodeId": nid,
                             "amount": gold_award,
@@ -1080,6 +1113,8 @@ class GraphState:
                     if reward_amount > 0.0 and new_owner is not None:
                         # Award gold for capturing the node
                         self.player_gold[new_owner] = self.player_gold.get(new_owner, 0.0) + reward_amount
+                        if durbium_mode_active and reward_type == "money":
+                            self._increment_player_durbium(new_owner, reward_amount)
                         should_emit_capture = True
 
                 if should_emit_capture and new_owner is not None:
