@@ -200,9 +200,6 @@
   const KING_CROWN_TICKS_PER_UNIT_DISTANCE = 0.6; // mirrors backend pipe build speed
   const KING_CROWN_MIN_TRAVEL_TICKS = 2;
   const KING_CROWN_MAX_TRAVEL_TICKS = 18;
-  const KING_CROWN_SPIN_TICKS_RATIO = 0.35;
-  const KING_CROWN_SPIN_TICKS_MIN = 2;
-  const KING_CROWN_SPIN_TICKS_MAX = 5;
   const KING_CROWN_DEFAULT_SECONDS_PER_TICK = 0.2;
 
   const KING_STANDARD_NODE_SIZE = 80;
@@ -6788,18 +6785,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
       )
     );
 
-    const spinBase = Math.round(travelTicks * KING_CROWN_SPIN_TICKS_RATIO);
-    const spinTicks = Math.max(
-      KING_CROWN_SPIN_TICKS_MIN,
-      Math.min(
-        KING_CROWN_SPIN_TICKS_MAX,
-        Number.isFinite(spinBase) ? spinBase : KING_CROWN_SPIN_TICKS_MIN
-      )
-    );
-    const preSpinTicks = spinTicks;
-    const postSpinTicks = spinTicks;
-    const totalTicks = preSpinTicks + travelTicks + postSpinTicks;
-
     const tickSeconds = Math.max(
       1e-3,
       Number.isFinite(tickIntervalSec) && tickIntervalSec > 0 ? tickIntervalSec : KING_CROWN_DEFAULT_SECONDS_PER_TICK
@@ -6808,26 +6793,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
     return {
       tickSeconds,
       travelTicks,
-      preSpinTicks,
-      postSpinTicks,
-      totalTicks,
+      totalTicks: travelTicks,
     };
-  }
-
-  function computeKingCrownRotation(fromX, fromY, toX, toY) {
-    const [startScreenX, startScreenY] = worldToScreen(fromX, fromY);
-    const [endScreenX, endScreenY] = worldToScreen(toX, toY);
-    let dx = endScreenX - startScreenX;
-    let dy = endScreenY - startScreenY;
-    if (!Number.isFinite(dx) || !Number.isFinite(dy) || (Math.abs(dx) < 1e-4 && Math.abs(dy) < 1e-4)) {
-      dx = toX - fromX;
-      dy = toY - fromY;
-    }
-    if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
-      return 0;
-    }
-    const heading = Math.atan2(dy, dx);
-    return normalizeAngleRadians(heading + Math.PI / 2);
   }
 
   function beginKingCrownFlight(options = {}) {
@@ -6858,21 +6825,14 @@ function fallbackRemoveEdgesForNode(nodeId) {
       return false;
     }
     const timing = computeKingCrownFlightTiming(startX, startY, endX, endY);
-    const headingRotation = computeKingCrownRotation(startX, startY, endX, endY);
     
-    // Get starting crown angle from origin node (or 0 if not stored)
-    const startAngleOffset = Number.isFinite(fromNodeId) ? (kingCrownAngleOffsets.get(fromNodeId) || 0) : 0;
-    
-    // Pre-compute the optimal ending angle for destination node
-    const endAngleOffset = Number.isFinite(toNodeId) ? computeOptimalCrownAngle(toNodeId) : 0;
-    // Store this so the static crown will use it when it appears
+    // Pre-compute the optimal ending angle for destination node (for static crown display after landing)
     if (Number.isFinite(toNodeId)) {
+      const endAngleOffset = computeOptimalCrownAngle(toNodeId);
       kingCrownAngleOffsets.set(toNodeId, endAngleOffset);
-    }
-    
-    if (Number.isFinite(toNodeId)) {
       removeKingCrownFlightsForNode(toNodeId);
     }
+    
     kingCrownFlights.push({
       playerId,
       fromNodeId,
@@ -6884,14 +6844,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
       startTime: animationTime,
       tickSeconds: Number.isFinite(timing?.tickSeconds) ? timing.tickSeconds : KING_CROWN_DEFAULT_SECONDS_PER_TICK,
       travelTicks: Number.isFinite(timing?.travelTicks) ? timing.travelTicks : KING_CROWN_MIN_TRAVEL_TICKS,
-      preSpinTicks: Number.isFinite(timing?.preSpinTicks) ? timing.preSpinTicks : 0,
-      postSpinTicks: Number.isFinite(timing?.postSpinTicks) ? timing.postSpinTicks : 0,
-      totalTicks: Number.isFinite(timing?.totalTicks)
-        ? timing.totalTicks
-        : (Number.isFinite(timing?.travelTicks) ? timing.travelTicks : KING_CROWN_MIN_TRAVEL_TICKS),
-      rotationTarget: headingRotation,
-      startAngleOffset,
-      endAngleOffset,
+      totalTicks: Number.isFinite(timing?.totalTicks) ? timing.totalTicks : KING_CROWN_MIN_TRAVEL_TICKS,
       crownHealth,
       crownMax,
     });
@@ -6907,8 +6860,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
       return {
         tickSeconds: Number.isFinite(tickIntervalSec) && tickIntervalSec > 0 ? tickIntervalSec : KING_CROWN_DEFAULT_SECONDS_PER_TICK,
         travelTicks: KING_CROWN_MIN_TRAVEL_TICKS,
-        preSpinTicks: 0,
-        postSpinTicks: 0,
         totalTicks: KING_CROWN_MIN_TRAVEL_TICKS,
       };
     }
@@ -6922,16 +6873,11 @@ function fallbackRemoveEdgesForNode(nodeId) {
       KING_CROWN_MIN_TRAVEL_TICKS,
       Number.isFinite(flight.travelTicks) ? flight.travelTicks : KING_CROWN_MIN_TRAVEL_TICKS
     );
-    const preSpinTicks = Math.max(0, Number.isFinite(flight.preSpinTicks) ? flight.preSpinTicks : 0);
-    const postSpinTicks = Math.max(0, Number.isFinite(flight.postSpinTicks) ? flight.postSpinTicks : 0);
     let totalTicks = Number.isFinite(flight.totalTicks) ? flight.totalTicks : 0;
-    if (totalTicks <= 0) {
-      totalTicks = preSpinTicks + travelTicks + postSpinTicks;
-    }
     if (totalTicks <= 0) {
       totalTicks = travelTicks;
     }
-    return { tickSeconds, travelTicks, preSpinTicks, postSpinTicks, totalTicks };
+    return { tickSeconds, travelTicks, totalTicks };
   }
 
   function startKingSelection(nodeId) {
@@ -8579,96 +8525,50 @@ function fallbackRemoveEdgesForNode(nodeId) {
       }
       const timing = resolveKingCrownFlightTiming(flight);
       const startTime = Number(flight.startTime) || 0;
-      const [startScreenX, startScreenY] = worldToScreen(flight.startX, flight.startY);
-      const [endScreenX, endScreenY] = worldToScreen(flight.endX, flight.endY);
       const elapsedTicks = timing.tickSeconds > 0
         ? Math.max(0, (animationTime - startTime) / timing.tickSeconds)
         : Infinity;
-      const travelStartTick = timing.preSpinTicks;
-      const travelEndTick = timing.preSpinTicks + timing.travelTicks;
-      let currentX = flight.startX;
-      let currentY = flight.startY;
       
-      // Look up source and destination nodes to get actual radii
+      // Simple linear travel from center to center (no easing - must match backend timing)
+      const travelProgress = Math.max(
+        0,
+        Math.min(1, timing.travelTicks <= 0 ? 1 : elapsedTicks / timing.travelTicks)
+      );
+      const currentX = flight.startX + (flight.endX - flight.startX) * travelProgress;
+      const currentY = flight.startY + (flight.endY - flight.startY) * travelProgress;
+      
+      // Look up source and destination nodes to get actual radii for crown size interpolation
       const sourceNode = Number.isFinite(flight.fromNodeId) ? nodes.get(flight.fromNodeId) : null;
       const destNode = Number.isFinite(flight.toNodeId) ? nodes.get(flight.toNodeId) : null;
       const sourceNodeRadius = sourceNode ? Math.max(1, calculateNodeRadius(sourceNode, baseScale)) : null;
       const destNodeRadius = destNode ? Math.max(1, calculateNodeRadius(destNode, baseScale)) : null;
       
-      // Get the crown's starting and ending angle offsets (to avoid pipe overlap)
-      const startAngleOffset = Number.isFinite(flight.startAngleOffset) ? flight.startAngleOffset : 0;
-      const endAngleOffset = Number.isFinite(flight.endAngleOffset) ? flight.endAngleOffset : 0;
-      const travelHeading = Number.isFinite(flight.rotationTarget) ? flight.rotationTarget : 0;
-      
-      let rotationRadians = travelHeading;
-      let rotationPivot = null;
-      let currentNodeRadius = null; // Track which node radius to use for crown positioning
-      if (elapsedTicks < travelStartTick) {
-        // Pre-spin: interpolate from startAngleOffset to travelHeading
-        const spinProgress = Math.max(0, Math.min(1, travelStartTick <= 0 ? 1 : elapsedTicks / travelStartTick));
-        const eased = easeInOutCubic(spinProgress);
-        rotationRadians = startAngleOffset + (travelHeading - startAngleOffset) * eased;
-        rotationPivot = { x: startScreenX, y: startScreenY };
-        currentNodeRadius = sourceNodeRadius;
-      } else if (elapsedTicks < travelEndTick) {
-        // Travel phase: maintain travel heading
-        const travelProgress = Math.max(
-          0,
-          Math.min(1, timing.travelTicks <= 0 ? 1 : (elapsedTicks - travelStartTick) / timing.travelTicks)
-        );
-        const easedTravel = easeOutCubic(travelProgress);
-        currentX = flight.startX + (flight.endX - flight.startX) * easedTravel;
-        currentY = flight.startY + (flight.endY - flight.startY) * easedTravel;
-        rotationRadians = travelHeading;
-        rotationPivot = null;
-        // During travel, interpolate the node radius for smooth crown size transition
-        if (sourceNodeRadius != null && destNodeRadius != null) {
-          currentNodeRadius = sourceNodeRadius + (destNodeRadius - sourceNodeRadius) * easedTravel;
-        } else {
-          currentNodeRadius = sourceNodeRadius || destNodeRadius;
-        }
+      // Interpolate node radius for smooth crown size transition
+      let currentNodeRadius = null;
+      if (sourceNodeRadius != null && destNodeRadius != null) {
+        currentNodeRadius = sourceNodeRadius + (destNodeRadius - sourceNodeRadius) * travelProgress;
       } else {
-        // Post-spin: interpolate from travelHeading to endAngleOffset
-        const postElapsed = elapsedTicks - travelEndTick;
-        const postTicks = timing.postSpinTicks;
-        const spinProgress = Math.max(
-          0,
-          Math.min(1, postTicks <= 0 ? 1 : Math.min(postElapsed / postTicks, 1))
-        );
-        const eased = easeInOutCubic(spinProgress);
-        rotationRadians = travelHeading + (endAngleOffset - travelHeading) * eased;
-        currentX = flight.endX;
-        currentY = flight.endY;
-        rotationPivot = { x: endScreenX, y: endScreenY };
-        currentNodeRadius = destNodeRadius;
+        currentNodeRadius = sourceNodeRadius || destNodeRadius;
       }
+      
       const [screenX, screenY] = worldToScreen(currentX, currentY);
       if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return;
-      if (!rotationPivot || !Number.isFinite(rotationPivot.x) || !Number.isFinite(rotationPivot.y)) {
-        if (elapsedTicks < travelStartTick && Number.isFinite(startScreenX) && Number.isFinite(startScreenY)) {
-          rotationPivot = { x: startScreenX, y: startScreenY };
-        } else if (elapsedTicks >= travelEndTick && Number.isFinite(endScreenX) && Number.isFinite(endScreenY)) {
-          rotationPivot = { x: endScreenX, y: endScreenY };
-        } else {
-          rotationPivot = { x: screenX, y: screenY };
-        }
-      }
+      
       const crownRadius = computeStandardKingCrownRadius(baseScale);
       const playerColor = ownerToColor(flight.playerId);
       
-      // Crown is in travel mode (reversed colors: yellow border, player fill) until post-spin is complete
-      // Health should only show after the crown has finished its post-spin (settled at destination)
-      const postSpinComplete = elapsedTicks >= travelEndTick + timing.postSpinTicks;
-      const showHealth = postSpinComplete;
-      const usesTravelMode = !postSpinComplete; // Travel mode until fully settled
+      // Show health only when travel is complete
+      const travelComplete = elapsedTicks >= timing.travelTicks;
+      const showHealth = travelComplete;
+      const usesTravelMode = !travelComplete;
       
       drawKingCrown(screenX, screenY, crownRadius, playerColor, {
         highlighted: false,
         crownHealth: showHealth ? flight.crownHealth : null,
         crownMax: showHealth ? flight.crownMax : null,
         nodeId: null,
-        rotationRadians,
-        rotationPivot,
+        rotationRadians: 0,
+        rotationPivot: null,
         nodeRadius: currentNodeRadius,
         travelMode: usesTravelMode,
       });

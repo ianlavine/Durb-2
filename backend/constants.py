@@ -75,9 +75,6 @@ DEFAULT_KING_MOVEMENT_MODE: str = "smash"
 KING_CROWN_TICKS_PER_UNIT_DISTANCE: float = 0.6
 KING_CROWN_MIN_TRAVEL_TICKS: int = 2
 KING_CROWN_MAX_TRAVEL_TICKS: int = 18
-KING_CROWN_SPIN_TICKS_RATIO: float = 0.35
-KING_CROWN_SPIN_TICKS_MIN: int = 2
-KING_CROWN_SPIN_TICKS_MAX: int = 5
 
 # Gem distribution defaults (counts per gem type when resources == 'gems')
 DEFAULT_GEM_COUNTS: Dict[str, int] = {

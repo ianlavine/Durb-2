@@ -24,9 +24,6 @@ from .constants import (
     KING_CROWN_MAX_HEALTH,
     KING_CROWN_MAX_TRAVEL_TICKS,
     KING_CROWN_MIN_TRAVEL_TICKS,
-    KING_CROWN_SPIN_TICKS_MAX,
-    KING_CROWN_SPIN_TICKS_MIN,
-    KING_CROWN_SPIN_TICKS_RATIO,
     KING_CROWN_TICKS_PER_UNIT_DISTANCE,
     CLASSIC_PRODUCTION_RATE_PER_NODE,
     CLASSIC_MAX_TRANSFER_RATIO,
@@ -1110,6 +1107,10 @@ class GameEngine:
             }
             if smash_plan is not None:
                 payload["cost"] = int(smash_plan.get("cost", 0))
+                # Include edge IDs that will be removed so frontend can animate immediately
+                removals = smash_plan.get("removals") or []
+                if removals:
+                    payload["removedEdges"] = [int(edge_id) for edge_id, _ in removals]
             payload["movementMode"] = movement_mode
             return True, None, payload
 
@@ -2185,16 +2186,10 @@ class GameEngine:
         ticks_per_unit = max(1e-3, float(KING_CROWN_TICKS_PER_UNIT_DISTANCE))
         travel_ticks = int(round(distance * ticks_per_unit))
         travel_ticks = max(KING_CROWN_MIN_TRAVEL_TICKS, min(KING_CROWN_MAX_TRAVEL_TICKS, travel_ticks))
-        spin_base = int(round(travel_ticks * KING_CROWN_SPIN_TICKS_RATIO))
-        spin_ticks = max(KING_CROWN_SPIN_TICKS_MIN, min(KING_CROWN_SPIN_TICKS_MAX, spin_base))
-        pre_spin = spin_ticks
-        post_spin = spin_ticks
-        total_ticks = pre_spin + travel_ticks + post_spin
+        # Simplified: no pre/post spin phases, just direct travel
         return {
-            "preSpinTicks": pre_spin,
             "travelTicks": max(1, travel_ticks),
-            "postSpinTicks": post_spin,
-            "totalTicks": max(1, total_ticks),
+            "totalTicks": max(1, travel_ticks),
         }
 
     def _plan_king_smash_move(
@@ -2253,7 +2248,6 @@ class GameEngine:
         total_distance = float(plan.get("total_distance") or 0.0)
         timing = plan.get("timing") or {}
         travel_ticks = max(1, int(timing.get("travelTicks", KING_CROWN_MIN_TRAVEL_TICKS)))
-        pre_spin = max(0, int(timing.get("preSpinTicks", 0)))
         if total_distance <= 0.0:
             total_distance = float(travel_ticks)
         distance_per_tick = total_distance / max(1, travel_ticks)
@@ -2268,9 +2262,10 @@ class GameEngine:
             if distance_per_tick <= 0:
                 travel_offset = travel_ticks
             else:
-                travel_offset = int(math.ceil(dist_val / max(distance_per_tick, 1e-9)))
-            tick_offset = pre_spin + max(1, travel_offset)
-            trigger_tick = current_tick + tick_offset
+                # Use floor instead of ceil so edges are removed as crown reaches them
+                travel_offset = int(dist_val / max(distance_per_tick, 1e-9))
+            # Remove on same tick the crown reaches the edge (no minimum delay)
+            trigger_tick = current_tick + travel_offset
             pending.append((edge_int, trigger_tick))
         self.state.pending_king_smash_removals = pending
     

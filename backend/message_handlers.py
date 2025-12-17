@@ -1157,6 +1157,8 @@ class MessageRouter:
                 pass
         if "movementMode" in payload:
             broadcast_payload["movementMode"] = payload["movementMode"]
+        if "removedEdges" in payload:
+            broadcast_payload["removedEdges"] = payload["removedEdges"]
 
         clients = game_info.get("clients", {})
         for token_key, client_websocket in clients.items():
@@ -1679,6 +1681,8 @@ class MessageRouter:
                                 message["cost"] = float(payload["cost"])
                             except (TypeError, ValueError):
                                 pass
+                        if "removedEdges" in payload:
+                            message["removedEdges"] = payload["removedEdges"]
                         await self._send_safe(websocket, json.dumps(message))
 
         elif msg_type == "localTargeting":
