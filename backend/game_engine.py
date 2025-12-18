@@ -1034,6 +1034,7 @@ class GameEngine:
         self,
         token: str,
         destination_node_id: int,
+        warp_info: Optional[Dict[str, Any]] = None,
     ) -> Tuple[bool, Optional[str], Optional[Dict[str, int]]]:
         """Attempt to move the player's king to a new node."""
         try:
@@ -1069,6 +1070,7 @@ class GameEngine:
                     origin_node,
                     destination_node,
                     movement_mode,
+                    warp_info=warp_info,
                 )
                 move_cost = int(smash_plan.get("cost", 0))
                 self.validate_sufficient_gold(player_id, move_cost)
@@ -1116,6 +1118,12 @@ class GameEngine:
                     # Send as list of [edgeId, distance] pairs
                     payload["removedEdges"] = [[int(edge_id), float(dist)] for edge_id, dist in removals]
                     payload["totalDistance"] = float(smash_plan.get("total_distance", 0))
+                # Include warp segments for crown flight animation
+                segments = smash_plan.get("segments") or []
+                warp_axis = smash_plan.get("warp_axis", "none") or "none"
+                if segments and warp_axis != "none":
+                    payload["warpSegments"] = [[sx, sy, ex, ey] for sx, sy, ex, ey in segments]
+                    payload["warpAxis"] = warp_axis
             payload["movementMode"] = movement_mode
             return True, None, payload
 
@@ -2210,18 +2218,28 @@ class GameEngine:
         origin_node: Node,
         destination_node: Node,
         movement_mode: str,
+        warp_info: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         if not self.state:
             raise GameValidationError("No game state")
         if destination_node.owner != player_id:
             raise GameValidationError("Destination not controlled")
 
-        path_info = self._compute_warp_bridge_path(origin_node, destination_node)
-        candidate_segments = path_info.get("segments") or []
+        # Use client-provided warp_info if available, otherwise fall back to computing path
+        # Note: Without warp_info, the backend computes the shortest path which may warp.
+        # The frontend should always send warp_info to ensure the path matches what the user drew.
+        if warp_info:
+            warp_axis, candidate_segments, total_world_distance = self._parse_client_warp_info(
+                warp_info, origin_node, destination_node
+            )
+        else:
+            path_info = self._compute_warp_bridge_path(origin_node, destination_node)
+            candidate_segments = path_info.get("segments") or []
+            warp_axis = path_info.get("warp_axis", "none") or "none"
+            total_world_distance = float(path_info.get("total_distance") or 0.0)
+
         if not candidate_segments:
             candidate_segments = [(origin_node.x, origin_node.y, destination_node.x, destination_node.y)]
-        warp_axis = path_info.get("warp_axis", "none") or "none"
-        total_world_distance = float(path_info.get("total_distance") or 0.0)
         if total_world_distance <= 0.0:
             total_world_distance = float(math.hypot(destination_node.x - origin_node.x, destination_node.y - origin_node.y))
         if total_world_distance <= 0.0:

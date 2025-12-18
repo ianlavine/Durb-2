@@ -218,7 +218,7 @@
   const KING_MOVE_PREVIEW_ALPHA = 0.42;
   const KING_MOVE_PREVIEW_INVALID_COLOR = 0x000000;
   const KING_MOVE_PREVIEW_INVALID_ALPHA = 0.55;
-  const KING_MOVE_PREVIEW_WIDTH = 10;
+  const KING_MOVE_PREVIEW_WIDTH = 14;
   const KING_CROWN_DEFAULT_HEALTH = 300;
   let kingCrownDefaultMax = KING_CROWN_DEFAULT_HEALTH;
   const KING_ATTACK_ALERT_LINGER_SEC = 2.5;
@@ -1294,7 +1294,10 @@
   function maybeAutoUnlockWarpWrap(screenX, screenY) {
     if (!isMagicResourceModeActive()) return false;
     if (warpGemModeActive || warpGemAutoUnlockActive) return false;
-    if (activeAbility !== 'bridge1way' || bridgeFirstNode == null) return false;
+    // Allow for pipe building or king smash movement
+    const isBridgeMode = activeAbility === 'bridge1way' && bridgeFirstNode != null;
+    const isKingSmashMovement = kingSelectionActive && isKingSmashMode();
+    if (!isBridgeMode && !isKingSmashMovement) return false;
     if (!canActivateWarpGemMode()) return false;
     if (!isWarpFrontendActive()) return false;
     if (!isPointerOutsideWarpBounds(screenX, screenY)) return false;
@@ -4610,7 +4613,7 @@ function clearBridgeSelection() {
         
         // Remove edges that the crown has passed (trigger slightly early so leading edge of crown hits)
         // Use a fixed tick offset rather than percentage, so it's consistent regardless of travel distance
-        const CROWN_LEAD_TICKS = 4.5; // Remove edges this many ticks before crown center reaches them
+        const CROWN_LEAD_TICKS = 3; // Remove edges this many ticks before crown center reaches them
         const leadOffset = timing.travelTicks > 0 ? CROWN_LEAD_TICKS / timing.travelTicks : 0;
         const edgesToRemoveNow = [];
         flight.pendingEdgeRemovals.forEach((entry) => {
@@ -6771,6 +6774,12 @@ function fallbackRemoveEdgesForNode(nodeId) {
     kingMoveTargetCosts.clear();
     kingMoveCostDisplayActive = false;
     kingMovePreviewCrossingEdges.clear();
+    // Reset warp tracking state when ending king selection
+    warpWrapUsed = false;
+    lastDoubleWarpWarningTime = 0;
+    lastWarpAxis = null;
+    lastWarpDirection = null;
+    resetAutoWarpGemUnlock();
     hideBridgeCostDisplay();
     if (!skipRedraw) {
       redrawStatic();
@@ -6872,6 +6881,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
       crownMax,
       edgesToRemove = [],
       totalDistance = 0,
+      warpSegments = null,
+      warpAxis = 'none',
     } = options;
     if (
       !Number.isFinite(playerId) ||
@@ -6888,8 +6899,25 @@ function fallbackRemoveEdgesForNode(nodeId) {
     if (Math.abs(dx) < 1e-3 && Math.abs(dy) < 1e-3) {
       return false;
     }
-    const timing = computeKingCrownFlightTiming(startX, startY, endX, endY);
-    const headingRotation = computeKingCrownRotation(startX, startY, endX, endY);
+    
+    // Calculate timing based on warp segments if available (for accurate flight duration)
+    let timingDistance = Math.hypot(dx, dy);
+    if (warpSegments && warpSegments.length >= 2) {
+      timingDistance = 0;
+      for (const seg of warpSegments) {
+        timingDistance += Math.hypot(seg.ex - seg.sx, seg.ey - seg.sy);
+      }
+    }
+    const timing = computeKingCrownFlightTiming(startX, startY, startX + timingDistance, startY);
+    
+    // Calculate initial heading rotation - use first segment for warp paths
+    let headingRotation;
+    if (warpSegments && warpSegments.length >= 1) {
+      const firstSeg = warpSegments[0];
+      headingRotation = computeKingCrownRotation(firstSeg.sx, firstSeg.sy, firstSeg.ex, firstSeg.ey);
+    } else {
+      headingRotation = computeKingCrownRotation(startX, startY, endX, endY);
+    }
     
     // Get starting crown angle from origin node (or 0 if not stored)
     const startAngleOffset = Number.isFinite(fromNodeId) ? (kingCrownAngleOffsets.get(fromNodeId) || 0) : 0;
@@ -6904,7 +6932,17 @@ function fallbackRemoveEdgesForNode(nodeId) {
     
     // Parse edges to remove: [[edgeId, distance], ...] and track which have been removed
     const pendingEdgeRemovals = [];
-    const flightTotalDistance = totalDistance > 0 ? totalDistance : Math.hypot(endX - startX, endY - startY);
+    let flightTotalDistance = totalDistance;
+    if (!flightTotalDistance || flightTotalDistance <= 0) {
+      if (warpSegments && warpSegments.length > 0) {
+        flightTotalDistance = 0;
+        for (const seg of warpSegments) {
+          flightTotalDistance += Math.hypot(seg.ex - seg.sx, seg.ey - seg.sy);
+        }
+      } else {
+        flightTotalDistance = Math.hypot(endX - startX, endY - startY);
+      }
+    }
     if (Array.isArray(edgesToRemove)) {
       edgesToRemove.forEach((entry) => {
         if (!Array.isArray(entry) || entry.length < 2) return;
@@ -6939,6 +6977,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
       crownHealth,
       crownMax,
       pendingEdgeRemovals,
+      warpSegments: warpSegments && warpSegments.length > 0 ? warpSegments : null,
+      warpAxis: warpAxis || 'none',
     });
     if (Number.isFinite(toNodeId)) {
       kingCrownFlightDestinations.add(toNodeId);
@@ -6997,6 +7037,12 @@ function fallbackRemoveEdgesForNode(nodeId) {
     kingMoveTargetCosts.clear();
     kingMoveCostDisplayActive = false;
     kingMovePreviewCrossingEdges.clear();
+    // Reset warp tracking state for fresh king selection
+    warpWrapUsed = false;
+    lastDoubleWarpWarningTime = 0;
+    lastWarpAxis = null;
+    lastWarpDirection = null;
+    resetAutoWarpGemUnlock();
     hideBridgeCostDisplay();
     updateKingMovePreviewLine();
     redrawStatic();
@@ -7015,6 +7061,18 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
     if (kingMovePendingDestinationId != null) return false;
 
+    // Build warpInfo from the current preview line (which has computed the warp path)
+    // This ensures the backend uses the same path that was shown to the user
+    const selectedNode = kingSelectedNodeId != null ? nodes.get(kingSelectedNodeId) : null;
+    const targetNode = nodes.get(nodeId);
+    let warpInfo = null;
+    
+    if (selectedNode && targetNode && isKingSmashMode()) {
+      // Use the warp preference that was used for the preview
+      const warpPreference = kingMovePreviewLine?.warpPreference || getActiveWarpPreference();
+      warpInfo = buildWarpInfoForBridge(selectedNode, targetNode, warpPreference);
+    }
+
     kingMovePendingDestinationId = nodeId;
     kingMoveOptionsPending = true;
     kingMovePreviewLine = null;
@@ -7022,11 +7080,15 @@ function fallbackRemoveEdgesForNode(nodeId) {
     hideBridgeCostDisplay();
     redrawStatic();
 
-    ws.send(JSON.stringify({
+    const payload = {
       type: 'kingMove',
       destinationNodeId: nodeId,
       token,
-    }));
+    };
+    if (warpInfo) {
+      payload.warpInfo = warpInfo;
+    }
+    ws.send(JSON.stringify(payload));
     return true;
   }
 
@@ -7169,6 +7231,25 @@ function fallbackRemoveEdgesForNode(nodeId) {
         const removedEdges = Array.isArray(msg?.removedEdges) ? msg.removedEdges : [];
         const totalDistance = Number(msg?.totalDistance) || 0;
         
+        // Parse warp segments if provided: [[sx, sy, ex, ey], ...]
+        const rawWarpSegments = Array.isArray(msg?.warpSegments) ? msg.warpSegments : null;
+        const warpAxis = typeof msg?.warpAxis === 'string' ? msg.warpAxis : 'none';
+        let warpSegments = null;
+        if (rawWarpSegments && rawWarpSegments.length > 0 && warpAxis !== 'none') {
+          warpSegments = rawWarpSegments.map((seg) => {
+            if (!Array.isArray(seg) || seg.length < 4) return null;
+            const sx = Number(seg[0]);
+            const sy = Number(seg[1]);
+            const ex = Number(seg[2]);
+            const ey = Number(seg[3]);
+            if ([sx, sy, ex, ey].every((v) => Number.isFinite(v))) {
+              return { sx, sy, ex, ey };
+            }
+            return null;
+          }).filter(Boolean);
+          if (warpSegments.length === 0) warpSegments = null;
+        }
+        
         beginKingCrownFlight({
           playerId,
           fromNodeId,
@@ -7181,6 +7262,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
           crownMax: targetNode.kingCrownMax,
           edgesToRemove: removedEdges,
           totalDistance,
+          warpSegments,
+          warpAxis,
         });
       }
     }
@@ -7918,6 +8001,39 @@ function fallbackRemoveEdgesForNode(nodeId) {
     const lockedNodeId = pickNearestNode(wx, wy, tolerance);
     const lockedTargetId = (lockedNodeId != null && lockedNodeId !== kingSelectedNodeId) ? lockedNodeId : null;
     
+    // Compute warp path segments for king movement (follows same logic as pipe building)
+    const warpPreference = getActiveWarpPreference();
+    const targetForPath = lockedTargetId != null ? nodes.get(lockedTargetId) : { x: wx, y: wy };
+    const path = computeWarpBridgeSegments(selectedNode, targetForPath, warpPreference);
+    
+    // Extract path info for preview drawing and cost calculation
+    let warpAxis = 'none';
+    let segments = [];
+    let totalWorldDistance = 0;
+    if (path && typeof path.wrapAxis === 'string') {
+      warpAxis = path.wrapAxis;
+    }
+    if (path && Array.isArray(path.segments)) {
+      segments = path.segments.map((seg) => {
+        if (!seg || !seg.start || !seg.end) return null;
+        const sx = Number(seg.start.x);
+        const sy = Number(seg.start.y);
+        const ex = Number(seg.end.x);
+        const ey = Number(seg.end.y);
+        if ([sx, sy, ex, ey].every((v) => Number.isFinite(v))) {
+          return { sx, sy, ex, ey };
+        }
+        return null;
+      }).filter(Boolean);
+    }
+    if (path && Number.isFinite(path.totalWorldDistance)) {
+      totalWorldDistance = path.totalWorldDistance;
+    }
+    if (!segments.length) {
+      segments = [{ sx: selectedNode.x, sy: selectedNode.y, ex: wx, ey: wy }];
+      totalWorldDistance = Math.hypot(wx - selectedNode.x, wy - selectedNode.y);
+    }
+    
     // Calculate validity differently for smash mode vs basic mode
     let lockedInvalid = false;
     let lockedValid = false;
@@ -7927,7 +8043,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
         const lockedNode = nodes.get(lockedTargetId);
         if (lockedNode) {
           const isOwned = lockedNode.owner === myPlayerId;
-          const cost = calculateBridgeCost(selectedNode, lockedNode, false);
+          const cost = calculateBridgeCost(selectedNode, lockedNode, false, warpPreference);
           const canAfford = goldValue >= cost;
           lockedInvalid = !isOwned || !canAfford;
           lockedValid = isOwned && canAfford;
@@ -7953,6 +8069,11 @@ function fallbackRemoveEdgesForNode(nodeId) {
       lockedNodeId: lockedTargetId,
       lockedInvalid,
       lockedValid,
+      // Warp path info for drawing and sending to backend
+      warpAxis,
+      segments,
+      totalWorldDistance,
+      warpPreference,
     };
     const changed = !prev ||
       prev.startX !== next.startX ||
@@ -7963,7 +8084,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
       prev.alpha !== next.alpha ||
       prev.lockedNodeId !== next.lockedNodeId ||
       prev.lockedInvalid !== next.lockedInvalid ||
-      prev.lockedValid !== next.lockedValid;
+      prev.lockedValid !== next.lockedValid ||
+      prev.warpAxis !== next.warpAxis;
     if (changed) {
       kingMovePreviewLine = next;
       return true;
@@ -7978,28 +8100,107 @@ function fallbackRemoveEdgesForNode(nodeId) {
     if (!view) return;
     const selectedNode = kingSelectedNodeId != null ? nodes.get(kingSelectedNodeId) : null;
     if (!selectedNode) return;
-    const [sx, sy] = worldToScreen(line.startX, line.startY);
-    let [ex, ey] = worldToScreen(line.endX, line.endY);
-    if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(ex) || !Number.isFinite(ey)) return;
-    const dx = ex - sx;
-    const dy = ey - sy;
-    const len = Math.hypot(dx, dy);
-    if (!Number.isFinite(len) || len < 1) return;
     const baseScale = Math.max(1e-6, Math.min(view.scaleX || 0, view.scaleY || 0) || 1);
     const startRadius = Math.max(4, calculateNodeRadius(selectedNode, baseScale) + computeStandardKingCrownRadius(baseScale) * 0.35);
-    if (len <= startRadius) return;
-    const ux = dx / len;
-    const uy = dy / len;
-    const clippedSx = sx + ux * startRadius;
-    const clippedSy = sy + uy * startRadius;
-    const shortenEnd = Math.min(24, len * 0.12);
-    const clippedEx = ex - ux * shortenEnd;
-    const clippedEy = ey - uy * shortenEnd;
-    graphicsNodes.lineStyle(KING_MOVE_PREVIEW_WIDTH, line.color ?? KING_MOVE_PREVIEW_COLOR, line.alpha ?? KING_MOVE_PREVIEW_ALPHA);
-    graphicsNodes.beginPath();
-    graphicsNodes.moveTo(clippedSx, clippedSy);
-    graphicsNodes.lineTo(clippedEx, clippedEy);
-    graphicsNodes.strokePath();
+    
+    const lineColor = line.color ?? KING_MOVE_PREVIEW_COLOR;
+    const lineAlpha = line.alpha ?? KING_MOVE_PREVIEW_ALPHA;
+    
+    // If we have warp segments, draw each segment with warp outline
+    const segments = line.segments;
+    const warpAxis = line.warpAxis;
+    const isWarp = warpAxis && warpAxis !== 'none' && segments && segments.length === 2;
+    
+    if (isWarp && segments.length === 2) {
+      // Draw warp path using similar style to bridge preview
+      for (let i = 0; i < segments.length; i++) {
+        const seg = segments[i];
+        if (!seg) continue;
+        const [segSx, segSy] = worldToScreen(seg.sx, seg.sy);
+        const [segEx, segEy] = worldToScreen(seg.ex, seg.ey);
+        if (!Number.isFinite(segSx) || !Number.isFinite(segSy) || !Number.isFinite(segEx) || !Number.isFinite(segEy)) continue;
+        
+        let drawSx = segSx, drawSy = segSy, drawEx = segEx, drawEy = segEy;
+        
+        // Clip start of first segment from crown center
+        if (i === 0) {
+          const dx0 = drawEx - drawSx;
+          const dy0 = drawEy - drawSy;
+          const len0 = Math.hypot(dx0, dy0);
+          if (len0 > startRadius) {
+            const ux0 = dx0 / len0;
+            const uy0 = dy0 / len0;
+            drawSx = drawSx + ux0 * startRadius;
+            drawSy = drawSy + uy0 * startRadius;
+          }
+        }
+        
+        // Shorten end of last segment
+        if (i === segments.length - 1) {
+          const dxLast = drawEx - drawSx;
+          const dyLast = drawEy - drawSy;
+          const lenLast = Math.hypot(dxLast, dyLast);
+          const shortenEnd = Math.min(24, lenLast * 0.12);
+          if (lenLast > shortenEnd) {
+            const uxLast = dxLast / lenLast;
+            const uyLast = dyLast / lenLast;
+            drawEx = drawEx - uxLast * shortenEnd;
+            drawEy = drawEy - uyLast * shortenEnd;
+          }
+        }
+        
+        // Set line style for this segment (must reset each iteration since portal markers change it)
+        graphicsNodes.lineStyle(KING_MOVE_PREVIEW_WIDTH, lineColor, lineAlpha);
+        graphicsNodes.beginPath();
+        graphicsNodes.moveTo(drawSx, drawSy);
+        graphicsNodes.lineTo(drawEx, drawEy);
+        graphicsNodes.strokePath();
+        
+        // Draw warp portal marker at boundary (where segment exits/enters the screen)
+        if (i === 0) {
+          // Exit point - draw a small circle/marker
+          const [exitX, exitY] = worldToScreen(seg.ex, seg.ey);
+          if (Number.isFinite(exitX) && Number.isFinite(exitY)) {
+            graphicsNodes.lineStyle(3, lineColor, lineAlpha * 0.8);
+            graphicsNodes.beginPath();
+            graphicsNodes.arc(exitX, exitY, 8, 0, Math.PI * 2);
+            graphicsNodes.strokePath();
+          }
+        }
+        if (i === 1) {
+          // Entry point - draw a small circle/marker
+          const [entryX, entryY] = worldToScreen(seg.sx, seg.sy);
+          if (Number.isFinite(entryX) && Number.isFinite(entryY)) {
+            graphicsNodes.lineStyle(3, lineColor, lineAlpha * 0.8);
+            graphicsNodes.beginPath();
+            graphicsNodes.arc(entryX, entryY, 8, 0, Math.PI * 2);
+            graphicsNodes.strokePath();
+          }
+        }
+      }
+    } else {
+      // Non-warp path: draw single straight line
+      const [sx, sy] = worldToScreen(line.startX, line.startY);
+      let [ex, ey] = worldToScreen(line.endX, line.endY);
+      if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(ex) || !Number.isFinite(ey)) return;
+      const dx = ex - sx;
+      const dy = ey - sy;
+      const len = Math.hypot(dx, dy);
+      if (!Number.isFinite(len) || len < 1) return;
+      if (len <= startRadius) return;
+      const ux = dx / len;
+      const uy = dy / len;
+      const clippedSx = sx + ux * startRadius;
+      const clippedSy = sy + uy * startRadius;
+      const shortenEnd = Math.min(24, len * 0.12);
+      const clippedEx = ex - ux * shortenEnd;
+      const clippedEy = ey - uy * shortenEnd;
+      graphicsNodes.lineStyle(KING_MOVE_PREVIEW_WIDTH, lineColor, lineAlpha);
+      graphicsNodes.beginPath();
+      graphicsNodes.moveTo(clippedSx, clippedSy);
+      graphicsNodes.lineTo(clippedEx, clippedEy);
+      graphicsNodes.strokePath();
+    }
   }
 
   function maybeShowKingMoveCostDisplay() {
@@ -8023,22 +8224,43 @@ function fallbackRemoveEdgesForNode(nodeId) {
       return false;
     }
 
-    // Calculate distance-based cost using the same normalization as bridge building
+    // Calculate distance-based cost using warp segments if available
     const baseWidth = screen && Number.isFinite(screen.width) ? screen.width : 275.0;
     const baseHeight = screen && Number.isFinite(screen.height) ? screen.height : 108.0;
     const largestSpan = Math.max(1, baseWidth, baseHeight);
     const scale = 100 / largestSpan;
     
-    const dx = (preview.endX - preview.startX) * scale;
-    const dy = (preview.endY - preview.startY) * scale;
-    const normalizedDistance = Math.hypot(dx, dy);
+    // Use warp segments for cost calculation (accounts for warp path being shorter)
+    let normalizedDistance = 0;
+    const segments = preview.segments;
+    if (segments && segments.length > 0) {
+      for (const seg of segments) {
+        if (!seg) continue;
+        const segDx = (seg.ex - seg.sx) * scale;
+        const segDy = (seg.ey - seg.sy) * scale;
+        normalizedDistance += Math.hypot(segDx, segDy);
+      }
+    } else {
+      // Fallback to straight-line calculation
+      const dx = (preview.endX - preview.startX) * scale;
+      const dy = (preview.endY - preview.startY) * scale;
+      normalizedDistance = Math.hypot(dx, dy);
+    }
     
     const cost = Math.max(1, Math.round(BRIDGE_BASE_COST + normalizedDistance * BRIDGE_COST_PER_UNIT));
     const canAfford = goldValue >= cost;
     
-    // Calculate midpoint for display
-    const midX = (preview.startX + preview.endX) / 2;
-    const midY = (preview.startY + preview.endY) / 2;
+    // Calculate midpoint for display - use first segment end for warp paths
+    let midX, midY;
+    if (preview.warpAxis && preview.warpAxis !== 'none' && segments && segments.length === 2) {
+      // For warp paths, position cost near the first segment midpoint
+      const firstSeg = segments[0];
+      midX = (firstSeg.sx + firstSeg.ex) / 2;
+      midY = (firstSeg.sy + firstSeg.ey) / 2;
+    } else {
+      midX = (preview.startX + preview.endX) / 2;
+      midY = (preview.startY + preview.endY) / 2;
+    }
     const [sx, sy] = worldToScreen(midX, midY);
     
     const text = `$${formatCost(cost)}`;
@@ -8083,13 +8305,24 @@ function fallbackRemoveEdgesForNode(nodeId) {
     const selectedNode = kingSelectedNodeId != null ? nodes.get(kingSelectedNodeId) : null;
     if (!selectedNode) return;
     
-    // Build the king move segment
-    const candidateSegment = {
-      sx: preview.startX,
-      sy: preview.startY,
-      ex: preview.endX,
-      ey: preview.endY,
-    };
+    // Build the king move segments (use warp segments if available)
+    const candidateSegments = [];
+    if (preview.segments && preview.segments.length > 0) {
+      for (const seg of preview.segments) {
+        if (seg && Number.isFinite(seg.sx) && Number.isFinite(seg.sy) && Number.isFinite(seg.ex) && Number.isFinite(seg.ey)) {
+          candidateSegments.push(seg);
+        }
+      }
+    }
+    // Fallback to straight-line segment if no warp segments
+    if (candidateSegments.length === 0) {
+      candidateSegments.push({
+        sx: preview.startX,
+        sy: preview.startY,
+        ex: preview.endX,
+        ey: preview.endY,
+      });
+    }
     
     edges.forEach((edge, edgeId) => {
       if (!edge) return;
@@ -8104,15 +8337,18 @@ function fallbackRemoveEdgesForNode(nodeId) {
       const existingSegments = getEdgeWarpSegments(edge);
       if (!existingSegments.length) return;
       
-      for (const existing of existingSegments) {
-        if (!existing) continue;
-        if ([candidateSegment.sx, candidateSegment.sy, candidateSegment.ex, candidateSegment.ey, 
-             existing.sx, existing.sy, existing.ex, existing.ey].every((value) => Number.isFinite(value)) &&
-          segmentsIntersect(candidateSegment.sx, candidateSegment.sy, candidateSegment.ex, candidateSegment.ey, 
-                           existing.sx, existing.sy, existing.ex, existing.ey)
-        ) {
-          kingMovePreviewCrossingEdges.add(edgeId);
-          return; // Found intersection, no need to check more segments for this edge
+      // Check all candidate segments against all edge segments
+      for (const candidateSegment of candidateSegments) {
+        for (const existing of existingSegments) {
+          if (!existing) continue;
+          if ([candidateSegment.sx, candidateSegment.sy, candidateSegment.ex, candidateSegment.ey, 
+               existing.sx, existing.sy, existing.ex, existing.ey].every((value) => Number.isFinite(value)) &&
+            segmentsIntersect(candidateSegment.sx, candidateSegment.sy, candidateSegment.ex, candidateSegment.ey, 
+                             existing.sx, existing.sy, existing.ex, existing.ey)
+          ) {
+            kingMovePreviewCrossingEdges.add(edgeId);
+            return; // Found intersection, no need to check more segments for this edge
+          }
         }
       }
     });
@@ -8668,9 +8904,56 @@ function fallbackRemoveEdgesForNode(nodeId) {
           0,
           Math.min(1, timing.travelTicks <= 0 ? 1 : (elapsedTicks - travelStartTick) / timing.travelTicks)
         );
-        currentX = flight.startX + (flight.endX - flight.startX) * travelProgress;
-        currentY = flight.startY + (flight.endY - flight.startY) * travelProgress;
-        rotationRadians = travelHeading;
+        
+        // If warp segments are available, interpolate along the warp path
+        const warpSegs = flight.warpSegments;
+        if (warpSegs && warpSegs.length >= 2) {
+          // Calculate total distance of all segments
+          let totalDist = 0;
+          const segDists = [];
+          for (const seg of warpSegs) {
+            const segLen = Math.hypot(seg.ex - seg.sx, seg.ey - seg.sy);
+            segDists.push(segLen);
+            totalDist += segLen;
+          }
+          // Find the current position along the total path
+          const targetDist = travelProgress * totalDist;
+          let accum = 0;
+          let foundX = flight.endX;
+          let foundY = flight.endY;
+          let currentSegIdx = 0;
+          for (let i = 0; i < warpSegs.length; i++) {
+            const segLen = segDists[i];
+            if (accum + segLen >= targetDist) {
+              // Position is within this segment
+              const segProgress = segLen > 0 ? (targetDist - accum) / segLen : 1;
+              const seg = warpSegs[i];
+              foundX = seg.sx + (seg.ex - seg.sx) * segProgress;
+              foundY = seg.sy + (seg.ey - seg.sy) * segProgress;
+              currentSegIdx = i;
+              break;
+            }
+            accum += segLen;
+          }
+          currentX = foundX;
+          currentY = foundY;
+          // Update rotation heading based on current segment direction
+          if (currentSegIdx < warpSegs.length) {
+            const currentSeg = warpSegs[currentSegIdx];
+            const segDx = currentSeg.ex - currentSeg.sx;
+            const segDy = currentSeg.ey - currentSeg.sy;
+            if (Math.abs(segDx) > 1e-6 || Math.abs(segDy) > 1e-6) {
+              const segHeading = Math.atan2(segDy, segDx);
+              rotationRadians = normalizeAngleRadians(segHeading + Math.PI / 2);
+            }
+          }
+        } else {
+          // Non-warp: simple linear interpolation
+          currentX = flight.startX + (flight.endX - flight.startX) * travelProgress;
+          currentY = flight.startY + (flight.endY - flight.startY) * travelProgress;
+          rotationRadians = travelHeading;
+        }
+        
         rotationPivot = null;
         // Interpolate node radius for smooth crown size transition
         if (sourceNodeRadius != null && destNodeRadius != null) {
@@ -9239,7 +9522,10 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
   function shouldWarpCursor() {
     if (!pointerLockActive) return false;
-    if (activeAbility !== 'bridge1way') return false;
+    // Allow warp cursor for pipe building or king movement in smash mode
+    const isBridgeMode = activeAbility === 'bridge1way';
+    const isKingSmashMovement = kingSelectionActive && isKingSmashMode();
+    if (!isBridgeMode && !isKingSmashMovement) return false;
     if (!isWarpFrontendActive()) return false;
     if (!warpBoundsScreen) return false;
     const width = warpBoundsScreen.maxX - warpBoundsScreen.minX;
@@ -9254,10 +9540,9 @@ function fallbackRemoveEdgesForNode(nodeId) {
     }
     if (!isWarpWrapUnlocked()) {
       const clamped = clampCursorToWarpBounds(x, y);
-      if (
-        activeAbility === 'bridge1way'
-        && (Math.abs(clamped.x - x) > 1e-3 || Math.abs(clamped.y - y) > 1e-3)
-      ) {
+      const warpAttempted = Math.abs(clamped.x - x) > 1e-3 || Math.abs(clamped.y - y) > 1e-3;
+      const isBridgeOrKingMove = activeAbility === 'bridge1way' || (kingSelectionActive && isKingSmashMode());
+      if (isBridgeOrKingMove && warpAttempted) {
         notifyWarpGemRequired();
       }
       return clamped;
@@ -9336,7 +9621,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
     }
 
     const wrapOccurred = horizontalWrap || verticalWrap;
-    const enforceLimit = bridgeFirstNode !== null;
+    // Track warp for pipe building OR king smash movement
+    const enforceLimit = bridgeFirstNode !== null || (kingSelectionActive && isKingSmashMode());
 
     if (wrapOccurred && enforceLimit) {
       if (warpWrapUsed) {

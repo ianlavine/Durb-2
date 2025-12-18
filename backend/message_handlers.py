@@ -1126,12 +1126,15 @@ class MessageRouter:
             )
             return
 
+        # Extract warp_info if provided by client
+        warp_info = msg.get("warpInfo")
+
         game_info = self._get_game_info(token, server_context)
         if not game_info:
             return
 
         engine = game_info["engine"]
-        success, error_msg, payload = engine.handle_move_king(token, destination_int)
+        success, error_msg, payload = engine.handle_move_king(token, destination_int, warp_info=warp_info)
         if not success or not payload:
             await self._send_safe(
                 websocket,
@@ -1159,6 +1162,15 @@ class MessageRouter:
             broadcast_payload["movementMode"] = payload["movementMode"]
         if "removedEdges" in payload:
             broadcast_payload["removedEdges"] = payload["removedEdges"]
+        if "totalDistance" in payload:
+            try:
+                broadcast_payload["totalDistance"] = float(payload["totalDistance"])
+            except (TypeError, ValueError):
+                pass
+        if "warpSegments" in payload:
+            broadcast_payload["warpSegments"] = payload["warpSegments"]
+        if "warpAxis" in payload:
+            broadcast_payload["warpAxis"] = payload["warpAxis"]
 
         clients = game_info.get("clients", {})
         for token_key, client_websocket in clients.items():
@@ -1642,6 +1654,7 @@ class MessageRouter:
             destination_node_id = msg.get("destinationNodeId")
             if destination_node_id is None:
                 destination_node_id = msg.get("targetNodeId")
+            warp_info = msg.get("warpInfo")
             if destination_node_id is not None:
                 try:
                     destination_int = int(destination_node_id)
@@ -1651,7 +1664,7 @@ class MessageRouter:
                         json.dumps({"type": "kingMoveError", "message": "Invalid destination node"}),
                     )
                 else:
-                    success, error_msg, payload = bot_game_engine.handle_move_king(token, destination_int)
+                    success, error_msg, payload = bot_game_engine.handle_move_king(token, destination_int, warp_info=warp_info)
                     if not success or not payload:
                         await self._send_safe(
                             websocket,
@@ -1683,6 +1696,15 @@ class MessageRouter:
                                 pass
                         if "removedEdges" in payload:
                             message["removedEdges"] = payload["removedEdges"]
+                        if "totalDistance" in payload:
+                            try:
+                                message["totalDistance"] = float(payload["totalDistance"])
+                            except (TypeError, ValueError):
+                                pass
+                        if "warpSegments" in payload:
+                            message["warpSegments"] = payload["warpSegments"]
+                        if "warpAxis" in payload:
+                            message["warpAxis"] = payload["warpAxis"]
                         await self._send_safe(websocket, json.dumps(message))
 
         elif msg_type == "localTargeting":
