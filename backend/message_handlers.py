@@ -207,7 +207,7 @@ class MessageRouter:
             "screen": "warp",
             "brass": "right-click",
             "brassStart": "owned",
-            "breakMode": "flowing",
+            "breakMode": "any",
             "pipeCost": 1.0,
             "brassCost": 2.0,
             "crownShotCost": 0.5,
@@ -215,7 +215,7 @@ class MessageRouter:
             "passiveIncome": 1.0,
             "neutralCaptureGold": 5.0,
             "ringJuiceToGoldRatio": 10.0,
-            "ringPayoutGold": 2.0,
+            "ringPayoutGold": 3.0,
             "warpGemCount": DEFAULT_GEM_COUNTS.get("warp", 3),
             "brassGemCount": DEFAULT_GEM_COUNTS.get("brass", 7),
             "rageGemCount": DEFAULT_GEM_COUNTS.get("rage", 4),
@@ -228,7 +228,7 @@ class MessageRouter:
             "nodeGrowthRate": PRODUCTION_RATE_PER_NODE,
             "startingFlowRate": RESERVE_TRANSFER_RATIO,
             "secondaryFlowRate": INTAKE_TRANSFER_RATIO,
-            "kingMovementMode": DEFAULT_KING_MOVEMENT_MODE,
+            "kingMovementMode": "weak-smash",
         }
         if not isinstance(payload, dict):
             settings["pipeStart"] = settings["brassStart"]
