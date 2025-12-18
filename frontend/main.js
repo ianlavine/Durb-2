@@ -163,7 +163,6 @@
   // Bridge costs - dynamically loaded from backend settings
   let BRIDGE_BASE_COST = 0;
   let BRIDGE_COST_PER_UNIT = 1.5;
-  const BRASS_INTENTIONAL_COST_MULTIPLIER = 1.5;
 
   // Progress bar for node count victory
   let progressBar = null;
@@ -459,7 +458,9 @@
         brass: 'cross',
         brassStart: 'owned',
         breakMode: 'brass',
-        bridgeCost: 0.9,
+        pipeCost: 1.0,
+        brassCost: 2.0,
+        crownShotCost: 0.5,
         gameStart: 'open',
         startingNodeJuice: 300,
         passiveIncome: 0,
@@ -486,7 +487,9 @@
         brass: 'cross',
         brassStart: 'owned',
         breakMode: 'brass',
-        bridgeCost: 1.0,
+        pipeCost: 1.0,
+        brassCost: 2.0,
+        crownShotCost: 0.5,
         gameStart: 'hidden-split',
         startingNodeJuice: 300,
         passiveIncome: 0.90,
@@ -519,8 +522,12 @@
   let modeSelectorContainer = null;
   let modeOptionButtons = [];
   let modePanelOpen = false;
-  let bridgeCostSlider = null;
-  let bridgeCostValueLabel = null;
+  let pipeCostSlider = null;
+  let pipeCostValueLabel = null;
+  let brassCostSlider = null;
+  let brassCostValueLabel = null;
+  let crownShotCostSlider = null;
+  let crownShotCostValueLabel = null;
   let passiveIncomeSlider = null;
   let passiveIncomeValueLabel = null;
   let neutralCaptureSlider = null;
@@ -547,9 +554,15 @@
   let rageGemValueLabel = null;
   let reverseGemSlider = null;
   let reverseGemValueLabel = null;
-  const BRIDGE_COST_MIN = 0.5;
-  const BRIDGE_COST_MAX = 1.0;
-  const BRIDGE_COST_STEP = 0.1;
+  const PIPE_COST_MIN = 0.5;
+  const PIPE_COST_MAX = 2.5;
+  const PIPE_COST_STEP = 0.1;
+  const BRASS_COST_MIN = 0.5;
+  const BRASS_COST_MAX = 2.5;
+  const BRASS_COST_STEP = 0.1;
+  const CROWN_SHOT_COST_MIN = 0.5;
+  const CROWN_SHOT_COST_MAX = 2.5;
+  const CROWN_SHOT_COST_STEP = 0.1;
   const PASSIVE_INCOME_MIN = 0;
   const PASSIVE_INCOME_MAX = 2;
   const PASSIVE_INCOME_STEP = 0.05;
@@ -700,13 +713,31 @@
     modePanelOpen = false;
   }
 
-  function coerceBridgeCost(value) {
+  function coercePipeCost(value) {
     const numeric = Number(value);
     if (Number.isFinite(numeric) && numeric > 0) {
-      const clamped = Math.min(BRIDGE_COST_MAX, Math.max(BRIDGE_COST_MIN, numeric));
-      return Math.round(clamped / BRIDGE_COST_STEP) * BRIDGE_COST_STEP;
+      const clamped = Math.min(PIPE_COST_MAX, Math.max(PIPE_COST_MIN, numeric));
+      return Math.round(clamped / PIPE_COST_STEP) * PIPE_COST_STEP;
     }
-    return DEFAULT_MODE_SETTINGS.bridgeCost;
+    return DEFAULT_MODE_SETTINGS.pipeCost;
+  }
+
+  function coerceBrassCost(value) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) {
+      const clamped = Math.min(BRASS_COST_MAX, Math.max(BRASS_COST_MIN, numeric));
+      return Math.round(clamped / BRASS_COST_STEP) * BRASS_COST_STEP;
+    }
+    return DEFAULT_MODE_SETTINGS.brassCost;
+  }
+
+  function coerceCrownShotCost(value) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) {
+      const clamped = Math.min(CROWN_SHOT_COST_MAX, Math.max(CROWN_SHOT_COST_MIN, numeric));
+      return Math.round(clamped / CROWN_SHOT_COST_STEP) * CROWN_SHOT_COST_STEP;
+    }
+    return DEFAULT_MODE_SETTINGS.crownShotCost;
   }
 
   function coercePassiveIncome(value) {
@@ -1375,7 +1406,7 @@
     }
     const startLabel = (settings.brassStart === 'anywhere') ? 'Anywhere' : 'Owned';
     const startModeLabel = (settings.gameStart === 'hidden-split') ? 'Hidden' : 'Open';
-    const costLabel = coerceBridgeCost(settings.bridgeCost).toFixed(1);
+    const costLabel = coercePipeCost(settings.pipeCost).toFixed(1);
     const passiveLabel = `${coercePassiveIncome(settings.passiveIncome).toFixed(2)}/s`;
     const neutralLabel = coerceNeutralCaptureReward(settings.neutralCaptureGold);
     const ringRatioLabel = coerceRingRatio(settings.ringJuiceToGoldRatio);
@@ -1392,7 +1423,7 @@
     const currentBrass = normalizeBrassSetting(selectedSettings.brass);
     const currentStart = (selectedSettings.brassStart || DEFAULT_MODE_SETTINGS.brassStart).toLowerCase();
     const currentBreakMode = normalizeBreakMode(selectedSettings.breakMode || DEFAULT_MODE_SETTINGS.breakMode);
-    const currentCost = Number(coerceBridgeCost(selectedSettings.bridgeCost));
+    const currentCost = Number(coercePipeCost(selectedSettings.pipeCost));
     const currentGameStart = (selectedSettings.gameStart || DEFAULT_MODE_SETTINGS.gameStart).toLowerCase();
     const currentResources = normalizeResources(selectedSettings.resources);
     const hiddenAllowed = isHiddenStartAllowed();
@@ -1523,10 +1554,20 @@
     } else {
       next.gameStart = (next.gameStart === 'hidden-split') ? 'hidden-split' : 'open';
     }
-    if (Object.prototype.hasOwnProperty.call(overrides, 'bridgeCost')) {
-      next.bridgeCost = coerceBridgeCost(overrides.bridgeCost);
+    if (Object.prototype.hasOwnProperty.call(overrides, 'pipeCost')) {
+      next.pipeCost = coercePipeCost(overrides.pipeCost);
     } else {
-      next.bridgeCost = coerceBridgeCost(next.bridgeCost);
+      next.pipeCost = coercePipeCost(next.pipeCost);
+    }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'brassCost')) {
+      next.brassCost = coerceBrassCost(overrides.brassCost);
+    } else {
+      next.brassCost = coerceBrassCost(next.brassCost);
+    }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'crownShotCost')) {
+      next.crownShotCost = coerceCrownShotCost(overrides.crownShotCost);
+    } else {
+      next.crownShotCost = coerceCrownShotCost(next.crownShotCost);
     }
     if (Object.prototype.hasOwnProperty.call(overrides, 'passiveIncome')) {
       next.passiveIncome = coercePassiveIncome(overrides.passiveIncome);
@@ -1637,7 +1678,9 @@
     kingCrownDefaultMax = coerceKingCrownHealth(selectedSettings.kingCrownHealth);
     selectedMode = deriveModeFromSettings(selectedSettings);
     updateModeOptionButtonStates();
-    syncBridgeCostSlider();
+    syncPipeCostSlider();
+    syncBrassCostSlider();
+    syncCrownShotCostSlider();
     syncPassiveIncomeSlider();
     syncNeutralCaptureSlider();
     syncRingRatioSlider();
@@ -1662,7 +1705,9 @@
       brass: payloadBrass,
       brassStart: selectedSettings.brassStart,
       breakMode: payloadBreakMode,
-      bridgeCost: Number(coerceBridgeCost(selectedSettings.bridgeCost).toFixed(1)),
+      pipeCost: Number(coercePipeCost(selectedSettings.pipeCost).toFixed(1)),
+      brassCost: Number(coerceBrassCost(selectedSettings.brassCost).toFixed(1)),
+      crownShotCost: Number(coerceCrownShotCost(selectedSettings.crownShotCost).toFixed(1)),
       gameStart: selectedSettings.gameStart,
       startingNodeJuice: coerceStartingNodeJuice(selectedSettings.startingNodeJuice),
       passiveIncome: coercePassiveIncome(selectedSettings.passiveIncome),
@@ -1721,14 +1766,34 @@
     applySelectedSettings(overrides);
   }
 
-  function syncBridgeCostSlider() {
-    if (!bridgeCostSlider || !bridgeCostValueLabel) return;
+  function syncPipeCostSlider() {
+    if (!pipeCostSlider || !pipeCostValueLabel) return;
     const value = Math.max(
-      BRIDGE_COST_MIN,
-      Math.min(BRIDGE_COST_MAX, coerceBridgeCost(selectedSettings.bridgeCost))
+      PIPE_COST_MIN,
+      Math.min(PIPE_COST_MAX, coercePipeCost(selectedSettings.pipeCost))
     );
-    bridgeCostSlider.value = value.toFixed(1);
-    bridgeCostValueLabel.textContent = value.toFixed(1);
+    pipeCostSlider.value = value.toFixed(1);
+    pipeCostValueLabel.textContent = value.toFixed(1);
+  }
+
+  function syncBrassCostSlider() {
+    if (!brassCostSlider || !brassCostValueLabel) return;
+    const value = Math.max(
+      BRASS_COST_MIN,
+      Math.min(BRASS_COST_MAX, coerceBrassCost(selectedSettings.brassCost))
+    );
+    brassCostSlider.value = value.toFixed(1);
+    brassCostValueLabel.textContent = value.toFixed(1);
+  }
+
+  function syncCrownShotCostSlider() {
+    if (!crownShotCostSlider || !crownShotCostValueLabel) return;
+    const value = Math.max(
+      CROWN_SHOT_COST_MIN,
+      Math.min(CROWN_SHOT_COST_MAX, coerceCrownShotCost(selectedSettings.crownShotCost))
+    );
+    crownShotCostSlider.value = value.toFixed(1);
+    crownShotCostValueLabel.textContent = value.toFixed(1);
   }
 
   function syncPassiveIncomeSlider() {
@@ -2702,9 +2767,10 @@
 
     if (normalizedDistance === 0) return 0;
 
-    const baseCost = Math.round(BRIDGE_BASE_COST + normalizedDistance * BRIDGE_COST_PER_UNIT);
-    const applyBrassMultiplier = isBrass && brassPipesDoubleCost();
-    return applyBrassMultiplier ? Math.round(baseCost * BRASS_INTENTIONAL_COST_MULTIPLIER) : baseCost;
+    const rawCost = BRIDGE_BASE_COST + normalizedDistance * BRIDGE_COST_PER_UNIT;
+    // Apply the appropriate cost multiplier based on pipe type
+    const costMultiplier = isBrass ? getBrassCostMultiplier() : getPipeCostMultiplier();
+    return Math.round(rawCost * costMultiplier);
   }
 
   function normalizeWarpSegmentList(rawSegments, sourceNode, targetNode) {
@@ -3144,10 +3210,19 @@
     return mode === 'warp' || mode === 'semi' || mode === 'flat';
   }
 
-  function brassPipesDoubleCost() {
-    if (isMagicResourceModeActive()) return false;
-    if (isIntentionalBrassMode(gameMode)) return true;
-    return isIntentionalBrassMode(selectedMode);
+  // Get the current pipe cost multiplier from settings
+  function getPipeCostMultiplier() {
+    return coercePipeCost(selectedSettings.pipeCost || DEFAULT_MODE_SETTINGS.pipeCost);
+  }
+
+  // Get the current brass cost multiplier from settings
+  function getBrassCostMultiplier() {
+    return coerceBrassCost(selectedSettings.brassCost || DEFAULT_MODE_SETTINGS.brassCost);
+  }
+
+  // Get the current crown shot cost multiplier from settings
+  function getCrownShotCostMultiplier() {
+    return coerceCrownShotCost(selectedSettings.crownShotCost || DEFAULT_MODE_SETTINGS.crownShotCost);
   }
 
   function formatModeText(mode) {
@@ -3611,8 +3686,12 @@ function clearBridgeSelection() {
     modeOptionsPanel = document.getElementById('modeOptionsPanel');
     modeSelectorContainer = document.querySelector('.mode-selector');
     modeOptionButtons = Array.from(document.querySelectorAll('.mode-option-button'));
-    bridgeCostSlider = document.getElementById('bridgeCostSlider');
-    bridgeCostValueLabel = document.getElementById('bridgeCostValue');
+    pipeCostSlider = document.getElementById('pipeCostSlider');
+    pipeCostValueLabel = document.getElementById('pipeCostValue');
+    brassCostSlider = document.getElementById('brassCostSlider');
+    brassCostValueLabel = document.getElementById('brassCostValue');
+    crownShotCostSlider = document.getElementById('crownShotCostSlider');
+    crownShotCostValueLabel = document.getElementById('crownShotCostValue');
     passiveIncomeSlider = document.getElementById('passiveIncomeSlider');
     passiveIncomeValueLabel = document.getElementById('passiveIncomeValue');
     neutralCaptureSlider = document.getElementById('neutralCaptureSlider');
@@ -3653,17 +3732,45 @@ function clearBridgeSelection() {
       });
     }
 
-    if (bridgeCostSlider) {
-      bridgeCostSlider.min = String(BRIDGE_COST_MIN);
-      bridgeCostSlider.max = String(BRIDGE_COST_MAX);
-      bridgeCostSlider.step = String(BRIDGE_COST_STEP);
-      bridgeCostSlider.addEventListener('input', (event) => {
+    if (pipeCostSlider) {
+      pipeCostSlider.min = String(PIPE_COST_MIN);
+      pipeCostSlider.max = String(PIPE_COST_MAX);
+      pipeCostSlider.step = String(PIPE_COST_STEP);
+      pipeCostSlider.addEventListener('input', (event) => {
         const sliderValue = Number(event.target.value);
-        applySelectedSettings({ bridgeCost: sliderValue });
+        applySelectedSettings({ pipeCost: sliderValue });
       });
-      bridgeCostSlider.addEventListener('change', (event) => {
+      pipeCostSlider.addEventListener('change', (event) => {
         const sliderValue = Number(event.target.value);
-        applySelectedSettings({ bridgeCost: sliderValue });
+        applySelectedSettings({ pipeCost: sliderValue });
+      });
+    }
+
+    if (brassCostSlider) {
+      brassCostSlider.min = String(BRASS_COST_MIN);
+      brassCostSlider.max = String(BRASS_COST_MAX);
+      brassCostSlider.step = String(BRASS_COST_STEP);
+      brassCostSlider.addEventListener('input', (event) => {
+        const sliderValue = Number(event.target.value);
+        applySelectedSettings({ brassCost: sliderValue });
+      });
+      brassCostSlider.addEventListener('change', (event) => {
+        const sliderValue = Number(event.target.value);
+        applySelectedSettings({ brassCost: sliderValue });
+      });
+    }
+
+    if (crownShotCostSlider) {
+      crownShotCostSlider.min = String(CROWN_SHOT_COST_MIN);
+      crownShotCostSlider.max = String(CROWN_SHOT_COST_MAX);
+      crownShotCostSlider.step = String(CROWN_SHOT_COST_STEP);
+      crownShotCostSlider.addEventListener('input', (event) => {
+        const sliderValue = Number(event.target.value);
+        applySelectedSettings({ crownShotCost: sliderValue });
+      });
+      crownShotCostSlider.addEventListener('change', (event) => {
+        const sliderValue = Number(event.target.value);
+        applySelectedSettings({ crownShotCost: sliderValue });
       });
     }
 
@@ -7135,7 +7242,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
           if (kingMoveTargetCosts.has(targetId)) return;
           const targetNode = nodes.get(targetId);
           if (!targetNode) return;
-          const cost = calculateBridgeCost(originNode, targetNode, false);
+          const baseCost = calculateBridgeCost(originNode, targetNode, false);
+          const cost = Math.max(1, Math.round(baseCost / getPipeCostMultiplier() * getCrownShotCostMultiplier()));
           if (Number.isFinite(cost)) {
             kingMoveTargetCosts.set(targetId, cost);
           }
@@ -8043,7 +8151,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
         const lockedNode = nodes.get(lockedTargetId);
         if (lockedNode) {
           const isOwned = lockedNode.owner === myPlayerId;
-          const cost = calculateBridgeCost(selectedNode, lockedNode, false, warpPreference);
+          const baseCost = calculateBridgeCost(selectedNode, lockedNode, false, warpPreference);
+          const cost = Math.max(1, Math.round(baseCost / getPipeCostMultiplier() * getCrownShotCostMultiplier()));
           const canAfford = goldValue >= cost;
           lockedInvalid = !isOwned || !canAfford;
           lockedValid = isOwned && canAfford;
@@ -8247,7 +8356,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
       normalizedDistance = Math.hypot(dx, dy);
     }
     
-    const cost = Math.max(1, Math.round(BRIDGE_BASE_COST + normalizedDistance * BRIDGE_COST_PER_UNIT));
+    const rawCost = BRIDGE_BASE_COST + normalizedDistance * BRIDGE_COST_PER_UNIT;
+    const cost = Math.max(1, Math.round(rawCost * getCrownShotCostMultiplier()));
     const canAfford = goldValue >= cost;
     
     // Calculate midpoint for display - use first segment end for warp paths
@@ -8694,7 +8804,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
             graphicsNodes.strokeCircle(nx, ny, r + 3);
 
             // show static, live-updating midpoint label
-            updateBridgeCostDisplay(firstNode, n, bridgePreviewWillBeBrass && brassPipesDoubleCost());
+            updateBridgeCostDisplay(firstNode, n, bridgePreviewWillBeBrass);
           }
 
       }
@@ -8809,7 +8919,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
             targetNode = hoveredNode;
           }
         }
-        updateBridgeCostDisplay(firstNode, targetNode, bridgePreviewWillBeBrass && brassPipesDoubleCost());
+        updateBridgeCostDisplay(firstNode, targetNode, bridgePreviewWillBeBrass);
       }
     }
     
@@ -9947,7 +10057,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
           const modeIsXb = isXbModeActive();
           const useBrassPipe = bridgePreviewWillBeBrass && (isMagicResourceModeActive() || isCrossLikeModeActive());
           const pipeType = determinePipeTypeForBridge(useBrassPipe);
-          const applyBrassCost = pipeType === 'gold' && brassPipesDoubleCost();
+          const applyBrassCost = pipeType === 'gold';
           if (modeIsXb && xbPreviewBlockReason) {
             showErrorMessage('Cannot cross brass pipe');
             return true;
@@ -10143,7 +10253,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
           const selectedNode = nodes.get(kingSelectedNodeId);
           if (clickedNode && selectedNode && clickedNode.owner === myPlayerId) {
             // Check if player can afford the move
-            const cost = calculateBridgeCost(selectedNode, clickedNode, false);
+            const baseCost = calculateBridgeCost(selectedNode, clickedNode, false);
+            const cost = Math.max(1, Math.round(baseCost / getPipeCostMultiplier() * getCrownShotCostMultiplier()));
             if (goldValue >= cost) {
               sendKingMoveRequest(clickedNodeId);
               return;
@@ -11373,10 +11484,10 @@ function fallbackRemoveEdgesForNode(nodeId) {
     const toNode = nodes.get(prePipe.toNodeId);
     if (!fromNode || !toNode) return false;
     const warpInfo = buildWarpInfoForBridge(fromNode, toNode, prePipe.warpPreference || {});
-    const applyBrassCost = prePipe.pipeType === 'gold' && brassPipesDoubleCost();
+    const isBrassPipe = prePipe.pipeType === 'gold';
     const cost = Number.isFinite(forcedCost)
       ? forcedCost
-      : calculateBridgeCost(fromNode, toNode, applyBrassCost, prePipe.warpPreference || {});
+      : calculateBridgeCost(fromNode, toNode, isBrassPipe, prePipe.warpPreference || {});
     const payload = {
       type: 'buildBridge',
       fromNodeId: prePipe.fromNodeId,
@@ -11405,8 +11516,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
         removals.push({ id, reason: 'missing' });
         return;
       }
-      const applyBrassCost = prePipe.pipeType === 'gold' && brassPipesDoubleCost();
-      const cost = calculateBridgeCost(fromNode, toNode, applyBrassCost, prePipe.warpPreference || {});
+      const isBrassPipe = prePipe.pipeType === 'gold';
+      const cost = calculateBridgeCost(fromNode, toNode, isBrassPipe, prePipe.warpPreference || {});
       prePipe.lastKnownCost = cost;
       prePipe.waitingForOwnership = pipeStartRequiresOwnership() && fromNode.owner !== myPlayerId;
       const infiniteMoney = sandboxModeEnabled();
@@ -11620,7 +11731,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
     const useBrassPipe = bridgePreviewWillBeBrass;
     const pipeType = determinePipeTypeForBridge(useBrassPipe);
-    const cost = calculateBridgeCost(sNode, tNode, pipeType === 'gold' && brassPipesDoubleCost(), warpPreference);
+    const cost = calculateBridgeCost(sNode, tNode, pipeType === 'gold', warpPreference);
     const canAfford = goldValue >= cost;
     let previewColor;
     if (pipeType === 'gold') {

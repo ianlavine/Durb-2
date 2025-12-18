@@ -942,11 +942,32 @@
               <button class="mode-option-button" data-setting="kingMovementMode" data-value="weak-smash">Weak Smash</button>
             </div>
           </div>
-          <div class="mode-option-group" data-setting-group="bridgeCost">
-            <span class="selector-label">Bridge Cost</span>
+          <div class="mode-option-group" data-setting-group="lonelyNode">
+            <span class="selector-label">Lonely Node</span>
+            <div class="mode-option-buttons">
+              <button class="mode-option-button active" data-setting="lonelyNode" data-value="nothing">Nothing</button>
+              <button class="mode-option-button" data-setting="lonelyNode" data-value="sinks">Sinks</button>
+            </div>
+          </div>
+          <div class="mode-option-group" data-setting-group="pipeCost">
+            <span class="selector-label">Pipe Cost</span>
             <div class="mode-slider">
-              <input type="range" id="bridgeCostSlider" min="0.5" max="1" step="0.1" value="1.0" aria-label="Bridge cost multiplier" />
-              <span id="bridgeCostValue">1.0</span>
+              <input type="range" id="pipeCostSlider" min="0.5" max="2.5" step="0.1" value="1.0" aria-label="Pipe cost multiplier" />
+              <span id="pipeCostValue">1.0</span>
+            </div>
+          </div>
+          <div class="mode-option-group" data-setting-group="brassCost">
+            <span class="selector-label">Brass Cost</span>
+            <div class="mode-slider">
+              <input type="range" id="brassCostSlider" min="0.5" max="2.5" step="0.1" value="2.0" aria-label="Brass pipe cost multiplier" />
+              <span id="brassCostValue">2.0</span>
+            </div>
+          </div>
+          <div class="mode-option-group" data-setting-group="crownShotCost">
+            <span class="selector-label">Crown Shot Cost</span>
+            <div class="mode-slider">
+              <input type="range" id="crownShotCostSlider" min="0.5" max="2.5" step="0.1" value="0.5" aria-label="Crown shot cost multiplier" />
+              <span id="crownShotCostValue">0.5</span>
             </div>
           </div>
           <div class="mode-option-group" data-setting-group="startingJuice">
@@ -1010,13 +1031,6 @@
             <div class="mode-slider">
               <input type="range" id="secondaryFlowSlider" min="0" max="1" step="0.01" value="0.7" aria-label="Secondary flow share" />
               <span id="secondaryFlowValue">0.70</span>
-            </div>
-          </div>
-          <div class="mode-option-group" data-setting-group="lonelyNode">
-            <span class="selector-label">Lonely Node</span>
-            <div class="mode-option-buttons">
-              <button class="mode-option-button active" data-setting="lonelyNode" data-value="nothing">Nothing</button>
-              <button class="mode-option-button" data-setting="lonelyNode" data-value="sinks">Sinks</button>
             </div>
           </div>
           <div class="mode-option-group gem-counts span-full" data-setting-group="gemCounts">

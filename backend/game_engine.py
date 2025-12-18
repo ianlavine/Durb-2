@@ -11,10 +11,12 @@ from .constants import (
     BRIDGE_BASE_COST,
     BRIDGE_COST_PER_UNIT_DISTANCE,
     BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE,
-    BRASS_INTENTIONAL_COST_MULTIPLIER,
     DEFAULT_GEM_COUNTS,
     DEFAULT_GAME_MODE,
     DEFAULT_KING_MOVEMENT_MODE,
+    DEFAULT_PIPE_COST,
+    DEFAULT_BRASS_COST,
+    DEFAULT_CROWN_SHOT_COST,
     OVERFLOW_PENDING_GOLD_PAYOUT,
     PRODUCTION_RATE_PER_NODE,
     MAX_TRANSFER_RATIO,
@@ -170,11 +172,11 @@ class GameEngine:
             screen_variant = "flat"
         auto_brass_on_cross = normalized_mode in {"warp", "semi", "flat"}
         manual_brass_selection = normalized_mode in {"i-warp", "i-semi", "i-flat", "cross"}
-        if resource_mode == "gems":
-            brass_double_cost = False
-        else:
-            brass_double_cost = manual_brass_selection or normalized_mode == "cross"
         allow_pipe_start_anywhere = False
+        # Cost multipliers with defaults
+        pipe_cost_multiplier = DEFAULT_PIPE_COST
+        brass_cost_multiplier = DEFAULT_BRASS_COST
+        crown_shot_cost_multiplier = DEFAULT_CROWN_SHOT_COST
         pipe_break_mode = "flowing"
         bridge_cost_override: Optional[float] = None
         game_start_mode = "open"
@@ -240,15 +242,39 @@ class GameEngine:
             if game_start_option in {"hidden", "hidden-split", "hidden_split", "hidden split"}:
                 game_start_mode = "hidden-split"
 
-            bridge_cost_value = options.get("bridgeCost")
-            if isinstance(bridge_cost_value, str):
-                bridge_cost_value = bridge_cost_value.strip()
+            # Pipe cost (was bridge cost) - range 0.5 to 2.5
+            pipe_cost_value = options.get("pipeCost", options.get("bridgeCost"))
+            if isinstance(pipe_cost_value, str):
+                pipe_cost_value = pipe_cost_value.strip()
             try:
-                parsed_cost = float(bridge_cost_value)
+                parsed_pipe_cost = float(pipe_cost_value)
             except (TypeError, ValueError):
-                parsed_cost = None
-            if parsed_cost is not None and parsed_cost > 0:
-                bridge_cost_override = parsed_cost
+                parsed_pipe_cost = None
+            if parsed_pipe_cost is not None and parsed_pipe_cost > 0:
+                pipe_cost_multiplier = max(0.5, min(2.5, round(parsed_pipe_cost, 1)))
+                bridge_cost_override = pipe_cost_multiplier
+
+            # Brass cost - range 0.5 to 2.5
+            brass_cost_value = options.get("brassCost")
+            if isinstance(brass_cost_value, str):
+                brass_cost_value = brass_cost_value.strip()
+            try:
+                parsed_brass_cost = float(brass_cost_value)
+            except (TypeError, ValueError):
+                parsed_brass_cost = None
+            if parsed_brass_cost is not None and parsed_brass_cost > 0:
+                brass_cost_multiplier = max(0.5, min(2.5, round(parsed_brass_cost, 1)))
+
+            # Crown shot cost - range 0.5 to 2.5
+            crown_shot_cost_value = options.get("crownShotCost")
+            if isinstance(crown_shot_cost_value, str):
+                crown_shot_cost_value = crown_shot_cost_value.strip()
+            try:
+                parsed_crown_shot_cost = float(crown_shot_cost_value)
+            except (TypeError, ValueError):
+                parsed_crown_shot_cost = None
+            if parsed_crown_shot_cost is not None and parsed_crown_shot_cost > 0:
+                crown_shot_cost_multiplier = max(0.5, min(2.5, round(parsed_crown_shot_cost, 1)))
 
             passive_value = options.get("passiveIncome")
             if isinstance(passive_value, str):
@@ -371,13 +397,11 @@ class GameEngine:
         if resource_mode == "gems":
             auto_brass_on_cross = False
             manual_brass_selection = True
-            brass_double_cost = False
             screen_variant = "warp"
 
         if normalized_mode == "basic":
             auto_brass_on_cross = False
             manual_brass_selection = False
-            brass_double_cost = False
             allow_pipe_start_anywhere = False
             self.state.production_rate_per_node = CLASSIC_PRODUCTION_RATE_PER_NODE
             self.state.max_transfer_ratio = CLASSIC_MAX_TRANSFER_RATIO
@@ -393,15 +417,15 @@ class GameEngine:
                 secondary_flow_ratio = CLASSIC_INTAKE_TRANSFER_RATIO
 
         if bridge_cost_override is not None:
-            clamped_cost = max(0.5, min(1.0, float(bridge_cost_override)))
+            clamped_cost = max(0.5, min(2.5, float(bridge_cost_override)))
             self.state.bridge_cost_per_unit = round(clamped_cost, 1)
 
         self.state.starting_node_juice = starting_node_juice_value
 
-        if resource_mode == "gems":
-            brass_double_cost = False
-        else:
-            brass_double_cost = manual_brass_selection or normalized_mode == "cross"
+        # Set cost multipliers on state
+        self.state.pipe_cost_multiplier = pipe_cost_multiplier
+        self.state.brass_cost_multiplier = brass_cost_multiplier
+        self.state.crown_shot_cost_multiplier = crown_shot_cost_multiplier
 
         self._apply_resource_distribution(resource_mode, gem_counts)
 
@@ -421,7 +445,9 @@ class GameEngine:
             "brass": "right-click" if manual_brass_selection else "cross",
             "brassStart": "anywhere" if allow_pipe_start_anywhere else "owned",
             "breakMode": pipe_break_mode,
-            "bridgeCost": self.state.bridge_cost_per_unit,
+            "pipeCost": pipe_cost_multiplier,
+            "brassCost": brass_cost_multiplier,
+            "crownShotCost": crown_shot_cost_multiplier,
             "derivedMode": normalized_mode,
             "gameStart": game_start_mode,
             "startingNodeJuice": starting_node_juice_value,
@@ -454,7 +480,6 @@ class GameEngine:
         self.state.screen_variant = screen_variant
         self.state.auto_brass_on_cross = auto_brass_on_cross
         self.state.manual_brass_selection = manual_brass_selection
-        self.state.brass_double_cost = brass_double_cost
         self.state.pipe_break_mode = pipe_break_mode
         self.state.allow_pipe_start_anywhere = allow_pipe_start_anywhere
         self.state.lonely_node_mode = "sinks" if lonely_mode == "sinks" else "nothing"
@@ -1617,7 +1642,8 @@ class GameEngine:
             is_brass_mode = current_mode == "brass-old"
             auto_brass_on_cross = bool(getattr(self.state, "auto_brass_on_cross", current_mode in {"warp", "semi", "flat"}))
             manual_brass_selection = bool(getattr(self.state, "manual_brass_selection", current_mode in {"i-warp", "i-semi", "i-flat", "cross"}))
-            brass_double_cost = bool(getattr(self.state, "brass_double_cost", manual_brass_selection or current_mode == "cross"))
+            pipe_cost_multiplier = float(getattr(self.state, "pipe_cost_multiplier", DEFAULT_PIPE_COST))
+            brass_cost_multiplier = float(getattr(self.state, "brass_cost_multiplier", DEFAULT_BRASS_COST))
             screen_variant = getattr(
                 self.state,
                 "screen_variant",
@@ -1695,10 +1721,12 @@ class GameEngine:
                 if available_warp_gems <= 0:
                     raise GameValidationError("Warp gem required to warp pipes")
 
-            # Calculate and validate gold using server-side formula
-            actual_cost = self.calculate_bridge_cost(from_node, to_node, segments_override=candidate_segments)
-            if normalized_pipe_type == "gold" and brass_double_cost:
-                actual_cost = int(round(actual_cost * BRASS_INTENTIONAL_COST_MULTIPLIER))
+            # Calculate and validate gold using server-side formula with cost multipliers
+            base_cost = self.calculate_bridge_cost(from_node, to_node, segments_override=candidate_segments)
+            if normalized_pipe_type == "gold":
+                actual_cost = int(round(base_cost * brass_cost_multiplier))
+            else:
+                actual_cost = int(round(base_cost * pipe_cost_multiplier))
             self.validate_sufficient_gold(player_id, actual_cost)
 
             # Check if edge already exists
@@ -2245,7 +2273,9 @@ class GameEngine:
         if total_world_distance <= 0.0:
             raise GameValidationError("Nodes overlap")
 
-        cost = self.calculate_bridge_cost(origin_node, destination_node, segments_override=candidate_segments)
+        base_cost = self.calculate_bridge_cost(origin_node, destination_node, segments_override=candidate_segments)
+        crown_shot_cost_multiplier = float(getattr(self.state, "crown_shot_cost_multiplier", DEFAULT_CROWN_SHOT_COST))
+        cost = int(round(base_cost * crown_shot_cost_multiplier))
         intersecting_edges = self._find_intersecting_edges(origin_node, destination_node, candidate_segments)
         removals: List[Tuple[int, float]] = []
         for edge_id in intersecting_edges:
