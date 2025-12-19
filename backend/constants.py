@@ -62,6 +62,7 @@ PASSIVE_INCOME_ENABLED: bool = True
 PASSIVE_GOLD_PER_TICK: float = 0.09  # 0.90/s at 0.1s tick rate
 PASSIVE_GOLD_PER_SECOND: float = PASSIVE_GOLD_PER_TICK / TICK_INTERVAL_SECONDS
 STARTING_GOLD: float = 0.0
+MONEY_VICTORY_THRESHOLD: float = 300.0  # Win condition when not in gem mode
 
 
 # Node sizing
@@ -95,7 +96,7 @@ CLASSIC_INTAKE_TRANSFER_RATIO: float = 0.75
 CLASSIC_RESERVE_TRANSFER_RATIO: float = 0.01
 
 
-# Bridge costs
+# Bridge/Pipe costs
 BRIDGE_BASE_COST: float = 0.0
 BRIDGE_COST_PER_UNIT_DISTANCE_BY_MODE: Dict[str, float] = {
     "basic": 1.5,
@@ -116,7 +117,11 @@ BRIDGE_COST_PER_UNIT_DISTANCE_BY_MODE: Dict[str, float] = {
     "sandbox": 0.0,
 }
 BRIDGE_COST_PER_UNIT_DISTANCE: float = BRIDGE_COST_PER_UNIT_DISTANCE_BY_MODE[DEFAULT_GAME_MODE]
-BRASS_INTENTIONAL_COST_MULTIPLIER: float = 1.5
+
+# Cost multipliers (configurable via settings)
+DEFAULT_PIPE_COST: float = 1.0      # Multiplier for standard pipe cost (range 0.5-2.5)
+DEFAULT_BRASS_COST: float = 2.0     # Multiplier for brass pipe cost (range 0.5-2.5)
+DEFAULT_CROWN_SHOT_COST: float = 0.5  # Multiplier for crown shot cost (range 0.5-2.5)
 
 # Bridge build timing (ticks required per unit world distance)
 BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE: float = 0.6

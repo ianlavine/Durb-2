@@ -136,11 +136,13 @@
 
       .winConNotice {
         font-size: 18px;
-        color: #ffd700;
+        color: #a0a0a0;
+        display: flex;
+        align-items: center;
         justify-content: center;
-        text-transform: uppercase;
         letter-spacing: 1px;
-        background: rgba(0, 0, 0, 0.65);
+        background: transparent;
+        padding-top: 8px;
       }
 
       /* Top UI background bar */
@@ -219,6 +221,54 @@
       .gem-count .gem-number {
         min-width: 22px;
         text-align: center;
+      }
+
+      /* Money progress bar for non-gem mode */
+      #moneyProgressContainer {
+        display: none;
+        width: min(800px, calc(100% - 48px));
+        flex-direction: column;
+        align-items: center;
+      }
+      #moneyProgressBar {
+        position: relative;
+        width: 100%;
+        height: 36px;
+        background: linear-gradient(to bottom, #1a1a1a 0%, #2a2a2a 50%, #1a1a1a 100%);
+        border: 2px solid #4a4a4a;
+        border-radius: 18px;
+        overflow: hidden;
+        box-shadow: inset 0 2px 8px rgba(0,0,0,0.6), 0 2px 4px rgba(0,0,0,0.4);
+      }
+      #moneyProgressFill {
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(to bottom, #ffd700 0%, #d4af00 50%, #b8960b 100%);
+        border-radius: 16px;
+        transition: width 0.3s ease-out;
+        box-shadow: 0 0 12px rgba(255, 215, 0, 0.5), inset 0 2px 4px rgba(255, 255, 255, 0.3);
+        position: relative;
+      }
+      #moneyProgressFill::after {
+        content: '';
+        position: absolute;
+        top: 2px;
+        left: 4px;
+        right: 4px;
+        height: 6px;
+        background: linear-gradient(to bottom, rgba(255,255,255,0.4) 0%, rgba(255,255,255,0) 100%);
+        border-radius: 4px;
+      }
+      #moneyProgressText {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        color: #fff;
+        font-size: clamp(12px, 1.5vh, 16px);
+        font-weight: bold;
+        text-shadow: 0 1px 3px rgba(0,0,0,0.9), 0 0 6px rgba(0,0,0,0.6);
+        white-space: nowrap;
       }
 
       /* Timer display */
@@ -894,8 +944,8 @@
             <span class="selector-label">Brass</span>
             <div class="mode-option-buttons">
               <button class="mode-option-button" data-setting="brass" data-value="flowing">Flowing</button>
-              <button class="mode-option-button active" data-setting="brass" data-value="cross">Cross</button>
-              <button class="mode-option-button" data-setting="brass" data-value="right-click">Right-Click</button>
+              <button class="mode-option-button" data-setting="brass" data-value="cross">Cross</button>
+              <button class="mode-option-button active" data-setting="brass" data-value="right-click">Right-Click</button>
             </div>
           </div>
           <div class="mode-option-group" data-setting-group="brassStart">
@@ -908,8 +958,8 @@
           <div class="mode-option-group" data-setting-group="breakMode">
             <span class="selector-label">Break</span>
             <div class="mode-option-buttons">
-              <button class="mode-option-button active" data-setting="breakMode" data-value="brass">Brass</button>
-              <button class="mode-option-button" data-setting="breakMode" data-value="any">Any</button>
+              <button class="mode-option-button" data-setting="breakMode" data-value="brass">Brass</button>
+              <button class="mode-option-button active" data-setting="breakMode" data-value="any">Any</button>
               <button class="mode-option-button" data-setting="breakMode" data-value="double">Double</button>
             </div>
           </div>
@@ -938,15 +988,36 @@
             <span class="selector-label">King Movement</span>
             <div class="mode-option-buttons">
               <button class="mode-option-button" data-setting="kingMovementMode" data-value="basic">Basic</button>
-              <button class="mode-option-button active" data-setting="kingMovementMode" data-value="smash">Smash</button>
-              <button class="mode-option-button" data-setting="kingMovementMode" data-value="weak-smash">Weak Smash</button>
+              <button class="mode-option-button" data-setting="kingMovementMode" data-value="smash">Smash</button>
+              <button class="mode-option-button active" data-setting="kingMovementMode" data-value="weak-smash">Weak Smash</button>
             </div>
           </div>
-          <div class="mode-option-group" data-setting-group="bridgeCost">
-            <span class="selector-label">Bridge Cost</span>
+          <div class="mode-option-group" data-setting-group="lonelyNode">
+            <span class="selector-label">Lonely Node</span>
+            <div class="mode-option-buttons">
+              <button class="mode-option-button active" data-setting="lonelyNode" data-value="nothing">Nothing</button>
+              <button class="mode-option-button" data-setting="lonelyNode" data-value="sinks">Sinks</button>
+            </div>
+          </div>
+          <div class="mode-option-group" data-setting-group="pipeCost">
+            <span class="selector-label">Pipe Cost</span>
             <div class="mode-slider">
-              <input type="range" id="bridgeCostSlider" min="0.5" max="1" step="0.1" value="1.0" aria-label="Bridge cost multiplier" />
-              <span id="bridgeCostValue">1.0</span>
+              <input type="range" id="pipeCostSlider" min="0.5" max="2.5" step="0.1" value="1.0" aria-label="Pipe cost multiplier" />
+              <span id="pipeCostValue">1.0</span>
+            </div>
+          </div>
+          <div class="mode-option-group" data-setting-group="brassCost">
+            <span class="selector-label">Brass Cost</span>
+            <div class="mode-slider">
+              <input type="range" id="brassCostSlider" min="0.5" max="2.5" step="0.1" value="2.0" aria-label="Brass pipe cost multiplier" />
+              <span id="brassCostValue">2.0</span>
+            </div>
+          </div>
+          <div class="mode-option-group" data-setting-group="crownShotCost">
+            <span class="selector-label">Crown Shot Cost</span>
+            <div class="mode-slider">
+              <input type="range" id="crownShotCostSlider" min="0.5" max="2.5" step="0.1" value="0.5" aria-label="Crown shot cost multiplier" />
+              <span id="crownShotCostValue">0.5</span>
             </div>
           </div>
           <div class="mode-option-group" data-setting-group="startingJuice">
@@ -966,8 +1037,8 @@
           <div class="mode-option-group" data-setting-group="passiveIncome">
             <span class="selector-label">Passive Income</span>
             <div class="mode-slider">
-              <input type="range" id="passiveIncomeSlider" min="0" max="2" step="0.05" value="0.90" aria-label="Passive income per second" />
-              <span id="passiveIncomeValue">0.90/s</span>
+              <input type="range" id="passiveIncomeSlider" min="0" max="2" step="0.05" value="1.00" aria-label="Passive income per second" />
+              <span id="passiveIncomeValue">1.00/s</span>
             </div>
           </div>
           <div class="mode-option-group" data-setting-group="neutralReward">
@@ -987,8 +1058,8 @@
           <div class="mode-option-group" data-setting-group="ringPayout">
             <span class="selector-label">Ring Payout</span>
             <div class="mode-slider">
-              <input type="range" id="ringPayoutSlider" min="1" max="20" step="1" value="2" aria-label="Gold needed to pop ring" />
-              <span id="ringPayoutValue">2</span>
+              <input type="range" id="ringPayoutSlider" min="1" max="20" step="1" value="3" aria-label="Gold needed to pop ring" />
+              <span id="ringPayoutValue">3</span>
             </div>
           </div>
           <div class="mode-option-group" data-setting-group="nodeGrowth">
@@ -1010,13 +1081,6 @@
             <div class="mode-slider">
               <input type="range" id="secondaryFlowSlider" min="0" max="1" step="0.01" value="0.7" aria-label="Secondary flow share" />
               <span id="secondaryFlowValue">0.70</span>
-            </div>
-          </div>
-          <div class="mode-option-group" data-setting-group="lonelyNode">
-            <span class="selector-label">Lonely Node</span>
-            <div class="mode-option-buttons">
-              <button class="mode-option-button active" data-setting="lonelyNode" data-value="nothing">Nothing</button>
-              <button class="mode-option-button" data-setting="lonelyNode" data-value="sinks">Sinks</button>
             </div>
           </div>
           <div class="mode-option-group gem-counts span-full" data-setting-group="gemCounts">
@@ -1067,6 +1131,12 @@
         <div class="gem-count" data-gem="reverse">
           <span class="gem-icon">🔄</span>
           <span class="gem-number">0</span>
+        </div>
+      </div>
+      <div id="moneyProgressContainer">
+        <div id="moneyProgressBar">
+          <div id="moneyProgressFill"></div>
+          <span id="moneyProgressText">$0</span>
         </div>
       </div>
     </div>

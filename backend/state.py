@@ -13,6 +13,7 @@ from .constants import (
     GOLD_REWARD_FOR_ENEMY_CAPTURE,
     INTAKE_TRANSFER_RATIO,
     MAX_TRANSFER_RATIO,
+    MONEY_VICTORY_THRESHOLD,
     NODE_MIN_JUICE,
     OVERFLOW_PENDING_GOLD_PAYOUT,
     TICK_INTERVAL_SECONDS,
@@ -76,7 +77,6 @@ class GraphState:
         self.screen_variant: str = "flat"
         self.auto_brass_on_cross: bool = False
         self.manual_brass_selection: bool = False
-        self.brass_double_cost: bool = False
         self.allow_pipe_start_anywhere: bool = False
         self.pipe_break_mode: str = "flowing"
         self.mode_settings: Dict[str, Any] = {}
@@ -84,6 +84,11 @@ class GraphState:
         self.gem_nodes: Dict[int, str] = {}
         self.king_movement_mode: str = DEFAULT_KING_MOVEMENT_MODE
         self.pending_king_smash_removals: List[Tuple[int, int]] = []
+        
+        # Cost multipliers (configurable via settings)
+        self.pipe_cost_multiplier: float = 1.0      # Standard pipe cost multiplier
+        self.brass_cost_multiplier: float = 2.0     # Brass pipe cost multiplier
+        self.crown_shot_cost_multiplier: float = 0.5  # Crown shot cost multiplier
 
         # Replay helpers
         self.tick_count: int = 0
@@ -270,6 +275,33 @@ class GraphState:
         self.game_ended = True
         self.winner_id = best_pid
         return best_pid
+
+    def check_money_victory(self) -> Optional[int]:
+        """Check if any player has reached the money victory threshold (non-gem mode only).
+        Returns winner ID or None."""
+        if self.game_ended:
+            return self.winner_id
+
+        # Only apply money victory in non-gem (standard) resource mode
+        resource_mode = getattr(self, "resource_mode", "standard")
+        if resource_mode == "gems":
+            return None
+
+        # Only check after picking phase is complete
+        if self.phase == "picking":
+            return None
+
+        # Check if any active player has reached the threshold
+        for player_id in self.players.keys():
+            if player_id in self.eliminated_players:
+                continue
+            player_gold = self.player_gold.get(player_id, 0.0)
+            if player_gold >= MONEY_VICTORY_THRESHOLD:
+                self.game_ended = True
+                self.winner_id = player_id
+                return player_id
+
+        return None
 
     def start_game_timer(self, current_time: float) -> None:
         """Start the game timer when the game begins."""

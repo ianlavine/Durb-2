@@ -207,13 +207,15 @@ class MessageRouter:
             "screen": "warp",
             "brass": "right-click",
             "brassStart": "owned",
-            "breakMode": "flowing",
-            "bridgeCost": 1.0,
+            "breakMode": "any",
+            "pipeCost": 1.0,
+            "brassCost": 2.0,
+            "crownShotCost": 0.5,
             "gameStart": "open",
             "passiveIncome": 1.0,
             "neutralCaptureGold": 5.0,
             "ringJuiceToGoldRatio": 10.0,
-            "ringPayoutGold": 2.0,
+            "ringPayoutGold": 3.0,
             "warpGemCount": DEFAULT_GEM_COUNTS.get("warp", 3),
             "brassGemCount": DEFAULT_GEM_COUNTS.get("brass", 7),
             "rageGemCount": DEFAULT_GEM_COUNTS.get("rage", 4),
@@ -226,7 +228,7 @@ class MessageRouter:
             "nodeGrowthRate": PRODUCTION_RATE_PER_NODE,
             "startingFlowRate": RESERVE_TRANSFER_RATIO,
             "secondaryFlowRate": INTAKE_TRANSFER_RATIO,
-            "kingMovementMode": DEFAULT_KING_MOVEMENT_MODE,
+            "kingMovementMode": "weak-smash",
         }
         if not isinstance(payload, dict):
             settings["pipeStart"] = settings["brassStart"]
@@ -271,16 +273,41 @@ class MessageRouter:
         if game_start_option in {"open", "hidden", "hidden-split", "hidden_split", "hidden split"}:
             settings["gameStart"] = "hidden-split" if game_start_option.startswith("hidden") else "open"
 
-        bridge_cost_value = payload.get("bridgeCost", settings["bridgeCost"])
-        if isinstance(bridge_cost_value, str):
-            bridge_cost_value = bridge_cost_value.strip()
+        # Pipe cost (was bridge cost) - range 0.5 to 2.5
+        pipe_cost_value = payload.get("pipeCost", payload.get("bridgeCost", settings["pipeCost"]))
+        if isinstance(pipe_cost_value, str):
+            pipe_cost_value = pipe_cost_value.strip()
         try:
-            parsed_cost = float(bridge_cost_value)
+            parsed_pipe_cost = float(pipe_cost_value)
         except (TypeError, ValueError):
-            parsed_cost = None
-        if parsed_cost is not None and parsed_cost > 0:
-            clamped = max(0.5, min(1.0, parsed_cost))
-            settings["bridgeCost"] = round(clamped, 1)
+            parsed_pipe_cost = None
+        if parsed_pipe_cost is not None and parsed_pipe_cost > 0:
+            clamped = max(0.5, min(2.5, parsed_pipe_cost))
+            settings["pipeCost"] = round(clamped, 1)
+
+        # Brass cost - range 0.5 to 2.5
+        brass_cost_value = payload.get("brassCost", settings["brassCost"])
+        if isinstance(brass_cost_value, str):
+            brass_cost_value = brass_cost_value.strip()
+        try:
+            parsed_brass_cost = float(brass_cost_value)
+        except (TypeError, ValueError):
+            parsed_brass_cost = None
+        if parsed_brass_cost is not None and parsed_brass_cost > 0:
+            clamped = max(0.5, min(2.5, parsed_brass_cost))
+            settings["brassCost"] = round(clamped, 1)
+
+        # Crown shot cost - range 0.5 to 2.5
+        crown_shot_cost_value = payload.get("crownShotCost", settings["crownShotCost"])
+        if isinstance(crown_shot_cost_value, str):
+            crown_shot_cost_value = crown_shot_cost_value.strip()
+        try:
+            parsed_crown_shot_cost = float(crown_shot_cost_value)
+        except (TypeError, ValueError):
+            parsed_crown_shot_cost = None
+        if parsed_crown_shot_cost is not None and parsed_crown_shot_cost > 0:
+            clamped = max(0.5, min(2.5, parsed_crown_shot_cost))
+            settings["crownShotCost"] = round(clamped, 1)
 
         base_mode = payload.get("baseMode")
         if isinstance(base_mode, str):
@@ -1126,12 +1153,15 @@ class MessageRouter:
             )
             return
 
+        # Extract warp_info if provided by client
+        warp_info = msg.get("warpInfo")
+
         game_info = self._get_game_info(token, server_context)
         if not game_info:
             return
 
         engine = game_info["engine"]
-        success, error_msg, payload = engine.handle_move_king(token, destination_int)
+        success, error_msg, payload = engine.handle_move_king(token, destination_int, warp_info=warp_info)
         if not success or not payload:
             await self._send_safe(
                 websocket,
@@ -1157,6 +1187,17 @@ class MessageRouter:
                 pass
         if "movementMode" in payload:
             broadcast_payload["movementMode"] = payload["movementMode"]
+        if "removedEdges" in payload:
+            broadcast_payload["removedEdges"] = payload["removedEdges"]
+        if "totalDistance" in payload:
+            try:
+                broadcast_payload["totalDistance"] = float(payload["totalDistance"])
+            except (TypeError, ValueError):
+                pass
+        if "warpSegments" in payload:
+            broadcast_payload["warpSegments"] = payload["warpSegments"]
+        if "warpAxis" in payload:
+            broadcast_payload["warpAxis"] = payload["warpAxis"]
 
         clients = game_info.get("clients", {})
         for token_key, client_websocket in clients.items():
@@ -1640,6 +1681,7 @@ class MessageRouter:
             destination_node_id = msg.get("destinationNodeId")
             if destination_node_id is None:
                 destination_node_id = msg.get("targetNodeId")
+            warp_info = msg.get("warpInfo")
             if destination_node_id is not None:
                 try:
                     destination_int = int(destination_node_id)
@@ -1649,7 +1691,7 @@ class MessageRouter:
                         json.dumps({"type": "kingMoveError", "message": "Invalid destination node"}),
                     )
                 else:
-                    success, error_msg, payload = bot_game_engine.handle_move_king(token, destination_int)
+                    success, error_msg, payload = bot_game_engine.handle_move_king(token, destination_int, warp_info=warp_info)
                     if not success or not payload:
                         await self._send_safe(
                             websocket,
@@ -1679,6 +1721,17 @@ class MessageRouter:
                                 message["cost"] = float(payload["cost"])
                             except (TypeError, ValueError):
                                 pass
+                        if "removedEdges" in payload:
+                            message["removedEdges"] = payload["removedEdges"]
+                        if "totalDistance" in payload:
+                            try:
+                                message["totalDistance"] = float(payload["totalDistance"])
+                            except (TypeError, ValueError):
+                                pass
+                        if "warpSegments" in payload:
+                            message["warpSegments"] = payload["warpSegments"]
+                        if "warpAxis" in payload:
+                            message["warpAxis"] = payload["warpAxis"]
                         await self._send_safe(websocket, json.dumps(message))
 
         elif msg_type == "localTargeting":

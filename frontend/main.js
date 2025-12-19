@@ -163,7 +163,6 @@
   // Bridge costs - dynamically loaded from backend settings
   let BRIDGE_BASE_COST = 0;
   let BRIDGE_COST_PER_UNIT = 1.5;
-  const BRASS_INTENTIONAL_COST_MULTIPLIER = 1.5;
 
   // Progress bar for node count victory
   let progressBar = null;
@@ -218,7 +217,7 @@
   const KING_MOVE_PREVIEW_ALPHA = 0.42;
   const KING_MOVE_PREVIEW_INVALID_COLOR = 0x000000;
   const KING_MOVE_PREVIEW_INVALID_ALPHA = 0.55;
-  const KING_MOVE_PREVIEW_WIDTH = 10;
+  const KING_MOVE_PREVIEW_WIDTH = 14;
   const KING_CROWN_DEFAULT_HEALTH = 300;
   let kingCrownDefaultMax = KING_CROWN_DEFAULT_HEALTH;
   const KING_ATTACK_ALERT_LINGER_SEC = 2.5;
@@ -384,6 +383,12 @@
   let gemCountsDisplay = null;
   let gemCountsClickHandlerBound = false;
   const gemCountLabels = new Map();
+  
+  // Money progress bar for non-gem mode
+  let moneyProgressContainer = null;
+  let moneyProgressFill = null;
+  let moneyProgressText = null;
+  const MONEY_VICTORY_THRESHOLD = 300;
 
   // Warp mode visuals & geometry (frontend prototype hooked to Warp mode)
   const WARP_MARGIN_RATIO_X = 0.06; // horizontal extra space relative to board width
@@ -459,7 +464,9 @@
         brass: 'cross',
         brassStart: 'owned',
         breakMode: 'brass',
-        bridgeCost: 0.9,
+        pipeCost: 1.0,
+        brassCost: 2.0,
+        crownShotCost: 0.5,
         gameStart: 'open',
         startingNodeJuice: 300,
         passiveIncome: 0,
@@ -483,23 +490,25 @@
       }
     : {
         screen: 'warp',
-        brass: 'cross',
+        brass: 'right-click',
         brassStart: 'owned',
-        breakMode: 'brass',
-        bridgeCost: 1.0,
+        breakMode: 'any',
+        pipeCost: 1.0,
+        brassCost: 2.0,
+        crownShotCost: 0.5,
         gameStart: 'hidden-split',
         startingNodeJuice: 300,
-        passiveIncome: 0.90,
+        passiveIncome: 1.00,
         neutralCaptureGold: 3,
         ringJuiceToGoldRatio: 10,
-        ringPayoutGold: 2,
+        ringPayoutGold: 3,
         warpGemCount: 3,
         brassGemCount: 7,
         rageGemCount: 4,
         reverseGemCount: 6,
         winCondition: 'king',
         kingCrownHealth: KING_CROWN_DEFAULT_HEALTH,
-        kingMovementMode: 'smash',
+        kingMovementMode: 'weak-smash',
         resources: 'standard',
         lonelyNode: 'nothing',
         nodeGrowthRate: 0.2,
@@ -519,8 +528,12 @@
   let modeSelectorContainer = null;
   let modeOptionButtons = [];
   let modePanelOpen = false;
-  let bridgeCostSlider = null;
-  let bridgeCostValueLabel = null;
+  let pipeCostSlider = null;
+  let pipeCostValueLabel = null;
+  let brassCostSlider = null;
+  let brassCostValueLabel = null;
+  let crownShotCostSlider = null;
+  let crownShotCostValueLabel = null;
   let passiveIncomeSlider = null;
   let passiveIncomeValueLabel = null;
   let neutralCaptureSlider = null;
@@ -547,9 +560,15 @@
   let rageGemValueLabel = null;
   let reverseGemSlider = null;
   let reverseGemValueLabel = null;
-  const BRIDGE_COST_MIN = 0.5;
-  const BRIDGE_COST_MAX = 1.0;
-  const BRIDGE_COST_STEP = 0.1;
+  const PIPE_COST_MIN = 0.5;
+  const PIPE_COST_MAX = 2.5;
+  const PIPE_COST_STEP = 0.1;
+  const BRASS_COST_MIN = 0.5;
+  const BRASS_COST_MAX = 2.5;
+  const BRASS_COST_STEP = 0.1;
+  const CROWN_SHOT_COST_MIN = 0.5;
+  const CROWN_SHOT_COST_MAX = 2.5;
+  const CROWN_SHOT_COST_STEP = 0.1;
   const PASSIVE_INCOME_MIN = 0;
   const PASSIVE_INCOME_MAX = 2;
   const PASSIVE_INCOME_STEP = 0.05;
@@ -700,13 +719,31 @@
     modePanelOpen = false;
   }
 
-  function coerceBridgeCost(value) {
+  function coercePipeCost(value) {
     const numeric = Number(value);
     if (Number.isFinite(numeric) && numeric > 0) {
-      const clamped = Math.min(BRIDGE_COST_MAX, Math.max(BRIDGE_COST_MIN, numeric));
-      return Math.round(clamped / BRIDGE_COST_STEP) * BRIDGE_COST_STEP;
+      const clamped = Math.min(PIPE_COST_MAX, Math.max(PIPE_COST_MIN, numeric));
+      return Math.round(clamped / PIPE_COST_STEP) * PIPE_COST_STEP;
     }
-    return DEFAULT_MODE_SETTINGS.bridgeCost;
+    return DEFAULT_MODE_SETTINGS.pipeCost;
+  }
+
+  function coerceBrassCost(value) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) {
+      const clamped = Math.min(BRASS_COST_MAX, Math.max(BRASS_COST_MIN, numeric));
+      return Math.round(clamped / BRASS_COST_STEP) * BRASS_COST_STEP;
+    }
+    return DEFAULT_MODE_SETTINGS.brassCost;
+  }
+
+  function coerceCrownShotCost(value) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) {
+      const clamped = Math.min(CROWN_SHOT_COST_MAX, Math.max(CROWN_SHOT_COST_MIN, numeric));
+      return Math.round(clamped / CROWN_SHOT_COST_STEP) * CROWN_SHOT_COST_STEP;
+    }
+    return DEFAULT_MODE_SETTINGS.crownShotCost;
   }
 
   function coercePassiveIncome(value) {
@@ -899,6 +936,7 @@
       }
     }
     updateModeOptionButtonStates();
+    updateTopUiBarDisplay();
   }
 
   function setCurrentBreakMode(mode) {
@@ -1294,7 +1332,10 @@
   function maybeAutoUnlockWarpWrap(screenX, screenY) {
     if (!isMagicResourceModeActive()) return false;
     if (warpGemModeActive || warpGemAutoUnlockActive) return false;
-    if (activeAbility !== 'bridge1way' || bridgeFirstNode == null) return false;
+    // Allow for pipe building or king smash movement
+    const isBridgeMode = activeAbility === 'bridge1way' && bridgeFirstNode != null;
+    const isKingSmashMovement = kingSelectionActive && isKingSmashMode();
+    if (!isBridgeMode && !isKingSmashMovement) return false;
     if (!canActivateWarpGemMode()) return false;
     if (!isWarpFrontendActive()) return false;
     if (!isPointerOutsideWarpBounds(screenX, screenY)) return false;
@@ -1372,7 +1413,7 @@
     }
     const startLabel = (settings.brassStart === 'anywhere') ? 'Anywhere' : 'Owned';
     const startModeLabel = (settings.gameStart === 'hidden-split') ? 'Hidden' : 'Open';
-    const costLabel = coerceBridgeCost(settings.bridgeCost).toFixed(1);
+    const costLabel = coercePipeCost(settings.pipeCost).toFixed(1);
     const passiveLabel = `${coercePassiveIncome(settings.passiveIncome).toFixed(2)}/s`;
     const neutralLabel = coerceNeutralCaptureReward(settings.neutralCaptureGold);
     const ringRatioLabel = coerceRingRatio(settings.ringJuiceToGoldRatio);
@@ -1389,7 +1430,7 @@
     const currentBrass = normalizeBrassSetting(selectedSettings.brass);
     const currentStart = (selectedSettings.brassStart || DEFAULT_MODE_SETTINGS.brassStart).toLowerCase();
     const currentBreakMode = normalizeBreakMode(selectedSettings.breakMode || DEFAULT_MODE_SETTINGS.breakMode);
-    const currentCost = Number(coerceBridgeCost(selectedSettings.bridgeCost));
+    const currentCost = Number(coercePipeCost(selectedSettings.pipeCost));
     const currentGameStart = (selectedSettings.gameStart || DEFAULT_MODE_SETTINGS.gameStart).toLowerCase();
     const currentResources = normalizeResources(selectedSettings.resources);
     const hiddenAllowed = isHiddenStartAllowed();
@@ -1520,10 +1561,20 @@
     } else {
       next.gameStart = (next.gameStart === 'hidden-split') ? 'hidden-split' : 'open';
     }
-    if (Object.prototype.hasOwnProperty.call(overrides, 'bridgeCost')) {
-      next.bridgeCost = coerceBridgeCost(overrides.bridgeCost);
+    if (Object.prototype.hasOwnProperty.call(overrides, 'pipeCost')) {
+      next.pipeCost = coercePipeCost(overrides.pipeCost);
     } else {
-      next.bridgeCost = coerceBridgeCost(next.bridgeCost);
+      next.pipeCost = coercePipeCost(next.pipeCost);
+    }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'brassCost')) {
+      next.brassCost = coerceBrassCost(overrides.brassCost);
+    } else {
+      next.brassCost = coerceBrassCost(next.brassCost);
+    }
+    if (Object.prototype.hasOwnProperty.call(overrides, 'crownShotCost')) {
+      next.crownShotCost = coerceCrownShotCost(overrides.crownShotCost);
+    } else {
+      next.crownShotCost = coerceCrownShotCost(next.crownShotCost);
     }
     if (Object.prototype.hasOwnProperty.call(overrides, 'passiveIncome')) {
       next.passiveIncome = coercePassiveIncome(overrides.passiveIncome);
@@ -1634,7 +1685,9 @@
     kingCrownDefaultMax = coerceKingCrownHealth(selectedSettings.kingCrownHealth);
     selectedMode = deriveModeFromSettings(selectedSettings);
     updateModeOptionButtonStates();
-    syncBridgeCostSlider();
+    syncPipeCostSlider();
+    syncBrassCostSlider();
+    syncCrownShotCostSlider();
     syncPassiveIncomeSlider();
     syncNeutralCaptureSlider();
     syncRingRatioSlider();
@@ -1659,7 +1712,9 @@
       brass: payloadBrass,
       brassStart: selectedSettings.brassStart,
       breakMode: payloadBreakMode,
-      bridgeCost: Number(coerceBridgeCost(selectedSettings.bridgeCost).toFixed(1)),
+      pipeCost: Number(coercePipeCost(selectedSettings.pipeCost).toFixed(1)),
+      brassCost: Number(coerceBrassCost(selectedSettings.brassCost).toFixed(1)),
+      crownShotCost: Number(coerceCrownShotCost(selectedSettings.crownShotCost).toFixed(1)),
       gameStart: selectedSettings.gameStart,
       startingNodeJuice: coerceStartingNodeJuice(selectedSettings.startingNodeJuice),
       passiveIncome: coercePassiveIncome(selectedSettings.passiveIncome),
@@ -1718,14 +1773,34 @@
     applySelectedSettings(overrides);
   }
 
-  function syncBridgeCostSlider() {
-    if (!bridgeCostSlider || !bridgeCostValueLabel) return;
+  function syncPipeCostSlider() {
+    if (!pipeCostSlider || !pipeCostValueLabel) return;
     const value = Math.max(
-      BRIDGE_COST_MIN,
-      Math.min(BRIDGE_COST_MAX, coerceBridgeCost(selectedSettings.bridgeCost))
+      PIPE_COST_MIN,
+      Math.min(PIPE_COST_MAX, coercePipeCost(selectedSettings.pipeCost))
     );
-    bridgeCostSlider.value = value.toFixed(1);
-    bridgeCostValueLabel.textContent = value.toFixed(1);
+    pipeCostSlider.value = value.toFixed(1);
+    pipeCostValueLabel.textContent = value.toFixed(1);
+  }
+
+  function syncBrassCostSlider() {
+    if (!brassCostSlider || !brassCostValueLabel) return;
+    const value = Math.max(
+      BRASS_COST_MIN,
+      Math.min(BRASS_COST_MAX, coerceBrassCost(selectedSettings.brassCost))
+    );
+    brassCostSlider.value = value.toFixed(1);
+    brassCostValueLabel.textContent = value.toFixed(1);
+  }
+
+  function syncCrownShotCostSlider() {
+    if (!crownShotCostSlider || !crownShotCostValueLabel) return;
+    const value = Math.max(
+      CROWN_SHOT_COST_MIN,
+      Math.min(CROWN_SHOT_COST_MAX, coerceCrownShotCost(selectedSettings.crownShotCost))
+    );
+    crownShotCostSlider.value = value.toFixed(1);
+    crownShotCostValueLabel.textContent = value.toFixed(1);
   }
 
   function syncPassiveIncomeSlider() {
@@ -2699,9 +2774,10 @@
 
     if (normalizedDistance === 0) return 0;
 
-    const baseCost = Math.round(BRIDGE_BASE_COST + normalizedDistance * BRIDGE_COST_PER_UNIT);
-    const applyBrassMultiplier = isBrass && brassPipesDoubleCost();
-    return applyBrassMultiplier ? Math.round(baseCost * BRASS_INTENTIONAL_COST_MULTIPLIER) : baseCost;
+    const rawCost = BRIDGE_BASE_COST + normalizedDistance * BRIDGE_COST_PER_UNIT;
+    // Apply the appropriate cost multiplier based on pipe type
+    const costMultiplier = isBrass ? getBrassCostMultiplier() : getPipeCostMultiplier();
+    return Math.round(rawCost * costMultiplier);
   }
 
   function normalizeWarpSegmentList(rawSegments, sourceNode, targetNode) {
@@ -3141,10 +3217,19 @@
     return mode === 'warp' || mode === 'semi' || mode === 'flat';
   }
 
-  function brassPipesDoubleCost() {
-    if (isMagicResourceModeActive()) return false;
-    if (isIntentionalBrassMode(gameMode)) return true;
-    return isIntentionalBrassMode(selectedMode);
+  // Get the current pipe cost multiplier from settings
+  function getPipeCostMultiplier() {
+    return coercePipeCost(selectedSettings.pipeCost || DEFAULT_MODE_SETTINGS.pipeCost);
+  }
+
+  // Get the current brass cost multiplier from settings
+  function getBrassCostMultiplier() {
+    return coerceBrassCost(selectedSettings.brassCost || DEFAULT_MODE_SETTINGS.brassCost);
+  }
+
+  // Get the current crown shot cost multiplier from settings
+  function getCrownShotCostMultiplier() {
+    return coerceCrownShotCost(selectedSettings.crownShotCost || DEFAULT_MODE_SETTINGS.crownShotCost);
   }
 
   function formatModeText(mode) {
@@ -3608,8 +3693,12 @@ function clearBridgeSelection() {
     modeOptionsPanel = document.getElementById('modeOptionsPanel');
     modeSelectorContainer = document.querySelector('.mode-selector');
     modeOptionButtons = Array.from(document.querySelectorAll('.mode-option-button'));
-    bridgeCostSlider = document.getElementById('bridgeCostSlider');
-    bridgeCostValueLabel = document.getElementById('bridgeCostValue');
+    pipeCostSlider = document.getElementById('pipeCostSlider');
+    pipeCostValueLabel = document.getElementById('pipeCostValue');
+    brassCostSlider = document.getElementById('brassCostSlider');
+    brassCostValueLabel = document.getElementById('brassCostValue');
+    crownShotCostSlider = document.getElementById('crownShotCostSlider');
+    crownShotCostValueLabel = document.getElementById('crownShotCostValue');
     passiveIncomeSlider = document.getElementById('passiveIncomeSlider');
     passiveIncomeValueLabel = document.getElementById('passiveIncomeValue');
     neutralCaptureSlider = document.getElementById('neutralCaptureSlider');
@@ -3650,17 +3739,45 @@ function clearBridgeSelection() {
       });
     }
 
-    if (bridgeCostSlider) {
-      bridgeCostSlider.min = String(BRIDGE_COST_MIN);
-      bridgeCostSlider.max = String(BRIDGE_COST_MAX);
-      bridgeCostSlider.step = String(BRIDGE_COST_STEP);
-      bridgeCostSlider.addEventListener('input', (event) => {
+    if (pipeCostSlider) {
+      pipeCostSlider.min = String(PIPE_COST_MIN);
+      pipeCostSlider.max = String(PIPE_COST_MAX);
+      pipeCostSlider.step = String(PIPE_COST_STEP);
+      pipeCostSlider.addEventListener('input', (event) => {
         const sliderValue = Number(event.target.value);
-        applySelectedSettings({ bridgeCost: sliderValue });
+        applySelectedSettings({ pipeCost: sliderValue });
       });
-      bridgeCostSlider.addEventListener('change', (event) => {
+      pipeCostSlider.addEventListener('change', (event) => {
         const sliderValue = Number(event.target.value);
-        applySelectedSettings({ bridgeCost: sliderValue });
+        applySelectedSettings({ pipeCost: sliderValue });
+      });
+    }
+
+    if (brassCostSlider) {
+      brassCostSlider.min = String(BRASS_COST_MIN);
+      brassCostSlider.max = String(BRASS_COST_MAX);
+      brassCostSlider.step = String(BRASS_COST_STEP);
+      brassCostSlider.addEventListener('input', (event) => {
+        const sliderValue = Number(event.target.value);
+        applySelectedSettings({ brassCost: sliderValue });
+      });
+      brassCostSlider.addEventListener('change', (event) => {
+        const sliderValue = Number(event.target.value);
+        applySelectedSettings({ brassCost: sliderValue });
+      });
+    }
+
+    if (crownShotCostSlider) {
+      crownShotCostSlider.min = String(CROWN_SHOT_COST_MIN);
+      crownShotCostSlider.max = String(CROWN_SHOT_COST_MAX);
+      crownShotCostSlider.step = String(CROWN_SHOT_COST_STEP);
+      crownShotCostSlider.addEventListener('input', (event) => {
+        const sliderValue = Number(event.target.value);
+        applySelectedSettings({ crownShotCost: sliderValue });
+      });
+      crownShotCostSlider.addEventListener('change', (event) => {
+        const sliderValue = Number(event.target.value);
+        applySelectedSettings({ crownShotCost: sliderValue });
       });
     }
 
@@ -4340,6 +4457,12 @@ function clearBridgeSelection() {
     updateGemModeUi();
     updateGemCountsDisplay();
     
+    // Initialize money progress bar elements
+    moneyProgressContainer = document.getElementById('moneyProgressContainer');
+    moneyProgressFill = document.getElementById('moneyProgressFill');
+    moneyProgressText = document.getElementById('moneyProgressText');
+    updateTopUiBarDisplay();
+    
     // Initialize timer display
     timerDisplay = document.getElementById('timerDisplay');
     
@@ -4594,6 +4717,37 @@ function clearBridgeSelection() {
       const timing = resolveKingCrownFlightTiming(flight);
       const startTime = Number(flight.startTime) || 0;
       const elapsedTicks = timing.tickSeconds > 0 ? (animationTime - startTime) / timing.tickSeconds : Infinity;
+      
+      // Check if crown has passed any edges during travel phase and remove them
+      if (Array.isArray(flight.pendingEdgeRemovals) && flight.pendingEdgeRemovals.length > 0) {
+        const travelStartTick = timing.preSpinTicks;
+        const travelEndTick = timing.preSpinTicks + timing.travelTicks;
+        
+        // Calculate travel progress (0-1) - only during travel phase
+        let travelProgress = 0;
+        if (elapsedTicks >= travelEndTick) {
+          travelProgress = 1; // Travel complete
+        } else if (elapsedTicks > travelStartTick) {
+          travelProgress = (elapsedTicks - travelStartTick) / Math.max(1, timing.travelTicks);
+        }
+        
+        // Remove edges that the crown has passed (trigger slightly early so leading edge of crown hits)
+        // Use a fixed tick offset rather than percentage, so it's consistent regardless of travel distance
+        const CROWN_LEAD_TICKS = 3; // Remove edges this many ticks before crown center reaches them
+        const leadOffset = timing.travelTicks > 0 ? CROWN_LEAD_TICKS / timing.travelTicks : 0;
+        const edgesToRemoveNow = [];
+        flight.pendingEdgeRemovals.forEach((entry) => {
+          if (!entry.removed && travelProgress + leadOffset >= entry.removalProgress) {
+            entry.removed = true;
+            edgesToRemoveNow.push(entry.edgeId);
+          }
+        });
+        
+        if (edgesToRemoveNow.length > 0) {
+          removeEdges(edgesToRemoveNow);
+        }
+      }
+      
       if (!Number.isFinite(elapsedTicks) || elapsedTicks >= timing.totalTicks) {
         if (Number.isFinite(flight.toNodeId)) {
           kingCrownFlightDestinations.delete(flight.toNodeId);
@@ -6740,6 +6894,12 @@ function fallbackRemoveEdgesForNode(nodeId) {
     kingMoveTargetCosts.clear();
     kingMoveCostDisplayActive = false;
     kingMovePreviewCrossingEdges.clear();
+    // Reset warp tracking state when ending king selection
+    warpWrapUsed = false;
+    lastDoubleWarpWarningTime = 0;
+    lastWarpAxis = null;
+    lastWarpDirection = null;
+    resetAutoWarpGemUnlock();
     hideBridgeCostDisplay();
     if (!skipRedraw) {
       redrawStatic();
@@ -6788,13 +6948,11 @@ function fallbackRemoveEdgesForNode(nodeId) {
       )
     );
 
+    // Calculate spin ticks based on travel duration (MUST match backend formula exactly)
     const spinBase = Math.round(travelTicks * KING_CROWN_SPIN_TICKS_RATIO);
     const spinTicks = Math.max(
       KING_CROWN_SPIN_TICKS_MIN,
-      Math.min(
-        KING_CROWN_SPIN_TICKS_MAX,
-        Number.isFinite(spinBase) ? spinBase : KING_CROWN_SPIN_TICKS_MIN
-      )
+      Math.min(KING_CROWN_SPIN_TICKS_MAX, Number.isFinite(spinBase) ? spinBase : KING_CROWN_SPIN_TICKS_MIN)
     );
     const preSpinTicks = spinTicks;
     const postSpinTicks = spinTicks;
@@ -6841,6 +6999,10 @@ function fallbackRemoveEdgesForNode(nodeId) {
       endY,
       crownHealth,
       crownMax,
+      edgesToRemove = [],
+      totalDistance = 0,
+      warpSegments = null,
+      warpAxis = 'none',
     } = options;
     if (
       !Number.isFinite(playerId) ||
@@ -6857,8 +7019,25 @@ function fallbackRemoveEdgesForNode(nodeId) {
     if (Math.abs(dx) < 1e-3 && Math.abs(dy) < 1e-3) {
       return false;
     }
-    const timing = computeKingCrownFlightTiming(startX, startY, endX, endY);
-    const headingRotation = computeKingCrownRotation(startX, startY, endX, endY);
+    
+    // Calculate timing based on warp segments if available (for accurate flight duration)
+    let timingDistance = Math.hypot(dx, dy);
+    if (warpSegments && warpSegments.length >= 2) {
+      timingDistance = 0;
+      for (const seg of warpSegments) {
+        timingDistance += Math.hypot(seg.ex - seg.sx, seg.ey - seg.sy);
+      }
+    }
+    const timing = computeKingCrownFlightTiming(startX, startY, startX + timingDistance, startY);
+    
+    // Calculate initial heading rotation - use first segment for warp paths
+    let headingRotation;
+    if (warpSegments && warpSegments.length >= 1) {
+      const firstSeg = warpSegments[0];
+      headingRotation = computeKingCrownRotation(firstSeg.sx, firstSeg.sy, firstSeg.ex, firstSeg.ey);
+    } else {
+      headingRotation = computeKingCrownRotation(startX, startY, endX, endY);
+    }
     
     // Get starting crown angle from origin node (or 0 if not stored)
     const startAngleOffset = Number.isFinite(fromNodeId) ? (kingCrownAngleOffsets.get(fromNodeId) || 0) : 0;
@@ -6868,11 +7047,34 @@ function fallbackRemoveEdgesForNode(nodeId) {
     // Store this so the static crown will use it when it appears
     if (Number.isFinite(toNodeId)) {
       kingCrownAngleOffsets.set(toNodeId, endAngleOffset);
-    }
-    
-    if (Number.isFinite(toNodeId)) {
       removeKingCrownFlightsForNode(toNodeId);
     }
+    
+    // Parse edges to remove: [[edgeId, distance], ...] and track which have been removed
+    const pendingEdgeRemovals = [];
+    let flightTotalDistance = totalDistance;
+    if (!flightTotalDistance || flightTotalDistance <= 0) {
+      if (warpSegments && warpSegments.length > 0) {
+        flightTotalDistance = 0;
+        for (const seg of warpSegments) {
+          flightTotalDistance += Math.hypot(seg.ex - seg.sx, seg.ey - seg.sy);
+        }
+      } else {
+        flightTotalDistance = Math.hypot(endX - startX, endY - startY);
+      }
+    }
+    if (Array.isArray(edgesToRemove)) {
+      edgesToRemove.forEach((entry) => {
+        if (!Array.isArray(entry) || entry.length < 2) return;
+        const edgeId = Number(entry[0]);
+        const dist = Number(entry[1]);
+        if (!Number.isFinite(edgeId) || !Number.isFinite(dist)) return;
+        // Calculate at what travel progress (0-1) this edge should be removed
+        const removalProgress = flightTotalDistance > 0 ? dist / flightTotalDistance : 0;
+        pendingEdgeRemovals.push({ edgeId, distance: dist, removalProgress, removed: false });
+      });
+    }
+    
     kingCrownFlights.push({
       playerId,
       fromNodeId,
@@ -6894,6 +7096,9 @@ function fallbackRemoveEdgesForNode(nodeId) {
       endAngleOffset,
       crownHealth,
       crownMax,
+      pendingEdgeRemovals,
+      warpSegments: warpSegments && warpSegments.length > 0 ? warpSegments : null,
+      warpAxis: warpAxis || 'none',
     });
     if (Number.isFinite(toNodeId)) {
       kingCrownFlightDestinations.add(toNodeId);
@@ -6952,6 +7157,12 @@ function fallbackRemoveEdgesForNode(nodeId) {
     kingMoveTargetCosts.clear();
     kingMoveCostDisplayActive = false;
     kingMovePreviewCrossingEdges.clear();
+    // Reset warp tracking state for fresh king selection
+    warpWrapUsed = false;
+    lastDoubleWarpWarningTime = 0;
+    lastWarpAxis = null;
+    lastWarpDirection = null;
+    resetAutoWarpGemUnlock();
     hideBridgeCostDisplay();
     updateKingMovePreviewLine();
     redrawStatic();
@@ -6970,6 +7181,18 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
     if (kingMovePendingDestinationId != null) return false;
 
+    // Build warpInfo from the current preview line (which has computed the warp path)
+    // This ensures the backend uses the same path that was shown to the user
+    const selectedNode = kingSelectedNodeId != null ? nodes.get(kingSelectedNodeId) : null;
+    const targetNode = nodes.get(nodeId);
+    let warpInfo = null;
+    
+    if (selectedNode && targetNode && isKingSmashMode()) {
+      // Use the warp preference that was used for the preview
+      const warpPreference = kingMovePreviewLine?.warpPreference || getActiveWarpPreference();
+      warpInfo = buildWarpInfoForBridge(selectedNode, targetNode, warpPreference);
+    }
+
     kingMovePendingDestinationId = nodeId;
     kingMoveOptionsPending = true;
     kingMovePreviewLine = null;
@@ -6977,11 +7200,15 @@ function fallbackRemoveEdgesForNode(nodeId) {
     hideBridgeCostDisplay();
     redrawStatic();
 
-    ws.send(JSON.stringify({
+    const payload = {
       type: 'kingMove',
       destinationNodeId: nodeId,
       token,
-    }));
+    };
+    if (warpInfo) {
+      payload.warpInfo = warpInfo;
+    }
+    ws.send(JSON.stringify(payload));
     return true;
   }
 
@@ -7028,7 +7255,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
           if (kingMoveTargetCosts.has(targetId)) return;
           const targetNode = nodes.get(targetId);
           if (!targetNode) return;
-          const cost = calculateBridgeCost(originNode, targetNode, false);
+          const baseCost = calculateBridgeCost(originNode, targetNode, false);
+          const cost = Math.max(1, Math.round(baseCost / getPipeCostMultiplier() * getCrownShotCostMultiplier()));
           if (Number.isFinite(cost)) {
             kingMoveTargetCosts.set(targetId, cost);
           }
@@ -7120,6 +7348,29 @@ function fallbackRemoveEdgesForNode(nodeId) {
       targetNode.kingCrownHealth = Number.isFinite(resolvedCrownHealth) ? Math.max(0, resolvedCrownHealth) : targetNode.kingCrownMax;
 
       if (sourceNode) {
+        // Parse edge removal info: [[edgeId, distance], ...]
+        const removedEdges = Array.isArray(msg?.removedEdges) ? msg.removedEdges : [];
+        const totalDistance = Number(msg?.totalDistance) || 0;
+        
+        // Parse warp segments if provided: [[sx, sy, ex, ey], ...]
+        const rawWarpSegments = Array.isArray(msg?.warpSegments) ? msg.warpSegments : null;
+        const warpAxis = typeof msg?.warpAxis === 'string' ? msg.warpAxis : 'none';
+        let warpSegments = null;
+        if (rawWarpSegments && rawWarpSegments.length > 0 && warpAxis !== 'none') {
+          warpSegments = rawWarpSegments.map((seg) => {
+            if (!Array.isArray(seg) || seg.length < 4) return null;
+            const sx = Number(seg[0]);
+            const sy = Number(seg[1]);
+            const ex = Number(seg[2]);
+            const ey = Number(seg[3]);
+            if ([sx, sy, ex, ey].every((v) => Number.isFinite(v))) {
+              return { sx, sy, ex, ey };
+            }
+            return null;
+          }).filter(Boolean);
+          if (warpSegments.length === 0) warpSegments = null;
+        }
+        
         beginKingCrownFlight({
           playerId,
           fromNodeId,
@@ -7130,6 +7381,10 @@ function fallbackRemoveEdgesForNode(nodeId) {
           endY: targetNode.y,
           crownHealth: targetNode.kingCrownHealth,
           crownMax: targetNode.kingCrownMax,
+          edgesToRemove: removedEdges,
+          totalDistance,
+          warpSegments,
+          warpAxis,
         });
       }
     }
@@ -7867,6 +8122,39 @@ function fallbackRemoveEdgesForNode(nodeId) {
     const lockedNodeId = pickNearestNode(wx, wy, tolerance);
     const lockedTargetId = (lockedNodeId != null && lockedNodeId !== kingSelectedNodeId) ? lockedNodeId : null;
     
+    // Compute warp path segments for king movement (follows same logic as pipe building)
+    const warpPreference = getActiveWarpPreference();
+    const targetForPath = lockedTargetId != null ? nodes.get(lockedTargetId) : { x: wx, y: wy };
+    const path = computeWarpBridgeSegments(selectedNode, targetForPath, warpPreference);
+    
+    // Extract path info for preview drawing and cost calculation
+    let warpAxis = 'none';
+    let segments = [];
+    let totalWorldDistance = 0;
+    if (path && typeof path.wrapAxis === 'string') {
+      warpAxis = path.wrapAxis;
+    }
+    if (path && Array.isArray(path.segments)) {
+      segments = path.segments.map((seg) => {
+        if (!seg || !seg.start || !seg.end) return null;
+        const sx = Number(seg.start.x);
+        const sy = Number(seg.start.y);
+        const ex = Number(seg.end.x);
+        const ey = Number(seg.end.y);
+        if ([sx, sy, ex, ey].every((v) => Number.isFinite(v))) {
+          return { sx, sy, ex, ey };
+        }
+        return null;
+      }).filter(Boolean);
+    }
+    if (path && Number.isFinite(path.totalWorldDistance)) {
+      totalWorldDistance = path.totalWorldDistance;
+    }
+    if (!segments.length) {
+      segments = [{ sx: selectedNode.x, sy: selectedNode.y, ex: wx, ey: wy }];
+      totalWorldDistance = Math.hypot(wx - selectedNode.x, wy - selectedNode.y);
+    }
+    
     // Calculate validity differently for smash mode vs basic mode
     let lockedInvalid = false;
     let lockedValid = false;
@@ -7876,7 +8164,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
         const lockedNode = nodes.get(lockedTargetId);
         if (lockedNode) {
           const isOwned = lockedNode.owner === myPlayerId;
-          const cost = calculateBridgeCost(selectedNode, lockedNode, false);
+          const baseCost = calculateBridgeCost(selectedNode, lockedNode, false, warpPreference);
+          const cost = Math.max(1, Math.round(baseCost / getPipeCostMultiplier() * getCrownShotCostMultiplier()));
           const canAfford = goldValue >= cost;
           lockedInvalid = !isOwned || !canAfford;
           lockedValid = isOwned && canAfford;
@@ -7902,6 +8191,11 @@ function fallbackRemoveEdgesForNode(nodeId) {
       lockedNodeId: lockedTargetId,
       lockedInvalid,
       lockedValid,
+      // Warp path info for drawing and sending to backend
+      warpAxis,
+      segments,
+      totalWorldDistance,
+      warpPreference,
     };
     const changed = !prev ||
       prev.startX !== next.startX ||
@@ -7912,7 +8206,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
       prev.alpha !== next.alpha ||
       prev.lockedNodeId !== next.lockedNodeId ||
       prev.lockedInvalid !== next.lockedInvalid ||
-      prev.lockedValid !== next.lockedValid;
+      prev.lockedValid !== next.lockedValid ||
+      prev.warpAxis !== next.warpAxis;
     if (changed) {
       kingMovePreviewLine = next;
       return true;
@@ -7927,28 +8222,107 @@ function fallbackRemoveEdgesForNode(nodeId) {
     if (!view) return;
     const selectedNode = kingSelectedNodeId != null ? nodes.get(kingSelectedNodeId) : null;
     if (!selectedNode) return;
-    const [sx, sy] = worldToScreen(line.startX, line.startY);
-    let [ex, ey] = worldToScreen(line.endX, line.endY);
-    if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(ex) || !Number.isFinite(ey)) return;
-    const dx = ex - sx;
-    const dy = ey - sy;
-    const len = Math.hypot(dx, dy);
-    if (!Number.isFinite(len) || len < 1) return;
     const baseScale = Math.max(1e-6, Math.min(view.scaleX || 0, view.scaleY || 0) || 1);
     const startRadius = Math.max(4, calculateNodeRadius(selectedNode, baseScale) + computeStandardKingCrownRadius(baseScale) * 0.35);
-    if (len <= startRadius) return;
-    const ux = dx / len;
-    const uy = dy / len;
-    const clippedSx = sx + ux * startRadius;
-    const clippedSy = sy + uy * startRadius;
-    const shortenEnd = Math.min(24, len * 0.12);
-    const clippedEx = ex - ux * shortenEnd;
-    const clippedEy = ey - uy * shortenEnd;
-    graphicsNodes.lineStyle(KING_MOVE_PREVIEW_WIDTH, line.color ?? KING_MOVE_PREVIEW_COLOR, line.alpha ?? KING_MOVE_PREVIEW_ALPHA);
-    graphicsNodes.beginPath();
-    graphicsNodes.moveTo(clippedSx, clippedSy);
-    graphicsNodes.lineTo(clippedEx, clippedEy);
-    graphicsNodes.strokePath();
+    
+    const lineColor = line.color ?? KING_MOVE_PREVIEW_COLOR;
+    const lineAlpha = line.alpha ?? KING_MOVE_PREVIEW_ALPHA;
+    
+    // If we have warp segments, draw each segment with warp outline
+    const segments = line.segments;
+    const warpAxis = line.warpAxis;
+    const isWarp = warpAxis && warpAxis !== 'none' && segments && segments.length === 2;
+    
+    if (isWarp && segments.length === 2) {
+      // Draw warp path using similar style to bridge preview
+      for (let i = 0; i < segments.length; i++) {
+        const seg = segments[i];
+        if (!seg) continue;
+        const [segSx, segSy] = worldToScreen(seg.sx, seg.sy);
+        const [segEx, segEy] = worldToScreen(seg.ex, seg.ey);
+        if (!Number.isFinite(segSx) || !Number.isFinite(segSy) || !Number.isFinite(segEx) || !Number.isFinite(segEy)) continue;
+        
+        let drawSx = segSx, drawSy = segSy, drawEx = segEx, drawEy = segEy;
+        
+        // Clip start of first segment from crown center
+        if (i === 0) {
+          const dx0 = drawEx - drawSx;
+          const dy0 = drawEy - drawSy;
+          const len0 = Math.hypot(dx0, dy0);
+          if (len0 > startRadius) {
+            const ux0 = dx0 / len0;
+            const uy0 = dy0 / len0;
+            drawSx = drawSx + ux0 * startRadius;
+            drawSy = drawSy + uy0 * startRadius;
+          }
+        }
+        
+        // Shorten end of last segment
+        if (i === segments.length - 1) {
+          const dxLast = drawEx - drawSx;
+          const dyLast = drawEy - drawSy;
+          const lenLast = Math.hypot(dxLast, dyLast);
+          const shortenEnd = Math.min(24, lenLast * 0.12);
+          if (lenLast > shortenEnd) {
+            const uxLast = dxLast / lenLast;
+            const uyLast = dyLast / lenLast;
+            drawEx = drawEx - uxLast * shortenEnd;
+            drawEy = drawEy - uyLast * shortenEnd;
+          }
+        }
+        
+        // Set line style for this segment (must reset each iteration since portal markers change it)
+        graphicsNodes.lineStyle(KING_MOVE_PREVIEW_WIDTH, lineColor, lineAlpha);
+        graphicsNodes.beginPath();
+        graphicsNodes.moveTo(drawSx, drawSy);
+        graphicsNodes.lineTo(drawEx, drawEy);
+        graphicsNodes.strokePath();
+        
+        // Draw warp portal marker at boundary (where segment exits/enters the screen)
+        if (i === 0) {
+          // Exit point - draw a small circle/marker
+          const [exitX, exitY] = worldToScreen(seg.ex, seg.ey);
+          if (Number.isFinite(exitX) && Number.isFinite(exitY)) {
+            graphicsNodes.lineStyle(3, lineColor, lineAlpha * 0.8);
+            graphicsNodes.beginPath();
+            graphicsNodes.arc(exitX, exitY, 8, 0, Math.PI * 2);
+            graphicsNodes.strokePath();
+          }
+        }
+        if (i === 1) {
+          // Entry point - draw a small circle/marker
+          const [entryX, entryY] = worldToScreen(seg.sx, seg.sy);
+          if (Number.isFinite(entryX) && Number.isFinite(entryY)) {
+            graphicsNodes.lineStyle(3, lineColor, lineAlpha * 0.8);
+            graphicsNodes.beginPath();
+            graphicsNodes.arc(entryX, entryY, 8, 0, Math.PI * 2);
+            graphicsNodes.strokePath();
+          }
+        }
+      }
+    } else {
+      // Non-warp path: draw single straight line
+      const [sx, sy] = worldToScreen(line.startX, line.startY);
+      let [ex, ey] = worldToScreen(line.endX, line.endY);
+      if (!Number.isFinite(sx) || !Number.isFinite(sy) || !Number.isFinite(ex) || !Number.isFinite(ey)) return;
+      const dx = ex - sx;
+      const dy = ey - sy;
+      const len = Math.hypot(dx, dy);
+      if (!Number.isFinite(len) || len < 1) return;
+      if (len <= startRadius) return;
+      const ux = dx / len;
+      const uy = dy / len;
+      const clippedSx = sx + ux * startRadius;
+      const clippedSy = sy + uy * startRadius;
+      const shortenEnd = Math.min(24, len * 0.12);
+      const clippedEx = ex - ux * shortenEnd;
+      const clippedEy = ey - uy * shortenEnd;
+      graphicsNodes.lineStyle(KING_MOVE_PREVIEW_WIDTH, lineColor, lineAlpha);
+      graphicsNodes.beginPath();
+      graphicsNodes.moveTo(clippedSx, clippedSy);
+      graphicsNodes.lineTo(clippedEx, clippedEy);
+      graphicsNodes.strokePath();
+    }
   }
 
   function maybeShowKingMoveCostDisplay() {
@@ -7972,22 +8346,44 @@ function fallbackRemoveEdgesForNode(nodeId) {
       return false;
     }
 
-    // Calculate distance-based cost using the same normalization as bridge building
+    // Calculate distance-based cost using warp segments if available
     const baseWidth = screen && Number.isFinite(screen.width) ? screen.width : 275.0;
     const baseHeight = screen && Number.isFinite(screen.height) ? screen.height : 108.0;
     const largestSpan = Math.max(1, baseWidth, baseHeight);
     const scale = 100 / largestSpan;
     
-    const dx = (preview.endX - preview.startX) * scale;
-    const dy = (preview.endY - preview.startY) * scale;
-    const normalizedDistance = Math.hypot(dx, dy);
+    // Use warp segments for cost calculation (accounts for warp path being shorter)
+    let normalizedDistance = 0;
+    const segments = preview.segments;
+    if (segments && segments.length > 0) {
+      for (const seg of segments) {
+        if (!seg) continue;
+        const segDx = (seg.ex - seg.sx) * scale;
+        const segDy = (seg.ey - seg.sy) * scale;
+        normalizedDistance += Math.hypot(segDx, segDy);
+      }
+    } else {
+      // Fallback to straight-line calculation
+      const dx = (preview.endX - preview.startX) * scale;
+      const dy = (preview.endY - preview.startY) * scale;
+      normalizedDistance = Math.hypot(dx, dy);
+    }
     
-    const cost = Math.max(1, Math.round(BRIDGE_BASE_COST + normalizedDistance * BRIDGE_COST_PER_UNIT));
+    const rawCost = BRIDGE_BASE_COST + normalizedDistance * BRIDGE_COST_PER_UNIT;
+    const cost = Math.max(1, Math.round(rawCost * getCrownShotCostMultiplier()));
     const canAfford = goldValue >= cost;
     
-    // Calculate midpoint for display
-    const midX = (preview.startX + preview.endX) / 2;
-    const midY = (preview.startY + preview.endY) / 2;
+    // Calculate midpoint for display - use first segment end for warp paths
+    let midX, midY;
+    if (preview.warpAxis && preview.warpAxis !== 'none' && segments && segments.length === 2) {
+      // For warp paths, position cost near the first segment midpoint
+      const firstSeg = segments[0];
+      midX = (firstSeg.sx + firstSeg.ex) / 2;
+      midY = (firstSeg.sy + firstSeg.ey) / 2;
+    } else {
+      midX = (preview.startX + preview.endX) / 2;
+      midY = (preview.startY + preview.endY) / 2;
+    }
     const [sx, sy] = worldToScreen(midX, midY);
     
     const text = `$${formatCost(cost)}`;
@@ -8032,13 +8428,24 @@ function fallbackRemoveEdgesForNode(nodeId) {
     const selectedNode = kingSelectedNodeId != null ? nodes.get(kingSelectedNodeId) : null;
     if (!selectedNode) return;
     
-    // Build the king move segment
-    const candidateSegment = {
-      sx: preview.startX,
-      sy: preview.startY,
-      ex: preview.endX,
-      ey: preview.endY,
-    };
+    // Build the king move segments (use warp segments if available)
+    const candidateSegments = [];
+    if (preview.segments && preview.segments.length > 0) {
+      for (const seg of preview.segments) {
+        if (seg && Number.isFinite(seg.sx) && Number.isFinite(seg.sy) && Number.isFinite(seg.ex) && Number.isFinite(seg.ey)) {
+          candidateSegments.push(seg);
+        }
+      }
+    }
+    // Fallback to straight-line segment if no warp segments
+    if (candidateSegments.length === 0) {
+      candidateSegments.push({
+        sx: preview.startX,
+        sy: preview.startY,
+        ex: preview.endX,
+        ey: preview.endY,
+      });
+    }
     
     edges.forEach((edge, edgeId) => {
       if (!edge) return;
@@ -8053,15 +8460,18 @@ function fallbackRemoveEdgesForNode(nodeId) {
       const existingSegments = getEdgeWarpSegments(edge);
       if (!existingSegments.length) return;
       
-      for (const existing of existingSegments) {
-        if (!existing) continue;
-        if ([candidateSegment.sx, candidateSegment.sy, candidateSegment.ex, candidateSegment.ey, 
-             existing.sx, existing.sy, existing.ex, existing.ey].every((value) => Number.isFinite(value)) &&
-          segmentsIntersect(candidateSegment.sx, candidateSegment.sy, candidateSegment.ex, candidateSegment.ey, 
-                           existing.sx, existing.sy, existing.ex, existing.ey)
-        ) {
-          kingMovePreviewCrossingEdges.add(edgeId);
-          return; // Found intersection, no need to check more segments for this edge
+      // Check all candidate segments against all edge segments
+      for (const candidateSegment of candidateSegments) {
+        for (const existing of existingSegments) {
+          if (!existing) continue;
+          if ([candidateSegment.sx, candidateSegment.sy, candidateSegment.ex, candidateSegment.ey, 
+               existing.sx, existing.sy, existing.ex, existing.ey].every((value) => Number.isFinite(value)) &&
+            segmentsIntersect(candidateSegment.sx, candidateSegment.sy, candidateSegment.ex, candidateSegment.ey, 
+                             existing.sx, existing.sy, existing.ex, existing.ey)
+          ) {
+            kingMovePreviewCrossingEdges.add(edgeId);
+            return; // Found intersection, no need to check more segments for this edge
+          }
         }
       }
     });
@@ -8127,8 +8537,9 @@ function fallbackRemoveEdgesForNode(nodeId) {
     updateBrassPreviewIntersections();
 
     // Show UI bars when game is active
-    if (topUiBar) topUiBar.style.display = 'block';
+    if (topUiBar) topUiBar.style.display = 'flex';
     if (bottomUiBar) bottomUiBar.style.display = 'flex';
+    updateTopUiBarDisplay();
     
     // Draw border box around play area (warp border handles inner toggle)
     drawPlayAreaBorder();
@@ -8407,7 +8818,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
             graphicsNodes.strokeCircle(nx, ny, r + 3);
 
             // show static, live-updating midpoint label
-            updateBridgeCostDisplay(firstNode, n, bridgePreviewWillBeBrass && brassPipesDoubleCost());
+            updateBridgeCostDisplay(firstNode, n, bridgePreviewWillBeBrass);
           }
 
       }
@@ -8522,7 +8933,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
             targetNode = hoveredNode;
           }
         }
-        updateBridgeCostDisplay(firstNode, targetNode, bridgePreviewWillBeBrass && brassPipesDoubleCost());
+        updateBridgeCostDisplay(firstNode, targetNode, bridgePreviewWillBeBrass);
       }
     }
     
@@ -8602,33 +9013,80 @@ function fallbackRemoveEdgesForNode(nodeId) {
       
       let rotationRadians = travelHeading;
       let rotationPivot = null;
-      let currentNodeRadius = null; // Track which node radius to use for crown positioning
+      let currentNodeRadius = null;
+      
       if (elapsedTicks < travelStartTick) {
-        // Pre-spin: interpolate from startAngleOffset to travelHeading
+        // Pre-spin phase: rotate from startAngleOffset to travelHeading (crown stays at start)
         const spinProgress = Math.max(0, Math.min(1, travelStartTick <= 0 ? 1 : elapsedTicks / travelStartTick));
         const eased = easeInOutCubic(spinProgress);
         rotationRadians = startAngleOffset + (travelHeading - startAngleOffset) * eased;
         rotationPivot = { x: startScreenX, y: startScreenY };
         currentNodeRadius = sourceNodeRadius;
       } else if (elapsedTicks < travelEndTick) {
-        // Travel phase: maintain travel heading
+        // Travel phase: LINEAR movement (NO EASING - must match backend timing for edge removal sync)
         const travelProgress = Math.max(
           0,
           Math.min(1, timing.travelTicks <= 0 ? 1 : (elapsedTicks - travelStartTick) / timing.travelTicks)
         );
-        const easedTravel = easeOutCubic(travelProgress);
-        currentX = flight.startX + (flight.endX - flight.startX) * easedTravel;
-        currentY = flight.startY + (flight.endY - flight.startY) * easedTravel;
-        rotationRadians = travelHeading;
+        
+        // If warp segments are available, interpolate along the warp path
+        const warpSegs = flight.warpSegments;
+        if (warpSegs && warpSegs.length >= 2) {
+          // Calculate total distance of all segments
+          let totalDist = 0;
+          const segDists = [];
+          for (const seg of warpSegs) {
+            const segLen = Math.hypot(seg.ex - seg.sx, seg.ey - seg.sy);
+            segDists.push(segLen);
+            totalDist += segLen;
+          }
+          // Find the current position along the total path
+          const targetDist = travelProgress * totalDist;
+          let accum = 0;
+          let foundX = flight.endX;
+          let foundY = flight.endY;
+          let currentSegIdx = 0;
+          for (let i = 0; i < warpSegs.length; i++) {
+            const segLen = segDists[i];
+            if (accum + segLen >= targetDist) {
+              // Position is within this segment
+              const segProgress = segLen > 0 ? (targetDist - accum) / segLen : 1;
+              const seg = warpSegs[i];
+              foundX = seg.sx + (seg.ex - seg.sx) * segProgress;
+              foundY = seg.sy + (seg.ey - seg.sy) * segProgress;
+              currentSegIdx = i;
+              break;
+            }
+            accum += segLen;
+          }
+          currentX = foundX;
+          currentY = foundY;
+          // Update rotation heading based on current segment direction
+          if (currentSegIdx < warpSegs.length) {
+            const currentSeg = warpSegs[currentSegIdx];
+            const segDx = currentSeg.ex - currentSeg.sx;
+            const segDy = currentSeg.ey - currentSeg.sy;
+            if (Math.abs(segDx) > 1e-6 || Math.abs(segDy) > 1e-6) {
+              const segHeading = Math.atan2(segDy, segDx);
+              rotationRadians = normalizeAngleRadians(segHeading + Math.PI / 2);
+            }
+          }
+        } else {
+          // Non-warp: simple linear interpolation
+          currentX = flight.startX + (flight.endX - flight.startX) * travelProgress;
+          currentY = flight.startY + (flight.endY - flight.startY) * travelProgress;
+          rotationRadians = travelHeading;
+        }
+        
         rotationPivot = null;
-        // During travel, interpolate the node radius for smooth crown size transition
+        // Interpolate node radius for smooth crown size transition
         if (sourceNodeRadius != null && destNodeRadius != null) {
-          currentNodeRadius = sourceNodeRadius + (destNodeRadius - sourceNodeRadius) * easedTravel;
+          currentNodeRadius = sourceNodeRadius + (destNodeRadius - sourceNodeRadius) * travelProgress;
         } else {
           currentNodeRadius = sourceNodeRadius || destNodeRadius;
         }
       } else {
-        // Post-spin: interpolate from travelHeading to endAngleOffset
+        // Post-spin phase: rotate from travelHeading to endAngleOffset (crown stays at end)
         const postElapsed = elapsedTicks - travelEndTick;
         const postTicks = timing.postSpinTicks;
         const spinProgress = Math.max(
@@ -8642,6 +9100,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
         rotationPivot = { x: endScreenX, y: endScreenY };
         currentNodeRadius = destNodeRadius;
       }
+      
       const [screenX, screenY] = worldToScreen(currentX, currentY);
       if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return;
       if (!rotationPivot || !Number.isFinite(rotationPivot.x) || !Number.isFinite(rotationPivot.y)) {
@@ -8653,14 +9112,14 @@ function fallbackRemoveEdgesForNode(nodeId) {
           rotationPivot = { x: screenX, y: screenY };
         }
       }
+      
       const crownRadius = computeStandardKingCrownRadius(baseScale);
       const playerColor = ownerToColor(flight.playerId);
       
-      // Crown is in travel mode (reversed colors: yellow border, player fill) until post-spin is complete
-      // Health should only show after the crown has finished its post-spin (settled at destination)
+      // Crown is in travel mode until post-spin is complete
       const postSpinComplete = elapsedTicks >= travelEndTick + timing.postSpinTicks;
       const showHealth = postSpinComplete;
-      const usesTravelMode = !postSpinComplete; // Travel mode until fully settled
+      const usesTravelMode = !postSpinComplete;
       
       drawKingCrown(screenX, screenY, crownRadius, playerColor, {
         highlighted: false,
@@ -9187,7 +9646,10 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
   function shouldWarpCursor() {
     if (!pointerLockActive) return false;
-    if (activeAbility !== 'bridge1way') return false;
+    // Allow warp cursor for pipe building or king movement in smash mode
+    const isBridgeMode = activeAbility === 'bridge1way';
+    const isKingSmashMovement = kingSelectionActive && isKingSmashMode();
+    if (!isBridgeMode && !isKingSmashMovement) return false;
     if (!isWarpFrontendActive()) return false;
     if (!warpBoundsScreen) return false;
     const width = warpBoundsScreen.maxX - warpBoundsScreen.minX;
@@ -9202,10 +9664,9 @@ function fallbackRemoveEdgesForNode(nodeId) {
     }
     if (!isWarpWrapUnlocked()) {
       const clamped = clampCursorToWarpBounds(x, y);
-      if (
-        activeAbility === 'bridge1way'
-        && (Math.abs(clamped.x - x) > 1e-3 || Math.abs(clamped.y - y) > 1e-3)
-      ) {
+      const warpAttempted = Math.abs(clamped.x - x) > 1e-3 || Math.abs(clamped.y - y) > 1e-3;
+      const isBridgeOrKingMove = activeAbility === 'bridge1way' || (kingSelectionActive && isKingSmashMode());
+      if (isBridgeOrKingMove && warpAttempted) {
         notifyWarpGemRequired();
       }
       return clamped;
@@ -9284,7 +9745,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
     }
 
     const wrapOccurred = horizontalWrap || verticalWrap;
-    const enforceLimit = bridgeFirstNode !== null;
+    // Track warp for pipe building OR king smash movement
+    const enforceLimit = bridgeFirstNode !== null || (kingSelectionActive && isKingSmashMode());
 
     if (wrapOccurred && enforceLimit) {
       if (warpWrapUsed) {
@@ -9609,7 +10071,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
           const modeIsXb = isXbModeActive();
           const useBrassPipe = bridgePreviewWillBeBrass && (isMagicResourceModeActive() || isCrossLikeModeActive());
           const pipeType = determinePipeTypeForBridge(useBrassPipe);
-          const applyBrassCost = pipeType === 'gold' && brassPipesDoubleCost();
+          const applyBrassCost = pipeType === 'gold';
           if (modeIsXb && xbPreviewBlockReason) {
             showErrorMessage('Cannot cross brass pipe');
             return true;
@@ -9805,7 +10267,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
           const selectedNode = nodes.get(kingSelectedNodeId);
           if (clickedNode && selectedNode && clickedNode.owner === myPlayerId) {
             // Check if player can afford the move
-            const cost = calculateBridgeCost(selectedNode, clickedNode, false);
+            const baseCost = calculateBridgeCost(selectedNode, clickedNode, false);
+            const cost = Math.max(1, Math.round(baseCost / getPipeCostMultiplier() * getCrownShotCostMultiplier()));
             if (goldValue >= cost) {
               sendKingMoveRequest(clickedNodeId);
               return;
@@ -10370,6 +10833,42 @@ function fallbackRemoveEdgesForNode(nodeId) {
         goldDisplay.textContent = `$${formatCost(val)}`;
       }
     }
+    updateMoneyProgressBar();
+  }
+
+  function updateTopUiBarDisplay() {
+    // Show gem counts in gem mode, money progress bar in standard mode
+    const isGemMode = isMagicResourceModeActive();
+    
+    if (gemCountsDisplay) {
+      gemCountsDisplay.style.display = isGemMode ? 'flex' : 'none';
+    }
+    if (moneyProgressContainer) {
+      moneyProgressContainer.style.display = isGemMode ? 'none' : 'flex';
+    }
+    
+    // Also update the money progress bar if switching to standard mode
+    if (!isGemMode) {
+      updateMoneyProgressBar();
+    }
+  }
+
+  function updateMoneyProgressBar() {
+    if (!moneyProgressFill || !moneyProgressText) return;
+    
+    // Only show in non-gem mode
+    if (isMagicResourceModeActive()) return;
+    
+    const currentGold = Math.max(0, goldValue || 0);
+    const percentage = Math.min(100, (currentGold / MONEY_VICTORY_THRESHOLD) * 100);
+    
+    moneyProgressFill.style.width = `${percentage}%`;
+    
+    if (sandboxModeEnabled()) {
+      moneyProgressText.textContent = '$∞';
+    } else {
+      moneyProgressText.textContent = `$${Math.floor(currentGold)}`;
+    }
   }
 
   function updateQuitButtonLabel() {
@@ -10496,12 +10995,18 @@ function fallbackRemoveEdgesForNode(nodeId) {
       progressBarInner.innerHTML = '';
       progressSegments.clear();
       const notice = document.createElement('div');
-      notice.className = 'progressSegment winConNotice';
-      notice.textContent = 'Win Con: Kill The King';
+      notice.className = 'winConNotice';
+      notice.textContent = 'Kill the enemy king or Max out Money';
       notice.style.flex = '1';
+      notice.style.textAlign = 'center';
       progressBarInner.appendChild(notice);
       progressBarInner.style.justifyContent = 'center';
-      if (progressBar) progressBar.style.display = nodes.size > 0 ? 'block' : 'none';
+      if (progressBar) {
+        progressBar.style.display = nodes.size > 0 ? 'block' : 'none';
+        progressBar.style.background = 'transparent';
+        progressBar.style.border = 'none';
+        progressBar.style.boxShadow = 'none';
+      }
       if (progressMarkerLeft) progressMarkerLeft.style.display = 'none';
       if (progressMarkerRight) progressMarkerRight.style.display = 'none';
       if (progressNameContainer) {
@@ -10529,7 +11034,12 @@ function fallbackRemoveEdgesForNode(nodeId) {
       return;
     }
 
-    if (progressBar) progressBar.style.display = 'block';
+    if (progressBar) {
+      progressBar.style.display = 'block';
+      progressBar.style.background = '#333';
+      progressBar.style.border = '2px solid #666';
+      progressBar.style.boxShadow = '';
+    }
     if (progressNameContainer) progressNameContainer.style.display = 'flex';
 
     const denominator = Math.max(totalNodes, 1);
@@ -11035,10 +11545,10 @@ function fallbackRemoveEdgesForNode(nodeId) {
     const toNode = nodes.get(prePipe.toNodeId);
     if (!fromNode || !toNode) return false;
     const warpInfo = buildWarpInfoForBridge(fromNode, toNode, prePipe.warpPreference || {});
-    const applyBrassCost = prePipe.pipeType === 'gold' && brassPipesDoubleCost();
+    const isBrassPipe = prePipe.pipeType === 'gold';
     const cost = Number.isFinite(forcedCost)
       ? forcedCost
-      : calculateBridgeCost(fromNode, toNode, applyBrassCost, prePipe.warpPreference || {});
+      : calculateBridgeCost(fromNode, toNode, isBrassPipe, prePipe.warpPreference || {});
     const payload = {
       type: 'buildBridge',
       fromNodeId: prePipe.fromNodeId,
@@ -11067,8 +11577,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
         removals.push({ id, reason: 'missing' });
         return;
       }
-      const applyBrassCost = prePipe.pipeType === 'gold' && brassPipesDoubleCost();
-      const cost = calculateBridgeCost(fromNode, toNode, applyBrassCost, prePipe.warpPreference || {});
+      const isBrassPipe = prePipe.pipeType === 'gold';
+      const cost = calculateBridgeCost(fromNode, toNode, isBrassPipe, prePipe.warpPreference || {});
       prePipe.lastKnownCost = cost;
       prePipe.waitingForOwnership = pipeStartRequiresOwnership() && fromNode.owner !== myPlayerId;
       const infiniteMoney = sandboxModeEnabled();
@@ -11282,7 +11792,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
     const useBrassPipe = bridgePreviewWillBeBrass;
     const pipeType = determinePipeTypeForBridge(useBrassPipe);
-    const cost = calculateBridgeCost(sNode, tNode, pipeType === 'gold' && brassPipesDoubleCost(), warpPreference);
+    const cost = calculateBridgeCost(sNode, tNode, pipeType === 'gold', warpPreference);
     const canAfford = goldValue >= cost;
     let previewColor;
     if (pipeType === 'gold') {
