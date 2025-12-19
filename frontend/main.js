@@ -196,12 +196,9 @@
   const kingCrownAngleOffsets = new Map(); // nodeId -> radians offset from top (0 = top)
   const KING_CROWN_MIN_PIPE_ANGLE_SEPARATION = Math.PI / 4; // 45 degrees minimum separation between crown and any pipe
 
-  const KING_CROWN_TICKS_PER_UNIT_DISTANCE = 0.6; // mirrors backend pipe build speed
-  const KING_CROWN_MIN_TRAVEL_TICKS = 2;
-  const KING_CROWN_MAX_TRAVEL_TICKS = 18;
-  const KING_CROWN_SPIN_TICKS_RATIO = 0.35;
-  const KING_CROWN_SPIN_TICKS_MIN = 2;
-  const KING_CROWN_SPIN_TICKS_MAX = 5;
+  const KING_CROWN_TICKS_PER_UNIT_DISTANCE = 0.15; // mirrors backend pipe build speed
+  const KING_CROWN_MIN_TRAVEL_TICKS = 1;
+  const KING_CROWN_SPIN_TICKS = 5; // each spin phase lasts exactly 5 ticks regardless of rotation
   const KING_CROWN_DEFAULT_SECONDS_PER_TICK = 0.2;
 
   const KING_STANDARD_NODE_SIZE = 80;
@@ -4733,7 +4730,7 @@ function clearBridgeSelection() {
         
         // Remove edges that the crown has passed (trigger slightly early so leading edge of crown hits)
         // Use a fixed tick offset rather than percentage, so it's consistent regardless of travel distance
-        const CROWN_LEAD_TICKS = 3; // Remove edges this many ticks before crown center reaches them
+        const CROWN_LEAD_TICKS = 0; // Remove edges this many ticks before crown center reaches them
         const leadOffset = timing.travelTicks > 0 ? CROWN_LEAD_TICKS / timing.travelTicks : 0;
         const edgesToRemoveNow = [];
         flight.pendingEdgeRemovals.forEach((entry) => {
@@ -6942,18 +6939,11 @@ function fallbackRemoveEdgesForNode(nodeId) {
     let travelTicks = Math.round(worldDistance * ticksPerUnit);
     travelTicks = Math.max(
       KING_CROWN_MIN_TRAVEL_TICKS,
-      Math.min(
-        KING_CROWN_MAX_TRAVEL_TICKS,
-        Number.isFinite(travelTicks) ? travelTicks : KING_CROWN_MIN_TRAVEL_TICKS
-      )
+      Number.isFinite(travelTicks) ? travelTicks : KING_CROWN_MIN_TRAVEL_TICKS
     );
 
-    // Calculate spin ticks based on travel duration (MUST match backend formula exactly)
-    const spinBase = Math.round(travelTicks * KING_CROWN_SPIN_TICKS_RATIO);
-    const spinTicks = Math.max(
-      KING_CROWN_SPIN_TICKS_MIN,
-      Math.min(KING_CROWN_SPIN_TICKS_MAX, Number.isFinite(spinBase) ? spinBase : KING_CROWN_SPIN_TICKS_MIN)
-    );
+    // Pre/post spin always consume a fixed number of ticks regardless of travel length (must match backend)
+    const spinTicks = Math.max(0, Number(KING_CROWN_SPIN_TICKS) || 0);
     const preSpinTicks = spinTicks;
     const postSpinTicks = spinTicks;
     const totalTicks = preSpinTicks + travelTicks + postSpinTicks;
