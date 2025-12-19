@@ -136,11 +136,13 @@
 
       .winConNotice {
         font-size: 18px;
-        color: #ffd700;
+        color: #a0a0a0;
+        display: flex;
+        align-items: center;
         justify-content: center;
-        text-transform: uppercase;
         letter-spacing: 1px;
-        background: rgba(0, 0, 0, 0.65);
+        background: transparent;
+        padding-top: 8px;
       }
 
       /* Top UI background bar */
@@ -219,6 +221,54 @@
       .gem-count .gem-number {
         min-width: 22px;
         text-align: center;
+      }
+
+      /* Money progress bar for non-gem mode */
+      #moneyProgressContainer {
+        display: none;
+        width: min(800px, calc(100% - 48px));
+        flex-direction: column;
+        align-items: center;
+      }
+      #moneyProgressBar {
+        position: relative;
+        width: 100%;
+        height: 36px;
+        background: linear-gradient(to bottom, #1a1a1a 0%, #2a2a2a 50%, #1a1a1a 100%);
+        border: 2px solid #4a4a4a;
+        border-radius: 18px;
+        overflow: hidden;
+        box-shadow: inset 0 2px 8px rgba(0,0,0,0.6), 0 2px 4px rgba(0,0,0,0.4);
+      }
+      #moneyProgressFill {
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(to bottom, #ffd700 0%, #d4af00 50%, #b8960b 100%);
+        border-radius: 16px;
+        transition: width 0.3s ease-out;
+        box-shadow: 0 0 12px rgba(255, 215, 0, 0.5), inset 0 2px 4px rgba(255, 255, 255, 0.3);
+        position: relative;
+      }
+      #moneyProgressFill::after {
+        content: '';
+        position: absolute;
+        top: 2px;
+        left: 4px;
+        right: 4px;
+        height: 6px;
+        background: linear-gradient(to bottom, rgba(255,255,255,0.4) 0%, rgba(255,255,255,0) 100%);
+        border-radius: 4px;
+      }
+      #moneyProgressText {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        color: #fff;
+        font-size: clamp(12px, 1.5vh, 16px);
+        font-weight: bold;
+        text-shadow: 0 1px 3px rgba(0,0,0,0.9), 0 0 6px rgba(0,0,0,0.6);
+        white-space: nowrap;
       }
 
       /* Timer display */
@@ -1081,6 +1131,12 @@
         <div class="gem-count" data-gem="reverse">
           <span class="gem-icon">🔄</span>
           <span class="gem-number">0</span>
+        </div>
+      </div>
+      <div id="moneyProgressContainer">
+        <div id="moneyProgressBar">
+          <div id="moneyProgressFill"></div>
+          <span id="moneyProgressText">$0</span>
         </div>
       </div>
     </div>

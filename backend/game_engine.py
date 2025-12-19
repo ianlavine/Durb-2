@@ -2362,6 +2362,12 @@ class GameEngine:
                     self._end_game()
                     return winner_id
 
+            # Check for money victory (300 gold in non-gem mode)
+            winner_id = self.state.check_money_victory()
+            if winner_id is not None:
+                self._end_game()
+                return winner_id
+
             # Check for zero nodes loss condition
             winner_id = self.state.check_zero_nodes_loss()
             if winner_id is not None:

@@ -13,6 +13,7 @@ from .constants import (
     GOLD_REWARD_FOR_ENEMY_CAPTURE,
     INTAKE_TRANSFER_RATIO,
     MAX_TRANSFER_RATIO,
+    MONEY_VICTORY_THRESHOLD,
     NODE_MIN_JUICE,
     OVERFLOW_PENDING_GOLD_PAYOUT,
     TICK_INTERVAL_SECONDS,
@@ -274,6 +275,33 @@ class GraphState:
         self.game_ended = True
         self.winner_id = best_pid
         return best_pid
+
+    def check_money_victory(self) -> Optional[int]:
+        """Check if any player has reached the money victory threshold (non-gem mode only).
+        Returns winner ID or None."""
+        if self.game_ended:
+            return self.winner_id
+
+        # Only apply money victory in non-gem (standard) resource mode
+        resource_mode = getattr(self, "resource_mode", "standard")
+        if resource_mode == "gems":
+            return None
+
+        # Only check after picking phase is complete
+        if self.phase == "picking":
+            return None
+
+        # Check if any active player has reached the threshold
+        for player_id in self.players.keys():
+            if player_id in self.eliminated_players:
+                continue
+            player_gold = self.player_gold.get(player_id, 0.0)
+            if player_gold >= MONEY_VICTORY_THRESHOLD:
+                self.game_ended = True
+                self.winner_id = player_id
+                return player_id
+
+        return None
 
     def start_game_timer(self, current_time: float) -> None:
         """Start the game timer when the game begins."""

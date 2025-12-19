@@ -383,6 +383,12 @@
   let gemCountsDisplay = null;
   let gemCountsClickHandlerBound = false;
   const gemCountLabels = new Map();
+  
+  // Money progress bar for non-gem mode
+  let moneyProgressContainer = null;
+  let moneyProgressFill = null;
+  let moneyProgressText = null;
+  const MONEY_VICTORY_THRESHOLD = 300;
 
   // Warp mode visuals & geometry (frontend prototype hooked to Warp mode)
   const WARP_MARGIN_RATIO_X = 0.06; // horizontal extra space relative to board width
@@ -930,6 +936,7 @@
       }
     }
     updateModeOptionButtonStates();
+    updateTopUiBarDisplay();
   }
 
   function setCurrentBreakMode(mode) {
@@ -4449,6 +4456,12 @@ function clearBridgeSelection() {
     }
     updateGemModeUi();
     updateGemCountsDisplay();
+    
+    // Initialize money progress bar elements
+    moneyProgressContainer = document.getElementById('moneyProgressContainer');
+    moneyProgressFill = document.getElementById('moneyProgressFill');
+    moneyProgressText = document.getElementById('moneyProgressText');
+    updateTopUiBarDisplay();
     
     // Initialize timer display
     timerDisplay = document.getElementById('timerDisplay');
@@ -8524,8 +8537,9 @@ function fallbackRemoveEdgesForNode(nodeId) {
     updateBrassPreviewIntersections();
 
     // Show UI bars when game is active
-    if (topUiBar) topUiBar.style.display = 'block';
+    if (topUiBar) topUiBar.style.display = 'flex';
     if (bottomUiBar) bottomUiBar.style.display = 'flex';
+    updateTopUiBarDisplay();
     
     // Draw border box around play area (warp border handles inner toggle)
     drawPlayAreaBorder();
@@ -10819,6 +10833,42 @@ function fallbackRemoveEdgesForNode(nodeId) {
         goldDisplay.textContent = `$${formatCost(val)}`;
       }
     }
+    updateMoneyProgressBar();
+  }
+
+  function updateTopUiBarDisplay() {
+    // Show gem counts in gem mode, money progress bar in standard mode
+    const isGemMode = isMagicResourceModeActive();
+    
+    if (gemCountsDisplay) {
+      gemCountsDisplay.style.display = isGemMode ? 'flex' : 'none';
+    }
+    if (moneyProgressContainer) {
+      moneyProgressContainer.style.display = isGemMode ? 'none' : 'flex';
+    }
+    
+    // Also update the money progress bar if switching to standard mode
+    if (!isGemMode) {
+      updateMoneyProgressBar();
+    }
+  }
+
+  function updateMoneyProgressBar() {
+    if (!moneyProgressFill || !moneyProgressText) return;
+    
+    // Only show in non-gem mode
+    if (isMagicResourceModeActive()) return;
+    
+    const currentGold = Math.max(0, goldValue || 0);
+    const percentage = Math.min(100, (currentGold / MONEY_VICTORY_THRESHOLD) * 100);
+    
+    moneyProgressFill.style.width = `${percentage}%`;
+    
+    if (sandboxModeEnabled()) {
+      moneyProgressText.textContent = '$∞';
+    } else {
+      moneyProgressText.textContent = `$${Math.floor(currentGold)}`;
+    }
   }
 
   function updateQuitButtonLabel() {
@@ -10945,12 +10995,18 @@ function fallbackRemoveEdgesForNode(nodeId) {
       progressBarInner.innerHTML = '';
       progressSegments.clear();
       const notice = document.createElement('div');
-      notice.className = 'progressSegment winConNotice';
-      notice.textContent = 'Win Con: Kill The King';
+      notice.className = 'winConNotice';
+      notice.textContent = 'Kill the enemy king or Max out Money';
       notice.style.flex = '1';
+      notice.style.textAlign = 'center';
       progressBarInner.appendChild(notice);
       progressBarInner.style.justifyContent = 'center';
-      if (progressBar) progressBar.style.display = nodes.size > 0 ? 'block' : 'none';
+      if (progressBar) {
+        progressBar.style.display = nodes.size > 0 ? 'block' : 'none';
+        progressBar.style.background = 'transparent';
+        progressBar.style.border = 'none';
+        progressBar.style.boxShadow = 'none';
+      }
       if (progressMarkerLeft) progressMarkerLeft.style.display = 'none';
       if (progressMarkerRight) progressMarkerRight.style.display = 'none';
       if (progressNameContainer) {
@@ -10978,7 +11034,12 @@ function fallbackRemoveEdgesForNode(nodeId) {
       return;
     }
 
-    if (progressBar) progressBar.style.display = 'block';
+    if (progressBar) {
+      progressBar.style.display = 'block';
+      progressBar.style.background = '#333';
+      progressBar.style.border = '2px solid #666';
+      progressBar.style.boxShadow = '';
+    }
     if (progressNameContainer) progressNameContainer.style.display = 'flex';
 
     const denominator = Math.max(totalNodes, 1);

@@ -62,6 +62,7 @@ PASSIVE_INCOME_ENABLED: bool = True
 PASSIVE_GOLD_PER_TICK: float = 0.09  # 0.90/s at 0.1s tick rate
 PASSIVE_GOLD_PER_SECOND: float = PASSIVE_GOLD_PER_TICK / TICK_INTERVAL_SECONDS
 STARTING_GOLD: float = 0.0
+MONEY_VICTORY_THRESHOLD: float = 300.0  # Win condition when not in gem mode
 
 
 # Node sizing
