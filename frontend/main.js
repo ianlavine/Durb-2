@@ -191,6 +191,7 @@
   const kingMoveTargetCosts = new Map();
   let kingMoveCostDisplayActive = false;
   const kingMovePreviewCrossingEdges = new Set(); // edges that would be destroyed by king movement
+  let kingMovePreviewBlockedByBrass = false; // true when weak smash path crosses brass
 
   // Crown pipe avoidance: stores computed rotation angles for king crowns on each node
   const kingCrownAngleOffsets = new Map(); // nodeId -> radians offset from top (0 = top)
@@ -869,6 +870,10 @@
   function isKingSmashMode(mode = kingMovementMode) {
     const normalized = normalizeKingMovementMode(mode);
     return normalized === 'smash' || normalized === 'weak-smash';
+  }
+
+  function isWeakSmashMode(mode = kingMovementMode) {
+    return normalizeKingMovementMode(mode) === 'weak-smash';
   }
 
   function normalizeBrassSetting(value) {
@@ -6849,6 +6854,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     brassPreviewIntersections.clear();
     bridgePreviewWillBreakPipes = false;
     kingMovePreviewCrossingEdges.clear();
+    kingMovePreviewBlockedByBrass = false;
     clearAllPrePipes('sandbox', { skipRedraw: true });
     moneyIndicators = [];
     playerStats.forEach((stats) => {
@@ -6891,6 +6897,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     kingMoveTargetCosts.clear();
     kingMoveCostDisplayActive = false;
     kingMovePreviewCrossingEdges.clear();
+    kingMovePreviewBlockedByBrass = false;
     // Reset warp tracking state when ending king selection
     warpWrapUsed = false;
     lastDoubleWarpWarningTime = 0;
@@ -7147,6 +7154,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     kingMoveTargetCosts.clear();
     kingMoveCostDisplayActive = false;
     kingMovePreviewCrossingEdges.clear();
+    kingMovePreviewBlockedByBrass = false;
     // Reset warp tracking state for fresh king selection
     warpWrapUsed = false;
     lastDoubleWarpWarningTime = 0;
@@ -7230,6 +7238,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     kingMoveTargetHoveredId = null;
     kingMoveTargetCosts.clear();
     kingMovePreviewCrossingEdges.clear();
+    kingMovePreviewBlockedByBrass = false;
     const rawTargetCosts = Array.isArray(msg?.targetCosts) ? msg.targetCosts : [];
     rawTargetCosts.forEach((entry) => {
       if (!Array.isArray(entry) || entry.length < 2) return;
@@ -7265,6 +7274,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     kingMoveTargetCosts.clear();
     kingMoveCostDisplayActive = false;
     kingMovePreviewCrossingEdges.clear();
+    kingMovePreviewBlockedByBrass = false;
     hideBridgeCostDisplay();
     clearKingSelection();
   }
@@ -8073,6 +8083,17 @@ function fallbackRemoveEdgesForNode(nodeId) {
     });
   }
 
+  function applyKingMovePreviewVisualState(line, blockedByBrassOverride = null) {
+    if (!line) return;
+    const blocked = blockedByBrassOverride != null
+      ? Boolean(blockedByBrassOverride)
+      : Boolean(line.blockedByBrass);
+    line.blockedByBrass = blocked;
+    const invalid = Boolean(line.lockedInvalid) || blocked;
+    line.color = invalid ? KING_MOVE_PREVIEW_INVALID_COLOR : KING_MOVE_PREVIEW_COLOR;
+    line.alpha = invalid ? KING_MOVE_PREVIEW_INVALID_ALPHA : KING_MOVE_PREVIEW_ALPHA;
+  }
+
   function updateKingMovePreviewLine() {
     const prev = kingMovePreviewLine;
     if (!kingSelectionActive || kingMovePendingDestinationId != null) {
@@ -8111,6 +8132,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     const tolerance = 18 / baseScale;
     const lockedNodeId = pickNearestNode(wx, wy, tolerance);
     const lockedTargetId = (lockedNodeId != null && lockedNodeId !== kingSelectedNodeId) ? lockedNodeId : null;
+    const normalizedMovementMode = normalizeKingMovementMode(kingMovementMode);
     
     // Compute warp path segments for king movement (follows same logic as pipe building)
     const warpPreference = getActiveWarpPreference();
@@ -8169,24 +8191,25 @@ function fallbackRemoveEdgesForNode(nodeId) {
         lockedValid = !lockedInvalid && hasTargets;
       }
     }
-    const color = lockedInvalid ? KING_MOVE_PREVIEW_INVALID_COLOR : KING_MOVE_PREVIEW_COLOR;
-    const alpha = lockedInvalid ? KING_MOVE_PREVIEW_INVALID_ALPHA : KING_MOVE_PREVIEW_ALPHA;
     const next = {
       startX: selectedNode.x,
       startY: selectedNode.y,
       endX: wx,
       endY: wy,
-      color,
-      alpha,
+      color: KING_MOVE_PREVIEW_COLOR,
+      alpha: KING_MOVE_PREVIEW_ALPHA,
       lockedNodeId: lockedTargetId,
       lockedInvalid,
       lockedValid,
+      blockedByBrass: false,
+      movementMode: normalizedMovementMode,
       // Warp path info for drawing and sending to backend
       warpAxis,
       segments,
       totalWorldDistance,
       warpPreference,
     };
+    applyKingMovePreviewVisualState(next, false);
     const changed = !prev ||
       prev.startX !== next.startX ||
       prev.startY !== next.startY ||
@@ -8197,7 +8220,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
       prev.lockedNodeId !== next.lockedNodeId ||
       prev.lockedInvalid !== next.lockedInvalid ||
       prev.lockedValid !== next.lockedValid ||
-      prev.warpAxis !== next.warpAxis;
+      prev.warpAxis !== next.warpAxis ||
+      prev.movementMode !== next.movementMode;
     if (changed) {
       kingMovePreviewLine = next;
       return true;
@@ -8407,16 +8431,21 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
   function updateKingMovePreviewIntersections() {
     kingMovePreviewCrossingEdges.clear();
+    kingMovePreviewBlockedByBrass = false;
     
     // Only show crossing edges in smash modes
-    if (!isKingSmashMode()) return;
-    if (!kingSelectionActive) return;
+    if (!isKingSmashMode() || !kingSelectionActive) {
+      applyKingMovePreviewVisualState(kingMovePreviewLine, false);
+      return;
+    }
     
     const preview = kingMovePreviewLine;
     if (!preview) return;
     
     const selectedNode = kingSelectedNodeId != null ? nodes.get(kingSelectedNodeId) : null;
     if (!selectedNode) return;
+
+    const weakSmashActive = isWeakSmashMode();
     
     // Build the king move segments (use warp segments if available)
     const candidateSegments = [];
@@ -8437,6 +8466,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
       });
     }
     
+    let blockedByBrass = false;
     edges.forEach((edge, edgeId) => {
       if (!edge) return;
       if (edge.removing) return;
@@ -8444,8 +8474,9 @@ function fallbackRemoveEdgesForNode(nodeId) {
       if (edge.source === kingSelectedNodeId || edge.target === kingSelectedNodeId) return;
       // Don't mark edges connected to the locked target
       if (preview.lockedNodeId != null && (edge.source === preview.lockedNodeId || edge.target === preview.lockedNodeId)) return;
+      const behavesLikeBrass = edgeBehavesAsBrass(edge);
       // Don't mark brass edges (they can't be destroyed)
-      if (edgeBehavesAsBrass(edge)) return;
+      if (behavesLikeBrass && !weakSmashActive) return;
       
       const existingSegments = getEdgeWarpSegments(edge);
       if (!existingSegments.length) return;
@@ -8459,12 +8490,19 @@ function fallbackRemoveEdgesForNode(nodeId) {
             segmentsIntersect(candidateSegment.sx, candidateSegment.sy, candidateSegment.ex, candidateSegment.ey, 
                              existing.sx, existing.sy, existing.ex, existing.ey)
           ) {
-            kingMovePreviewCrossingEdges.add(edgeId);
+            if (behavesLikeBrass) {
+              blockedByBrass = true;
+            } else {
+              kingMovePreviewCrossingEdges.add(edgeId);
+            }
             return; // Found intersection, no need to check more segments for this edge
           }
         }
       }
     });
+
+    kingMovePreviewBlockedByBrass = weakSmashActive && blockedByBrass;
+    applyKingMovePreviewVisualState(kingMovePreviewLine, kingMovePreviewBlockedByBrass);
   }
 
   function pickKingMoveTargetFromScreen(screenX, screenY) {
