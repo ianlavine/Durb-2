@@ -24,11 +24,8 @@ from .constants import (
     RESERVE_TRANSFER_RATIO,
     STARTING_NODE_JUICE,
     KING_CROWN_MAX_HEALTH,
-    KING_CROWN_MAX_TRAVEL_TICKS,
     KING_CROWN_MIN_TRAVEL_TICKS,
-    KING_CROWN_SPIN_TICKS_MAX,
-    KING_CROWN_SPIN_TICKS_MIN,
-    KING_CROWN_SPIN_TICKS_RATIO,
+    KING_CROWN_SPIN_TICKS,
     KING_CROWN_TICKS_PER_UNIT_DISTANCE,
     CLASSIC_PRODUCTION_RATE_PER_NODE,
     CLASSIC_MAX_TRANSFER_RATIO,
@@ -2226,10 +2223,9 @@ class GameEngine:
             distance = 1.0
         ticks_per_unit = max(1e-3, float(KING_CROWN_TICKS_PER_UNIT_DISTANCE))
         travel_ticks = int(round(distance * ticks_per_unit))
-        travel_ticks = max(KING_CROWN_MIN_TRAVEL_TICKS, min(KING_CROWN_MAX_TRAVEL_TICKS, travel_ticks))
-        # Calculate spin ticks based on travel duration (same formula as frontend)
-        spin_base = int(round(travel_ticks * KING_CROWN_SPIN_TICKS_RATIO))
-        spin_ticks = max(KING_CROWN_SPIN_TICKS_MIN, min(KING_CROWN_SPIN_TICKS_MAX, spin_base))
+        travel_ticks = max(KING_CROWN_MIN_TRAVEL_TICKS, travel_ticks)
+        # Pre/post spin run for a fixed number of ticks regardless of travel distance
+        spin_ticks = max(0, int(KING_CROWN_SPIN_TICKS))
         pre_spin_ticks = spin_ticks
         post_spin_ticks = spin_ticks
         total_ticks = pre_spin_ticks + travel_ticks + post_spin_ticks
