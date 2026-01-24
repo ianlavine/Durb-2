@@ -242,7 +242,7 @@ class MessageRouter:
         break_mode_option = payload.get("breakMode", payload.get("pipeBreakMode", payload.get("break", settings["breakMode"])))
         if isinstance(break_mode_option, str):
             normalized_break = break_mode_option.strip().lower()
-            if normalized_break in {"any", "flowing", "double"}:
+            if normalized_break in {"any", "brass"}:
                 settings["breakMode"] = normalized_break
             else:
                 settings["breakMode"] = "brass"

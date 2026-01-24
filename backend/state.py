@@ -77,7 +77,7 @@ class GraphState:
         self.auto_brass_on_cross: bool = False
         self.manual_brass_selection: bool = False
         self.allow_pipe_start_anywhere: bool = False
-        self.pipe_break_mode: str = "flowing"
+        self.pipe_break_mode: str = "any"
         self.mode_settings: Dict[str, Any] = {}
         self.king_movement_mode: str = DEFAULT_KING_MOVEMENT_MODE
         self.pending_king_smash_removals: List[Tuple[int, int]] = []

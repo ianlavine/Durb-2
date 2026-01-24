@@ -171,7 +171,7 @@ class GameEngine:
         pipe_cost_multiplier = DEFAULT_PIPE_COST
         brass_cost_multiplier = DEFAULT_BRASS_COST
         crown_shot_cost_multiplier = DEFAULT_CROWN_SHOT_COST
-        pipe_break_mode = "flowing"
+        pipe_break_mode = "any"
         bridge_cost_override: Optional[float] = None
         game_start_mode = "open"
         passive_income_per_second = 1.0
@@ -199,13 +199,9 @@ class GameEngine:
 
             pipe_break_raw = options.get("breakMode", options.get("pipeBreakMode", options.get("break", "")))
             pipe_break_option = str(pipe_break_raw).strip().lower()
-            if pipe_break_option in {"brass", "any", "flowing", "double"}:
-                if pipe_break_option == "flowing":
-                    pipe_break_mode = "flowing"
-                elif pipe_break_option == "any":
+            if pipe_break_option in {"brass", "any"}:
+                if pipe_break_option == "any":
                     pipe_break_mode = "any"
-                elif pipe_break_option == "double":
-                    pipe_break_mode = "double"
                 else:
                     pipe_break_mode = "brass"
 
@@ -862,41 +858,32 @@ class GameEngine:
                 getattr(self.state, "king_movement_mode", DEFAULT_KING_MOVEMENT_MODE)
             )
 
-            if movement_mode != "basic":
-                if not self.state:
-                    raise GameValidationError("No game state")
-                origin_node = self.state.nodes.get(current_node_id)
-                if not origin_node:
-                    raise GameValidationError("Invalid king node")
-                player_gold = float(self.state.player_gold.get(player_id, 0.0))
-                reachable_nodes: List[int] = []
-                target_details: List[Dict[str, Any]] = []
-                for node in self.state.nodes.values():
-                    if not node or node.id == current_node_id or node.owner != player_id:
-                        continue
-                    try:
-                        plan = self._plan_king_smash_move(player_id, origin_node, node, movement_mode)
-                    except GameValidationError:
-                        continue
-                    cost_value = int(plan.get("cost", 0))
-                    if cost_value > player_gold:
-                        continue
-                    reachable_nodes.append(node.id)
-                    target_details.append({
-                        "nodeId": int(node.id),
-                        "cost": cost_value,
-                    })
-                reachable_nodes.sort()
-                target_details.sort(key=lambda entry: entry.get("nodeId", 0))
-                return True, reachable_nodes, None, current_node_id, target_details
-
-            reachable = sorted(
-                self._compute_king_reachable_nodes(
-                    player_id=player_id,
-                    origin_node_id=current_node_id,
-                )
-            )
-            return True, reachable, None, current_node_id, []
+            if not self.state:
+                raise GameValidationError("No game state")
+            origin_node = self.state.nodes.get(current_node_id)
+            if not origin_node:
+                raise GameValidationError("Invalid king node")
+            player_gold = float(self.state.player_gold.get(player_id, 0.0))
+            reachable_nodes: List[int] = []
+            target_details: List[Dict[str, Any]] = []
+            for node in self.state.nodes.values():
+                if not node or node.id == current_node_id or node.owner != player_id:
+                    continue
+                try:
+                    plan = self._plan_king_smash_move(player_id, origin_node, node, movement_mode)
+                except GameValidationError:
+                    continue
+                cost_value = int(plan.get("cost", 0))
+                if cost_value > player_gold:
+                    continue
+                reachable_nodes.append(node.id)
+                target_details.append({
+                    "nodeId": int(node.id),
+                    "cost": cost_value,
+                })
+            reachable_nodes.sort()
+            target_details.sort(key=lambda entry: entry.get("nodeId", 0))
+            return True, reachable_nodes, None, current_node_id, target_details
 
         except GameValidationError as exc:
             return False, [], str(exc), None, []
@@ -925,31 +912,23 @@ class GameEngine:
             )
 
             smash_plan: Optional[Dict[str, Any]] = None
-            if movement_mode == "basic":
-                reachable = self._compute_king_reachable_nodes(
-                    player_id=player_id,
-                    origin_node_id=current_node_id,
-                )
-                if destination_node_id not in reachable:
-                    raise GameValidationError("Destination not reachable")
-            else:
-                origin_node = self.state.nodes.get(current_node_id) if self.state else None
-                if not origin_node:
-                    raise GameValidationError("Invalid king location")
-                smash_plan = self._plan_king_smash_move(
-                    player_id,
-                    origin_node,
-                    destination_node,
-                    movement_mode,
-                    warp_info=warp_info,
-                )
-                move_cost = int(smash_plan.get("cost", 0))
-                self.validate_sufficient_gold(player_id, move_cost)
-                if self.state:
-                    current_gold = float(self.state.player_gold.get(player_id, 0.0))
-                    self.state.player_gold[player_id] = max(0.0, current_gold - move_cost)
-                if smash_plan.get("removals"):
-                    self._schedule_king_smash_removals(smash_plan)
+            origin_node = self.state.nodes.get(current_node_id) if self.state else None
+            if not origin_node:
+                raise GameValidationError("Invalid king location")
+            smash_plan = self._plan_king_smash_move(
+                player_id,
+                origin_node,
+                destination_node,
+                movement_mode,
+                warp_info=warp_info,
+            )
+            move_cost = int(smash_plan.get("cost", 0))
+            self.validate_sufficient_gold(player_id, move_cost)
+            if self.state:
+                current_gold = float(self.state.player_gold.get(player_id, 0.0))
+                self.state.player_gold[player_id] = max(0.0, current_gold - move_cost)
+            if smash_plan.get("removals"):
+                self._schedule_king_smash_removals(smash_plan)
 
             crown_max_default = getattr(self.state, "king_crown_max_health", KING_CROWN_MAX_HEALTH)
             current_health = crown_max_default
@@ -1586,8 +1565,7 @@ class GameEngine:
                     destroyed_pipes_during_build = True
 
             pipe_break_setting = str(getattr(self.state, "pipe_break_mode", "brass") or "brass").strip().lower()
-            allow_pipe_breaks_without_brass = pipe_break_setting in {"any", "flowing", "double"}
-            double_break_requires_owned_target = pipe_break_setting == "double"
+            allow_pipe_breaks_without_brass = pipe_break_setting == "any"
 
             # Check for intersections (cross mode converts them into removals)
             intersecting_edges = self._find_intersecting_edges(from_node, to_node, candidate_segments)
@@ -1667,11 +1645,6 @@ class GameEngine:
                         # Should not happen because blocking_edges would have triggered, but guard anyway
                         raise GameValidationError("Only golden pipes can cross others")
 
-            if double_break_requires_owned_target and delayed_cross_removals:
-                target_owner = getattr(to_node, "owner", None)
-                if target_owner != player_id:
-                    raise GameValidationError("Double breaks must end on your nodes")
-
             if delayed_cross_removals:
                 destroyed_pipes_during_build = True
 
@@ -1688,14 +1661,10 @@ class GameEngine:
             target_owner = getattr(to_node, "owner", None)
             auto_expand_enabled = bool(self.state.player_auto_expand.get(player_id, False)) if self.state else False
             auto_attack_enabled = bool(self.state.player_auto_attack.get(player_id, False)) if self.state else False
-            force_off_due_to_flowing_break = (
-                pipe_break_setting == "flowing" and destroyed_pipes_during_build
-            )
-            if not force_off_due_to_flowing_break:
-                if target_owner is None:
-                    new_edge_should_be_on = auto_expand_enabled
-                elif target_owner != player_id:
-                    new_edge_should_be_on = auto_attack_enabled
+            if target_owner is None:
+                new_edge_should_be_on = auto_expand_enabled
+            elif target_owner != player_id:
+                new_edge_should_be_on = auto_attack_enabled
 
             if total_world_distance <= 0.0:
                 total_world_distance = 0.0
@@ -1867,12 +1836,7 @@ class GameEngine:
             return False
         if getattr(edge, "pipe_type", "normal") == "gold":
             return True
-        if not self.state:
-            return False
-        pipe_break_mode = str(getattr(self.state, "pipe_break_mode", "") or "").strip().lower()
-        if pipe_break_mode != "flowing":
-            return False
-        return not bool(getattr(edge, "flowing", False))
+        return False
     
     def _find_intersecting_edges(
         self,

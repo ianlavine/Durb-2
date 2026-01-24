@@ -59,8 +59,8 @@
   let goldDisplay = null; // gold number display in bottom right
   let myPlayerId = null;
   let phase = 'picking';
-  let currentBreakMode = 'flowing';
-  let kingMovementMode = 'basic';
+  let currentBreakMode = 'any';
+  let kingMovementMode = 'weak-smash';
   let myPicked = false;
   let hiddenStartActive = false;
   let hiddenStartRevealed = false;
@@ -459,7 +459,7 @@
         derivedMode: LEGACY_DEFAULT_MODE || 'basic',
         winCondition: 'king',
         kingCrownHealth: KING_CROWN_DEFAULT_HEALTH,
-        kingMovementMode: 'basic',
+        kingMovementMode: 'weak-smash',
         lonelyNode: 'nothing',
         nodeGrowthRate: 0.7,
         startingFlowRate: 0.01,
@@ -767,12 +767,11 @@
   }
 
   function normalizeKingMovementMode(value) {
-    if (typeof value !== 'string') return 'basic';
+    if (typeof value !== 'string') return 'weak-smash';
     const normalized = value.trim().toLowerCase();
     if (normalized === 'smash') return 'smash';
     if (normalized === 'weak-smash' || normalized === 'weaksmash' || normalized === 'weak') return 'weak-smash';
-    if (normalized === 'standard') return 'basic';
-    return 'basic';
+    return 'weak-smash';
   }
 
   function normalizeLonelyNodeMode(value) {
@@ -797,7 +796,6 @@
     }
     const normalized = value.trim().toLowerCase();
     if (normalized === 'none') return 'none';
-    if (normalized === 'flowing') return 'flowing';
     if (normalized.startsWith('right')) return 'right-click';
     return 'cross';
   }
@@ -805,18 +803,12 @@
   function normalizeBreakMode(value) {
     if (typeof value !== 'string') return 'brass';
     const normalized = value.trim().toLowerCase();
-    if (normalized === 'any' || normalized === 'flowing' || normalized === 'double') return normalized;
+    if (normalized === 'any') return 'any';
     return 'brass';
-  }
-
-  function isFlowingBrassModeSelected(targetSettings = selectedSettings) {
-    if (!targetSettings || typeof targetSettings !== 'object') return false;
-    return normalizeBrassSetting(targetSettings.brass) === 'flowing';
   }
 
   function getEffectiveBreakMode(targetSettings = selectedSettings) {
     if (!targetSettings || typeof targetSettings !== 'object') return 'brass';
-    if (isFlowingBrassModeSelected(targetSettings)) return 'flowing';
     return normalizeBreakMode(targetSettings.breakMode);
   }
 
@@ -835,23 +827,13 @@
   }
 
   function doesBreakModeAllowNormalBreaks() {
-    return currentBreakMode === 'any'
-      || currentBreakMode === 'flowing'
-      || currentBreakMode === 'double';
-  }
-
-  function isFlowingBreakModeActive() {
-    return currentBreakMode === 'flowing';
-  }
-
-  function isDoubleBreakModeActive() {
-    return currentBreakMode === 'double';
+    return currentBreakMode === 'any';
   }
 
   function edgeBehavesAsBrass(edge) {
     if (!edge) return false;
     if (edge.pipeType === 'gold') return true;
-    return isFlowingBreakModeActive() && !edge.flowing;
+    return false;
   }
 
   function isWarpWrapUnlocked() {
@@ -913,9 +895,7 @@
     const screenLabel = screenValue === 'warp' ? 'Warp' : (screenValue === 'semi' ? 'Semi' : 'Flat');
     const brassValue = normalizeBrassSetting(settings.brass);
     let brassLabel = 'Cross';
-    if (brassValue === 'flowing') {
-      brassLabel = 'Flowing';
-    } else if (brassValue === 'right-click') {
+    if (brassValue === 'right-click') {
       brassLabel = 'Right-Click';
     } else if (brassValue === 'none') {
       brassLabel = 'None';
@@ -924,10 +904,6 @@
     let breakLabel = 'Brass';
     if (normalizedBreak === 'any') {
       breakLabel = 'Any';
-    } else if (normalizedBreak === 'flowing') {
-      breakLabel = 'Flowing';
-    } else if (normalizedBreak === 'double') {
-      breakLabel = 'Double';
     }
     const startLabel = (settings.brassStart === 'anywhere') ? 'Anywhere' : 'Owned';
     const startModeLabel = (settings.gameStart === 'hidden-split') ? 'Hidden' : 'Open';
@@ -1141,10 +1117,8 @@
 
   function buildModeSettingsPayload() {
     const normalizedBrass = normalizeBrassSetting(selectedSettings.brass);
-    const payloadBrass = normalizedBrass === 'flowing' ? 'cross' : normalizedBrass;
-    const payloadBreakMode = normalizedBrass === 'flowing'
-      ? 'flowing'
-      : normalizeBreakMode(selectedSettings.breakMode);
+    const payloadBrass = normalizedBrass;
+    const payloadBreakMode = normalizeBreakMode(selectedSettings.breakMode);
     return {
       screen: selectedSettings.screen,
       brass: payloadBrass,
@@ -7420,28 +7394,19 @@ function fallbackRemoveEdgesForNode(nodeId) {
       totalWorldDistance = Math.hypot(wx - selectedNode.x, wy - selectedNode.y);
     }
     
-    // Calculate validity differently for smash mode vs basic mode
     let lockedInvalid = false;
     let lockedValid = false;
     if (lockedTargetId != null) {
-      if (isKingSmashMode()) {
-        // In smash mode, check ownership and affordability dynamically
-        const lockedNode = nodes.get(lockedTargetId);
-        if (lockedNode) {
-          const isOwned = lockedNode.owner === myPlayerId;
-          const baseCost = calculateBridgeCost(selectedNode, lockedNode, false, warpPreference);
-          const cost = Math.max(1, Math.round(baseCost / getPipeCostMultiplier() * getCrownShotCostMultiplier()));
-          const canAfford = goldValue >= cost;
-          lockedInvalid = !isOwned || !canAfford;
-          lockedValid = isOwned && canAfford;
-        } else {
-          lockedInvalid = true;
-        }
+      const lockedNode = nodes.get(lockedTargetId);
+      if (lockedNode) {
+        const isOwned = lockedNode.owner === myPlayerId;
+        const baseCost = calculateBridgeCost(selectedNode, lockedNode, false, warpPreference);
+        const cost = Math.max(1, Math.round(baseCost / getPipeCostMultiplier() * getCrownShotCostMultiplier()));
+        const canAfford = goldValue >= cost;
+        lockedInvalid = !isOwned || !canAfford;
+        lockedValid = isOwned && canAfford;
       } else {
-        // Basic mode: use predetermined target list
-        const hasTargets = kingMoveTargets.size > 0;
-        lockedInvalid = hasTargets && !kingMoveTargets.has(lockedTargetId);
-        lockedValid = !lockedInvalid && hasTargets;
+        lockedInvalid = true;
       }
     }
     const next = {
@@ -9286,15 +9251,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
             showErrorMessage('Cannot cross brass pipe');
             return true;
           }
-          const doubleBreakModeActive = isDoubleBreakModeActive();
           const targetOwnerId = Number.isFinite(node.owner) ? node.owner : null;
-          if (doubleBreakModeActive && targetOwnerId !== myPlayerId) {
-            const breakingExisting = bridgePreviewWillBreakPipes || (brassPreviewIntersections && brassPreviewIntersections.size > 0);
-            if (breakingExisting) {
-              showErrorMessage('Double breaks must end on your nodes');
-              return true;
-            }
-          }
           const ownershipRequired = pipeStartRequiresOwnership();
           const firstOwner = firstNode.owner;
           const lacksOwnership = ownershipRequired && firstOwner !== myPlayerId;
@@ -9826,22 +9783,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
       return;
     }
 
-    // In smash modes, destination is handled via node clicks in the main click handler
-    // This mousedown handler only handles crown preview clicks (basic mode)
-    if (isKingSmashMode()) {
-      // Don't handle here - let the main click handler process node clicks
-      return;
-    }
-
-    const [pointerScreenX, pointerScreenY] = getPointerScreenCoords(ev);
-    const crownTargetId = pickKingMoveTargetFromScreen(pointerScreenX, pointerScreenY);
-    if (crownTargetId != null) {
-      sendKingMoveRequest(crownTargetId);
-      ev.preventDefault();
-      ev.stopPropagation();
-    } else {
-      clearKingSelection();
-    }
+    // Destination is handled via node clicks in the main click handler.
+    return;
   });
 
   function screenToWorld(px, py) {
