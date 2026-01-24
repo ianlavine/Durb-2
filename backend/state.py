@@ -42,7 +42,6 @@ class GraphState:
         self.players: Dict[int, Player] = {}
         # Economy and game flow
         self.player_gold: Dict[int, float] = {}
-        self.player_gem_counts: Dict[int, Dict[str, int]] = {}
         # Phase: 'picking' (each player picks starting node) or 'playing'
         self.phase: str = "picking"
         # Track which players have completed their starting pick
@@ -78,10 +77,8 @@ class GraphState:
         self.auto_brass_on_cross: bool = False
         self.manual_brass_selection: bool = False
         self.allow_pipe_start_anywhere: bool = False
-        self.pipe_break_mode: str = "flowing"
+        self.pipe_break_mode: str = "any"
         self.mode_settings: Dict[str, Any] = {}
-        self.resource_mode: str = "standard"
-        self.gem_nodes: Dict[int, str] = {}
         self.king_movement_mode: str = DEFAULT_KING_MOVEMENT_MODE
         self.pending_king_smash_removals: List[Tuple[int, int]] = []
         
@@ -95,8 +92,6 @@ class GraphState:
         self.pending_edge_removals: List[Dict[str, Any]] = []
         self.pending_auto_reversed_edge_ids: List[int] = []
         self.pending_edge_reversal_events: List[Dict[str, Any]] = []
-        self.lonely_node_mode: str = "nothing"
-        self.pending_lonely_sinks: List[Dict[str, Any]] = []
 
         # Economy overrides
         self.passive_income_per_second: float = 0.0
@@ -123,7 +118,6 @@ class GraphState:
         self.hidden_start_original_sizes: Dict[int, float] = {}
 
         # Win condition configuration
-        self.win_condition: str = "dominate"
         self.player_king_nodes: Dict[int, int] = {}
         
 
@@ -136,156 +130,17 @@ class GraphState:
         self.player_auto_expand[player.id] = False
         # Initialize auto-attack setting (default: off)
         self.player_auto_attack[player.id] = False
-        self.player_gem_counts[player.id] = {}
         self.eliminated_players.discard(player.id)
-
-    def reset_player_gem_counts(self) -> None:
-        """Reset accumulated gem capture counts for all players."""
-        self.player_gem_counts = {pid: {} for pid in self.players.keys()}
-
-    def record_gem_capture(self, player_id: int, gem_key: Any) -> None:
-        """Increment gem counts for a player when they capture a neutral gem node."""
-        if gem_key is None:
-            return
-        try:
-            normalized_key = str(gem_key).strip().lower()
-        except Exception:
-            return
-        if not normalized_key:
-            return
-        counts = self.player_gem_counts.setdefault(player_id, {})
-        current = counts.get(normalized_key, 0)
-        try:
-            current_int = int(current)
-        except (TypeError, ValueError):
-            current_int = 0
-        counts[normalized_key] = current_int + 1
-
-    def _serialize_gem_counts(self) -> List[List[Any]]:
-        """Return gem counts payload suitable for network messages."""
-        payload: List[List[Any]] = []
-        for pid in sorted(self.players.keys()):
-            counts = self.player_gem_counts.get(pid, {})
-            serialized: Dict[str, int] = {}
-            for key, value in counts.items():
-                try:
-                    normalized_key = str(key).strip().lower()
-                except Exception:
-                    continue
-                if not normalized_key:
-                    continue
-                try:
-                    count_value = int(value)
-                except (TypeError, ValueError):
-                    count_value = 0
-                if count_value <= 0:
-                    continue
-                serialized[normalized_key] = count_value
-            payload.append([int(pid), serialized])
-        return payload
-
-    def get_player_gem_count(self, player_id: int, gem_key: Any) -> int:
-        """Return the number of gems of the specified type the player currently has."""
-        try:
-            normalized_key = str(gem_key).strip().lower()
-        except Exception:
-            return 0
-        if not normalized_key:
-            return 0
-        counts = self.player_gem_counts.setdefault(int(player_id), {})
-        try:
-            return max(0, int(counts.get(normalized_key, 0)))
-        except (TypeError, ValueError):
-            return 0
-
-    def consume_player_gem(self, player_id: int, gem_key: Any) -> bool:
-        """Attempt to spend a gem of the specified type for the player."""
-        try:
-            normalized_key = str(gem_key).strip().lower()
-        except Exception:
-            return False
-        if not normalized_key:
-            return False
-        counts = self.player_gem_counts.setdefault(int(player_id), {})
-        try:
-            current = int(counts.get(normalized_key, 0))
-        except (TypeError, ValueError):
-            current = 0
-        if current <= 0:
-            return False
-        counts[normalized_key] = current - 1
-        return True
-
-    def get_player_node_counts(self) -> Dict[int, int]:
-        """Return a mapping of player id to number of nodes they currently own."""
-        counts: Dict[int, int] = {pid: 0 for pid in self.players.keys()}
-        for node in self.nodes.values():
-            if node.owner is not None:
-                counts[node.owner] = counts.get(node.owner, 0) + 1
-        return counts
 
     def get_active_player_ids(self) -> List[int]:
         """Return the list of players still alive in the match."""
         return [pid for pid in self.players.keys() if pid not in self.eliminated_players]
 
 
-
-    def calculate_win_threshold(self) -> int:
-        """Calculate the number of nodes needed to win based on total nodes (2/3 rule)."""
-        total_nodes = len(self.nodes)
-        if getattr(self, "win_condition", "dominate") != "dominate":
-            return total_nodes
-        if total_nodes % 3 == 0:
-            # If divisible by 3, need exactly 2/3
-            return (total_nodes * 2) // 3
-        else:
-            # If not divisible by 3, get as close to 2/3 as possible
-            return (total_nodes * 2 + 2) // 3  # This rounds up to get closest to 2/3
-
-    def check_node_count_victory(self) -> Optional[int]:
-        """Check if any player has reached the win threshold. Returns winner ID or None."""
-        if self.game_ended:
-            return self.winner_id
-
-        if getattr(self, "win_condition", "dominate") != "dominate":
-            return None
-            
-        # Only check after picking phase is complete
-        if self.phase == "picking":
-            return None
-            
-        win_threshold = self.calculate_win_threshold()
-        node_counts = self.get_player_node_counts()
-
-        # Collect players meeting or exceeding the threshold who are still active
-        candidates = [
-            pid for pid, count in node_counts.items()
-            if pid not in self.eliminated_players and count >= win_threshold
-        ]
-
-        if not candidates:
-            return None
-
-        # Determine top candidate and ensure there is no tie on node count
-        best_pid = max(candidates, key=lambda pid: node_counts.get(pid, 0))
-        best_count = node_counts.get(best_pid, 0)
-        if sum(1 for pid in candidates if node_counts.get(pid, 0) == best_count) > 1:
-            return None
-
-        self.game_ended = True
-        self.winner_id = best_pid
-        return best_pid
-
     def check_money_victory(self) -> Optional[int]:
-        """Check if any player has reached the money victory threshold (non-gem mode only).
-        Returns winner ID or None."""
+        """Check if any player has reached the money victory threshold."""
         if self.game_ended:
             return self.winner_id
-
-        # Only apply money victory in non-gem (standard) resource mode
-        resource_mode = getattr(self, "resource_mode", "standard")
-        if resource_mode == "gems":
-            return None
 
         # Only check after picking phase is complete
         if self.phase == "picking":
@@ -312,63 +167,22 @@ class GraphState:
         """Check if the game timer has expired. Returns winner ID or None."""
         if self.game_ended:
             return self.winner_id
-            
+
         # Only check timer after picking phase is complete
         if self.phase == "picking":
             return None
-            
+
         if self.game_start_time is None:
             return None
-            
+
         elapsed_time = current_time - self.game_start_time
-        if elapsed_time >= self.game_duration:
-            # Timer expired - determine winner by node count
-            node_counts = self.get_player_node_counts()
-            active_players = [pid for pid in self.players.keys() if pid not in self.eliminated_players]
-
-            if not active_players:
-                return None
-
-            winner_id = max(active_players, key=lambda pid: node_counts.get(pid, 0))
-            max_nodes = node_counts.get(winner_id, 0)
-            if sum(1 for pid in active_players if node_counts.get(pid, 0) == max_nodes) > 1:
-                return None
-
-            self.game_ended = True
-            self.winner_id = winner_id
-            return winner_id
-                
-        return None
-
-    def check_zero_nodes_loss(self) -> Optional[int]:
-        """Eliminate players with zero nodes. Returns winner ID when only one remains."""
-        if self.game_ended:
-            return self.winner_id
-        
-        # Only check for zero nodes loss after picking phase is complete
-        if self.phase == "picking":
+        if elapsed_time < self.game_duration:
             return None
-            
-        node_counts = self.get_player_node_counts()
-        newly_eliminated: List[int] = []
 
-        for player_id in self.players.keys():
-            if player_id in self.eliminated_players:
-                continue
-            if node_counts.get(player_id, 0) == 0:
-                self.eliminated_players.add(player_id)
-                newly_eliminated.append(player_id)
-
-        if newly_eliminated:
-            self.pending_eliminations.extend(newly_eliminated)
-
-        active_players = [pid for pid in self.players.keys() if pid not in self.eliminated_players]
-        if len(active_players) == 1:
-            self.game_ended = True
-            self.winner_id = active_players[0]
-            return self.winner_id
-
-        return None
+        # Temporary behavior: assign player 1 as winner when timer expires.
+        self.game_ended = True
+        self.winner_id = 1
+        return self.winner_id
 
     def _handle_king_elimination(self, king_owner_id: Optional[int], node: Optional["Node"] = None) -> bool:
         """Remove a player's crown tracking and mark elimination. Returns True if a winner emerges."""
@@ -427,8 +241,6 @@ class GraphState:
             "kingOwnerId": getattr(node, "king_owner_id", None),
             "nodeType": getattr(node, "node_type", "normal"),
             "isBrass": (getattr(node, "node_type", "normal") == "brass"),
-            "resourceType": getattr(node, "resource_type", "money"),
-            "resourceKey": getattr(node, "resource_key", None),
         }
 
         edges_to_remove = list(node.attached_edge_ids)
@@ -494,41 +306,7 @@ class GraphState:
                     payload["reason"] = reason
                 self.pending_edge_removals.append(payload)
 
-        if getattr(self, "lonely_node_mode", "nothing") == "sinks" and candidate_nodes:
-            for node_id in list(candidate_nodes):
-                node = self.nodes.get(node_id)
-                if node and not node.attached_edge_ids:
-                    self._queue_lonely_sink(node)
-
         return removed_ids
-
-    def _queue_lonely_sink(self, node: Node) -> None:
-        if not node:
-            return
-
-        king_owner_id = getattr(node, "king_owner_id", None)
-        win_condition = str(getattr(self, "win_condition", "dominate") or "").strip().lower()
-
-        removal_info = self.remove_node_and_edges(node.id)
-        if not removal_info:
-            return
-        payload: Dict[str, Any] = {
-            "nodeId": node.id,
-            "node": removal_info.get("node"),
-            "removedEdges": removal_info.get("removedEdges", []),
-            "playerId": node.owner,
-        }
-        if king_owner_id is not None and win_condition == "king":
-            payload["kingGraveOwnerId"] = int(king_owner_id)
-            self._handle_king_elimination(king_owner_id, None)
-        self.pending_lonely_sinks.append(payload)
-
-    def pop_pending_lonely_sinks(self) -> List[Dict[str, Any]]:
-        if not self.pending_lonely_sinks:
-            return []
-        events = list(self.pending_lonely_sinks)
-        self.pending_lonely_sinks = []
-        return events
 
     def record_node_movement(self, node_id: int, x: float, y: float) -> None:
         """Queue a node position update for inclusion in the next tick."""
@@ -566,8 +344,6 @@ class GraphState:
                     ),
                     3,
                 ),
-                str(getattr(n, "resource_type", "money") or "money"),
-                getattr(n, "resource_key", None),
             ]
             for nid, n in self.nodes.items()
         ]
@@ -622,8 +398,6 @@ class GraphState:
             except (TypeError, ValueError):
                 continue
         
-        # Calculate win threshold for progress bar
-        win_threshold = self.calculate_win_threshold()
         timer_remaining = None
         if self.game_start_time is not None:
             elapsed = max(0.0, current_time - self.game_start_time)
@@ -658,8 +432,6 @@ class GraphState:
             "phase": self.phase,
             "gold": gold_arr,
             "picked": picked_arr,
-            "winThreshold": win_threshold,
-            "totalNodes": len(self.nodes),
             "autoExpand": auto_expand_arr,
             "autoAttack": auto_attack_arr,
             "eliminatedPlayers": sorted(self.eliminated_players),
@@ -668,9 +440,7 @@ class GraphState:
             "mode": self.mode,
             "modeSettings": dict(self.mode_settings or {}),
             "edgeWarp": edge_warp,
-            "winCondition": self.win_condition,
             "kingNodes": king_nodes_payload,
-            "gemCounts": self._serialize_gem_counts(),
         }
 
     def to_tick_message(self, current_time: float = 0.0) -> Dict:
@@ -703,19 +473,13 @@ class GraphState:
                     ),
                     3,
                 ),
-                str(getattr(n, "resource_type", "money") or "money"),
-                getattr(n, "resource_key", None),
             ]
             for nid, n in self.nodes.items()
         ]
-        counts = self.get_player_node_counts()
         gold_arr = [[pid, round(self.player_gold.get(pid, 0.0), 4)] for pid in self.players.keys()]
         picked_arr = [[pid, bool(self.players_who_picked.get(pid, False))] for pid in self.players.keys()]
         auto_expand_arr = [[pid, bool(self.player_auto_expand.get(pid, False))] for pid in self.players.keys()]
         auto_attack_arr = [[pid, bool(self.player_auto_attack.get(pid, False))] for pid in self.players.keys()]
-        
-        # Calculate win threshold for progress bar
-        win_threshold = self.calculate_win_threshold()
         eliminated_players = sorted(self.eliminated_players)
         recent_eliminations = list(self.pending_eliminations)
         self.pending_eliminations = []
@@ -741,12 +505,9 @@ class GraphState:
             "type": "tick",
             "edges": edges_arr,
             "nodes": nodes_arr,
-            "counts": counts,
-            "totalNodes": len(self.nodes),
             "phase": self.phase,
             "gold": gold_arr,
             "picked": picked_arr,
-            "winThreshold": win_threshold,
             "autoExpand": auto_expand_arr,
             "autoAttack": auto_attack_arr,
             "eliminatedPlayers": eliminated_players,
@@ -755,9 +516,7 @@ class GraphState:
             "timerRemaining": timer_remaining,
             "mode": self.mode,
             "modeSettings": dict(self.mode_settings or {}),
-            "winCondition": self.win_condition,
             "kingNodes": king_nodes_payload,
-            "gemCounts": self._serialize_gem_counts(),
         }
 
         if node_movements:
@@ -1097,38 +856,25 @@ class GraphState:
             if node.juice <= NODE_MIN_JUICE:
                 # Determine reward based on the previous owner state
                 previous_owner = node.owner
-                resource_type = str(getattr(node, "resource_type", "money") or "money").lower()
                 reward_amount = 0.0
                 reward_type = "money"
-                reward_key: Optional[str] = None
                 should_emit_capture = False
+                reward_key: Optional[str] = None
 
-                if resource_type == "gem":
-                    reward_type = "gem"
-                    raw_key = getattr(node, "resource_key", None)
-                    if raw_key is not None:
-                        try:
-                            reward_key = str(raw_key).strip().lower() or None
-                        except Exception:
-                            reward_key = None
-                    if previous_owner is None and new_owner is not None:
-                        self.record_gem_capture(new_owner, reward_key)
-                        should_emit_capture = True
-                else:
-                    if previous_owner is None:
-                        reward_amount = getattr(
-                            self,
-                            "neutral_capture_reward",
-                            get_neutral_capture_reward(self.mode),
-                        )
-                        self.neutral_capture_reward = reward_amount
-                    elif previous_owner != new_owner:
-                        reward_amount = GOLD_REWARD_FOR_ENEMY_CAPTURE
+                if previous_owner is None:
+                    reward_amount = getattr(
+                        self,
+                        "neutral_capture_reward",
+                        get_neutral_capture_reward(self.mode),
+                    )
+                    self.neutral_capture_reward = reward_amount
+                elif previous_owner != new_owner:
+                    reward_amount = GOLD_REWARD_FOR_ENEMY_CAPTURE
 
-                    if reward_amount > 0.0 and new_owner is not None:
-                        # Award gold for capturing the node
-                        self.player_gold[new_owner] = self.player_gold.get(new_owner, 0.0) + reward_amount
-                        should_emit_capture = True
+                if reward_amount > 0.0 and new_owner is not None:
+                    # Award gold for capturing the node
+                    self.player_gold[new_owner] = self.player_gold.get(new_owner, 0.0) + reward_amount
+                    should_emit_capture = True
 
                 if should_emit_capture and new_owner is not None:
                     # Store the capture event for frontend notification
@@ -1151,12 +897,11 @@ class GraphState:
 
                 node.owner = new_owner
 
-                if getattr(self, "win_condition", "dominate") == "king":
-                    king_owner_id = getattr(node, "king_owner_id", None)
-                    if king_owner_id is not None and king_owner_id != new_owner:
-                        if self._handle_king_elimination(king_owner_id, node):
-                            king_victory_triggered = True
-                        # Continue processing other pending ownership changes to keep state consistent
+                king_owner_id = getattr(node, "king_owner_id", None)
+                if king_owner_id is not None and king_owner_id != new_owner:
+                    if self._handle_king_elimination(king_owner_id, node):
+                        king_victory_triggered = True
+                    # Continue processing other pending ownership changes to keep state consistent
 
         # All edges are now one-way only - no auto-adjustment needed
         
@@ -1425,10 +1170,6 @@ def load_graph(graph_path: Path) -> Tuple[GraphState, Dict[str, int]]:
     for n in nodes_raw:
         node_type_val = n.get("nodeType") if isinstance(n, dict) else None
         node_type = "brass" if isinstance(node_type_val, str) and node_type_val.lower() == "brass" else "normal"
-        resource_type_val = n.get("resourceType") if isinstance(n, dict) else None
-        resource_key_val = n.get("resourceKey") if isinstance(n, dict) else None
-        resource_type = "gem" if isinstance(resource_type_val, str) and resource_type_val.lower() == "gem" else "money"
-        resource_key = resource_key_val if isinstance(resource_key_val, str) else None
         nodes.append(
             Node(
                 id=n["id"],
@@ -1437,8 +1178,6 @@ def load_graph(graph_path: Path) -> Tuple[GraphState, Dict[str, int]]:
                 juice=UNOWNED_NODE_BASE_JUICE,
                 cur_intake=0.0,
                 node_type=node_type,
-                resource_type=resource_type,
-                resource_key=resource_key,
             )
         )
     edges: List[Edge] = []
@@ -1476,10 +1215,6 @@ def build_state_from_dict(data: Dict) -> Tuple[GraphState, Dict[str, int]]:
     for n in nodes_raw:
         node_type_val = n.get("nodeType") if isinstance(n, dict) else None
         node_type = "brass" if isinstance(node_type_val, str) and node_type_val.lower() == "brass" else "normal"
-        resource_type_val = n.get("resourceType") if isinstance(n, dict) else None
-        resource_key_val = n.get("resourceKey") if isinstance(n, dict) else None
-        resource_type = "gem" if isinstance(resource_type_val, str) and resource_type_val.lower() == "gem" else "money"
-        resource_key = resource_key_val if isinstance(resource_key_val, str) else None
         nodes.append(
             Node(
                 id=n["id"],
@@ -1488,8 +1223,6 @@ def build_state_from_dict(data: Dict) -> Tuple[GraphState, Dict[str, int]]:
                 juice=UNOWNED_NODE_BASE_JUICE,
                 cur_intake=0.0,
                 node_type=node_type,
-                resource_type=resource_type,
-                resource_key=resource_key,
             )
         )
     edges: List[Edge] = []

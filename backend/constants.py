@@ -62,7 +62,7 @@ PASSIVE_INCOME_ENABLED: bool = True
 PASSIVE_GOLD_PER_TICK: float = 0.09  # 0.90/s at 0.1s tick rate
 PASSIVE_GOLD_PER_SECOND: float = PASSIVE_GOLD_PER_TICK / TICK_INTERVAL_SECONDS
 STARTING_GOLD: float = 0.0
-MONEY_VICTORY_THRESHOLD: float = 300.0  # Win condition when not in gem mode
+MONEY_VICTORY_THRESHOLD: float = 300.0
 
 
 # Node sizing
@@ -71,19 +71,11 @@ STARTING_NODE_JUICE: float = 150.0
 
 # King mode
 KING_CROWN_MAX_HEALTH: float = 150.0  # extra damage buffer before the king node itself is vulnerable
-KING_MOVEMENT_MODES: Tuple[str, ...] = ("basic", "smash", "weak-smash")
+KING_MOVEMENT_MODES: Tuple[str, ...] = ("smash", "weak-smash")
 DEFAULT_KING_MOVEMENT_MODE: str = "smash"
 KING_CROWN_TICKS_PER_UNIT_DISTANCE: float = 0.15
 KING_CROWN_MIN_TRAVEL_TICKS: int = 1
 KING_CROWN_SPIN_TICKS: int = 5  # each spin phase lasts exactly 5 ticks regardless of arc length
-
-# Gem distribution defaults (counts per gem type when resources == 'gems')
-DEFAULT_GEM_COUNTS: Dict[str, int] = {
-    "warp": 3,
-    "brass": 7,
-    "rage": 4,
-    "reverse": 6,
-}
 
 # Classic (OG Durb) tuning
 CLASSIC_STARTING_NODE_JUICE: float = 50.0
@@ -178,6 +170,4 @@ def normalize_king_movement_mode(value: str) -> str:
         return "smash"
     if lowered in {"weak-smash", "weaksmash", "weak"}:
         return "weak-smash"
-    if lowered in {"standard"}:
-        return "basic"
-    return "basic"
+    return DEFAULT_KING_MOVEMENT_MODE

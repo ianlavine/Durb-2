@@ -8,7 +8,6 @@ from typing import Any, Dict, List, Optional, Tuple
 import websockets
 
 from .constants import (
-    DEFAULT_GEM_COUNTS,
     DEFAULT_GAME_MODE,
     DEFAULT_KING_MOVEMENT_MODE,
     GAME_MODES,
@@ -216,15 +215,8 @@ class MessageRouter:
             "neutralCaptureGold": 5.0,
             "ringJuiceToGoldRatio": 10.0,
             "ringPayoutGold": 3.0,
-            "warpGemCount": DEFAULT_GEM_COUNTS.get("warp", 3),
-            "brassGemCount": DEFAULT_GEM_COUNTS.get("brass", 7),
-            "rageGemCount": DEFAULT_GEM_COUNTS.get("rage", 4),
-            "reverseGemCount": DEFAULT_GEM_COUNTS.get("reverse", 6),
             "startingNodeJuice": 300.0,
-            "winCondition": "king",
             "kingCrownHealth": KING_CROWN_MAX_HEALTH,
-            "resources": "standard",
-            "lonelyNode": "sinks",
             "nodeGrowthRate": PRODUCTION_RATE_PER_NODE,
             "startingFlowRate": RESERVE_TRANSFER_RATIO,
             "secondaryFlowRate": INTAKE_TRANSFER_RATIO,
@@ -233,18 +225,6 @@ class MessageRouter:
         if not isinstance(payload, dict):
             settings["pipeStart"] = settings["brassStart"]
             return settings
-
-        def sanitize_gem_count(raw_value: Any, fallback: float) -> int:
-            if isinstance(raw_value, str):
-                raw_value = raw_value.strip()
-            try:
-                parsed = float(raw_value)
-            except (TypeError, ValueError):
-                return int(round(fallback))
-            if math.isnan(parsed):
-                return int(round(fallback))
-            clamped = max(0.0, min(10.0, parsed))
-            return int(round(clamped))
 
         screen_option = str(payload.get("screen", settings["screen"])).strip().lower()
         if screen_option in {"warp", "semi", "flat"}:
@@ -262,7 +242,7 @@ class MessageRouter:
         break_mode_option = payload.get("breakMode", payload.get("pipeBreakMode", payload.get("break", settings["breakMode"])))
         if isinstance(break_mode_option, str):
             normalized_break = break_mode_option.strip().lower()
-            if normalized_break in {"any", "flowing", "double"}:
+            if normalized_break in {"any", "brass"}:
                 settings["breakMode"] = normalized_break
             else:
                 settings["breakMode"] = "brass"
@@ -410,38 +390,6 @@ class MessageRouter:
         if parsed_crown is not None and parsed_crown > 0:
             settings["kingCrownHealth"] = max(1.0, min(300.0, round(parsed_crown, 3)))
 
-        gem_field_map = (
-            ("warpGemCount", "warp"),
-            ("brassGemCount", "brass"),
-            ("rageGemCount", "rage"),
-            ("reverseGemCount", "reverse"),
-        )
-        for field_name, gem_key in gem_field_map:
-            current_value = settings[field_name]
-            if field_name in payload:
-                settings[field_name] = sanitize_gem_count(payload.get(field_name), current_value)
-            else:
-                settings[field_name] = int(round(current_value))
-
-        win_condition_value = payload.get("winCondition", settings.get("winCondition"))
-        if isinstance(win_condition_value, str) and win_condition_value.strip().lower() == "king":
-            settings["winCondition"] = "king"
-        else:
-            settings["winCondition"] = "dominate"
-
-        resources_value = payload.get("resources", settings["resources"])
-        if isinstance(resources_value, str):
-            normalized_resources = resources_value.strip().lower()
-            if normalized_resources == "gems":
-                settings["resources"] = "gems"
-            else:
-                settings["resources"] = "standard"
-
-        lonely_value = payload.get("lonelyNode", settings["lonelyNode"])
-        if isinstance(lonely_value, str) and lonely_value.strip().lower() == "sinks":
-            settings["lonelyNode"] = "sinks"
-        else:
-            settings["lonelyNode"] = "nothing"
 
         king_move_value = payload.get("kingMovementMode", settings["kingMovementMode"])
         if isinstance(king_move_value, str):
@@ -474,35 +422,6 @@ class MessageRouter:
             return "basic"
 
         return fallback_normalized
-
-    def _build_lonely_sink_payload(self, sink_data: Any) -> Optional[Dict[str, Any]]:
-        if not isinstance(sink_data, dict):
-            return None
-        node_snapshot = sink_data.get("node")
-        node_id = sink_data.get("nodeId")
-        if node_id is None and isinstance(node_snapshot, dict):
-            node_id = node_snapshot.get("id")
-        try:
-            node_int = int(node_id)
-        except (TypeError, ValueError):
-            return None
-        payload = {
-            "type": "nodeDestroyed",
-            "nodeId": node_int,
-            "playerId": sink_data.get("playerId"),
-            "removedEdges": sink_data.get("removedEdges", []),
-            "reason": "lonely",
-            "sinking": True,
-            "cost": 0,
-        }
-        if isinstance(node_snapshot, dict):
-            payload["nodeSnapshot"] = node_snapshot
-        if sink_data.get("kingGraveOwnerId") is not None:
-            try:
-                payload["kingGraveOwnerId"] = int(sink_data.get("kingGraveOwnerId"))
-            except (TypeError, ValueError):
-                pass
-        return payload
 
     async def _start_friend_game(
         self,
@@ -809,14 +728,6 @@ class MessageRouter:
             )
             return
 
-        if engine.state:
-            try:
-                gem_counts_payload = engine.state._serialize_gem_counts()
-            except Exception:
-                gem_counts_payload = []
-        else:
-            gem_counts_payload = []
-
         if new_edge:
             # Send edge state update to all players (without cost)
             warp_payload = {
@@ -854,21 +765,11 @@ class MessageRouter:
                     continue
                 
                 message_to_send = edge_update_message.copy()
-                message_to_send["gemCounts"] = gem_counts_payload
                 # Only include cost for the player who built the bridge
                 if token_key == token:
                     message_to_send["cost"] = actual_cost
                 
                 await self._send_safe(client_websocket, json.dumps(message_to_send))
-
-        lonely_events = []
-        if engine.state and hasattr(engine.state, "pop_pending_lonely_sinks"):
-            lonely_events = engine.state.pop_pending_lonely_sinks()
-        if lonely_events:
-            for sink_event in lonely_events:
-                payload = self._build_lonely_sink_payload(sink_event)
-                if payload:
-                    await self._broadcast_to_game(game_info, payload)
 
         event_payload = {
             "fromNodeId": int(from_node_id),
@@ -887,7 +788,6 @@ class MessageRouter:
                 event_payload["nodeMovements"] = movement_payloads
         if removed_edges:
             event_payload["removedEdges"] = removed_edges
-        event_payload["gemCounts"] = gem_counts_payload
         self._record_game_event(game_info, token, "buildBridge", event_payload)
 
     async def handle_redirect_energy(
@@ -1787,8 +1687,6 @@ class MessageRouter:
                 payload = {
                     "type": "sandboxNodeCreated",
                     "node": result.get("node", {}),
-                    "totalNodes": result.get("totalNodes", 0),
-                    "winThreshold": result.get("winThreshold", 0),
                 }
                 await self._send_safe(websocket, json.dumps(payload))
 
@@ -1804,8 +1702,6 @@ class MessageRouter:
                     "type": "sandboxBoardCleared",
                     "removedNodes": [int(nid) for nid in result.get("removedNodes", [])],
                     "removedEdges": [int(eid) for eid in result.get("removedEdges", [])],
-                    "totalNodes": result.get("totalNodes", 0),
-                    "winThreshold": result.get("winThreshold", 0),
                 }
                 await self._send_safe(websocket, json.dumps(payload))
 

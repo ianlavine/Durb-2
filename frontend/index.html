@@ -179,51 +179,7 @@
         box-sizing: border-box;
         font-family: "Fira Code", "Source Code Pro", monospace;
       }
-      .gem-counts {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: clamp(18px, 4vw, 32px);
-        pointer-events: none;
-      }
-      .top-ui-bar .gem-counts {
-        margin-top: clamp(6px, 1.4vh, 14px);
-      }
-      .gem-counts.interactive {
-        pointer-events: auto;
-      }
-      .gem-count {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        color: #ffffff;
-        font-size: clamp(16px, 2.2vh, 22px);
-        font-weight: bold;
-        text-shadow: 0 2px 6px rgba(0,0,0,0.75);
-        opacity: 0.95;
-        transition: opacity 0.15s ease, transform 0.12s ease;
-      }
-      .gem-counts.interactive .gem-count {
-        cursor: pointer;
-      }
-      .gem-count.disabled {
-        opacity: 0.35;
-        cursor: not-allowed;
-      }
-      .gem-count.active {
-        transform: scale(1.08);
-        text-shadow: 0 0 14px rgba(255,220,120,0.85);
-      }
-      .gem-count .gem-icon {
-        font-size: clamp(22px, 3vh, 30px);
-        line-height: 1;
-      }
-      .gem-count .gem-number {
-        min-width: 22px;
-        text-align: center;
-      }
-
-      /* Money progress bar for non-gem mode */
+      /* Money progress bar */
       #moneyProgressContainer {
         display: none;
         width: min(800px, calc(100% - 48px));
@@ -707,10 +663,6 @@
         grid-column: 1 / -1;
       }
 
-      .mode-option-group.gem-counts {
-        display: none;
-      }
-
       .mode-option-buttons {
         display: flex;
         width: 100%;
@@ -718,54 +670,6 @@
         flex-wrap: nowrap;
         gap: 8px;
         justify-content: center;
-      }
-
-      .gem-slider-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-        gap: 10px;
-        width: 100%;
-      }
-
-      .gem-slider {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        padding: 6px 8px;
-        border: 1px solid rgba(255,255,255,0.15);
-        border-radius: 8px;
-        background: rgba(0,0,0,0.35);
-      }
-
-      .gem-slider .gem-label {
-        font-family: monospace;
-        color: #f0f0f0;
-        font-size: 16px;
-        min-width: 70px;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-      }
-
-      .gem-slider input[type="range"] {
-        flex: 1;
-        accent-color: #ffd700;
-      }
-
-      .gem-slider .gem-value {
-        font-family: monospace;
-        font-size: 18px;
-        min-width: 32px;
-        text-align: right;
-        color: #ffffff;
-      }
-
-      .mode-option-group.gem-mode .mode-option-buttons::after {
-        content: 'Gem mode (auto)';
-        font-size: 14px;
-        color: #e0c97c;
-        opacity: 0.85;
-        margin-left: 4px;
-        align-self: center;
       }
 
       .bridge-cost-group {
@@ -943,7 +847,6 @@
           <div class="mode-option-group" data-setting-group="brass">
             <span class="selector-label">Brass</span>
             <div class="mode-option-buttons">
-              <button class="mode-option-button" data-setting="brass" data-value="flowing">Flowing</button>
               <button class="mode-option-button" data-setting="brass" data-value="cross">Cross</button>
               <button class="mode-option-button active" data-setting="brass" data-value="right-click">Right-Click</button>
             </div>
@@ -960,7 +863,6 @@
             <div class="mode-option-buttons">
               <button class="mode-option-button" data-setting="breakMode" data-value="brass">Brass</button>
               <button class="mode-option-button active" data-setting="breakMode" data-value="any">Any</button>
-              <button class="mode-option-button" data-setting="breakMode" data-value="double">Double</button>
             </div>
           </div>
           <div class="mode-option-group" data-setting-group="gameStart">
@@ -970,33 +872,11 @@
               <button class="mode-option-button active" data-setting="gameStart" data-value="hidden-split">Hidden Split</button>
             </div>
           </div>
-          <div class="mode-option-group" data-setting-group="winCondition">
-            <span class="selector-label">Win-Con</span>
-            <div class="mode-option-buttons">
-              <button class="mode-option-button" data-setting="winCondition" data-value="dominate">Dominate</button>
-              <button class="mode-option-button active" data-setting="winCondition" data-value="king">King</button>
-            </div>
-          </div>
-          <div class="mode-option-group" data-setting-group="resources">
-            <span class="selector-label">Resources</span>
-            <div class="mode-option-buttons">
-              <button class="mode-option-button active" data-setting="resources" data-value="standard">Standard</button>
-              <button class="mode-option-button" data-setting="resources" data-value="gems">Gems</button>
-            </div>
-          </div>
           <div class="mode-option-group" data-setting-group="kingMovementMode">
             <span class="selector-label">King Movement</span>
             <div class="mode-option-buttons">
-              <button class="mode-option-button" data-setting="kingMovementMode" data-value="basic">Basic</button>
               <button class="mode-option-button" data-setting="kingMovementMode" data-value="smash">Smash</button>
               <button class="mode-option-button active" data-setting="kingMovementMode" data-value="weak-smash">Weak Smash</button>
-            </div>
-          </div>
-          <div class="mode-option-group" data-setting-group="lonelyNode">
-            <span class="selector-label">Lonely Node</span>
-            <div class="mode-option-buttons">
-              <button class="mode-option-button active" data-setting="lonelyNode" data-value="nothing">Nothing</button>
-              <button class="mode-option-button" data-setting="lonelyNode" data-value="sinks">Sinks</button>
             </div>
           </div>
           <div class="mode-option-group" data-setting-group="pipeCost">
@@ -1083,31 +963,6 @@
               <span id="secondaryFlowValue">0.70</span>
             </div>
           </div>
-          <div class="mode-option-group gem-counts span-full" data-setting-group="gemCounts">
-            <span class="selector-label">Gem Counts</span>
-            <div class="gem-slider-grid">
-              <div class="gem-slider">
-                <span class="gem-label">Warp</span>
-                <input type="range" id="warpGemSlider" min="0" max="10" step="1" value="3" aria-label="Warp gem count" />
-                <span class="gem-value" id="warpGemValue">3</span>
-              </div>
-              <div class="gem-slider">
-                <span class="gem-label">Brass</span>
-                <input type="range" id="brassGemSlider" min="0" max="10" step="1" value="7" aria-label="Brass gem count" />
-                <span class="gem-value" id="brassGemValue">7</span>
-              </div>
-              <div class="gem-slider">
-                <span class="gem-label">Rage</span>
-                <input type="range" id="rageGemSlider" min="0" max="10" step="1" value="4" aria-label="Rage gem count" />
-                <span class="gem-value" id="rageGemValue">4</span>
-              </div>
-              <div class="gem-slider">
-                <span class="gem-label">Reverse</span>
-                <input type="range" id="reverseGemSlider" min="0" max="10" step="1" value="6" aria-label="Reverse gem count" />
-                <span class="gem-value" id="reverseGemValue">6</span>
-              </div>
-            </div>
-          </div>
         </div>
       </div>
       <div id="lobby">Joining lobby...</div>
@@ -1115,24 +970,6 @@
     
     <!-- UI Background Bars -->
     <div class="top-ui-bar" id="topUiBar">
-      <div class="gem-counts" id="gemCountsDisplay">
-        <div class="gem-count" data-gem="warp">
-          <span class="gem-icon">⭐</span>
-          <span class="gem-number">0</span>
-        </div>
-        <div class="gem-count" data-gem="brass">
-          <span class="gem-icon">🟫</span>
-          <span class="gem-number">0</span>
-        </div>
-        <div class="gem-count" data-gem="rage">
-          <span class="gem-icon">🔥</span>
-          <span class="gem-number">0</span>
-        </div>
-        <div class="gem-count" data-gem="reverse">
-          <span class="gem-icon">🔄</span>
-          <span class="gem-number">0</span>
-        </div>
-      </div>
       <div id="moneyProgressContainer">
         <div id="moneyProgressBar">
           <div id="moneyProgressFill"></div>

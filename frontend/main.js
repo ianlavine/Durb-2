@@ -59,20 +59,8 @@
   let goldDisplay = null; // gold number display in bottom right
   let myPlayerId = null;
   let phase = 'picking';
-  let currentResourceMode = 'standard';
-  let currentBreakMode = 'flowing';
-  let kingMovementMode = 'basic';
-  let brassGemModeActive = false;
-  let pendingBrassGemSpend = false;
-  let rageGemModeActive = false;
-  let pendingRageGemSpend = false;
-  let reverseGemModeActive = false;
-  let pendingReverseGemSpend = false;
-  let warpGemModeActive = false;
-  let pendingWarpGemSpend = false;
-  let warpGemAutoUnlockActive = false;
-  let activePipeGemKey = null;
-  let lastWarpGemErrorTime = 0;
+  let currentBreakMode = 'any';
+  let kingMovementMode = 'weak-smash';
   let myPicked = false;
   let hiddenStartActive = false;
   let hiddenStartRevealed = false;
@@ -174,7 +162,7 @@
   let progressNameSegments = new Map();
   let winThreshold = 40; // default, will be updated from backend
   let totalNodes = 60; // default, will be updated from backend
-  let winCondition = 'dominate';
+  let winCondition = 'king';
   const kingNodesByPlayer = new Map();
   let kingSelectionActive = false;
   let kingSelectedNodeId = null;
@@ -378,11 +366,8 @@
   // UI background bars
   let topUiBar = null;
   let bottomUiBar = null;
-  let gemCountsDisplay = null;
-  let gemCountsClickHandlerBound = false;
-  const gemCountLabels = new Map();
   
-  // Money progress bar for non-gem mode
+  // Money progress bar
   let moneyProgressContainer = null;
   let moneyProgressFill = null;
   let moneyProgressText = null;
@@ -451,7 +436,6 @@
   
   // Node juice display system
   let nodeJuiceTexts = new Map(); // nodeId -> text object
-  let nodeResourceTexts = new Map(); // nodeId -> emoji text object
   // Targeting visual indicator system
   let currentTargetNodeId = null; // The node currently being targeted (for visual indicator)
   let currentTargetSetTime = null; // Animation time when target was last set
@@ -471,17 +455,12 @@
         neutralCaptureGold: 10,
         ringJuiceToGoldRatio: 10,
         ringPayoutGold: 2,
-        warpGemCount: 3,
-        brassGemCount: 7,
-        rageGemCount: 4,
-        reverseGemCount: 6,
         baseMode: LEGACY_DEFAULT_MODE || 'basic',
         derivedMode: LEGACY_DEFAULT_MODE || 'basic',
         winCondition: 'king',
         kingCrownHealth: KING_CROWN_DEFAULT_HEALTH,
-        kingMovementMode: 'basic',
-        resources: 'standard',
-        lonelyNode: 'sinks',
+        kingMovementMode: 'weak-smash',
+        lonelyNode: 'nothing',
         nodeGrowthRate: 0.7,
         startingFlowRate: 0.01,
         secondaryFlowRate: 0.75,
@@ -500,14 +479,9 @@
         neutralCaptureGold: 3,
         ringJuiceToGoldRatio: 10,
         ringPayoutGold: 3,
-        warpGemCount: 3,
-        brassGemCount: 7,
-        rageGemCount: 4,
-        reverseGemCount: 6,
         winCondition: 'king',
         kingCrownHealth: KING_CROWN_DEFAULT_HEALTH,
         kingMovementMode: 'weak-smash',
-        resources: 'standard',
         lonelyNode: 'nothing',
         nodeGrowthRate: 0.2,
         startingFlowRate: 0.004,
@@ -550,14 +524,6 @@
   let startingJuiceValueLabel = null;
   let crownHealthSlider = null;
   let crownHealthValueLabel = null;
-  let warpGemSlider = null;
-  let warpGemValueLabel = null;
-  let brassGemSlider = null;
-  let brassGemValueLabel = null;
-  let rageGemSlider = null;
-  let rageGemValueLabel = null;
-  let reverseGemSlider = null;
-  let reverseGemValueLabel = null;
   const PIPE_COST_MIN = 0.5;
   const PIPE_COST_MAX = 2.5;
   const PIPE_COST_STEP = 0.1;
@@ -597,9 +563,6 @@
   const CROWN_HEALTH_MIN = 1;
   const CROWN_HEALTH_MAX = 300;
   const CROWN_HEALTH_STEP = 1;
-  const GEM_COUNT_MIN = 0;
-  const GEM_COUNT_MAX = 10;
-  const GEM_COUNT_STEP = 1;
   const MODE_LABELS = {
     sparse: 'Sparse',
     basic: 'OG Durb',
@@ -641,25 +604,6 @@
   const MONEY_SPEND_COLOR = '#b87333';
   const MONEY_SPEND_STROKE = '#4e2a10';
   const MONEY_GAIN_COLOR = '#ffd700';
-  const RESOURCE_EMOJIS = {
-    money: '',
-    gem: {
-      warp: '⭐',
-      brass: '🟫',
-      rage: '🔥',
-      reverse: '🔄',
-      default: '💎',
-    },
-  };
-
-  const GEM_TYPE_ORDER = ['warp', 'brass', 'rage', 'reverse'];
-
-  function normalizeGemKey(value) {
-    if (typeof value !== 'string') return null;
-    const normalized = value.trim().toLowerCase();
-    if (!normalized) return null;
-    return GEM_TYPE_ORDER.includes(normalized) ? normalized : null;
-  }
 
   function normalizePipeType(value) {
     if (typeof value === 'string') {
@@ -672,19 +616,10 @@
     return 'normal';
   }
 
-  function createEmptyGemCounts() {
-    const counts = {};
-    GEM_TYPE_ORDER.forEach((key) => {
-      counts[key] = 0;
-    });
-    return counts;
-  }
-
   function createDefaultPlayerStats() {
     return {
       nodes: 0,
       gold: 0,
-      gems: createEmptyGemCounts(),
     };
   }
 
@@ -827,39 +762,16 @@
     return Math.max(STARTING_FLOW_MIN, Math.min(STARTING_FLOW_MAX, ratio));
   }
 
-  function coerceGemCount(value, gemKey = 'warp') {
-    const numeric = Number(value);
-    const fallbackMap = {
-      warp: DEFAULT_MODE_SETTINGS.warpGemCount ?? 0,
-      brass: DEFAULT_MODE_SETTINGS.brassGemCount ?? 0,
-      rage: DEFAULT_MODE_SETTINGS.rageGemCount ?? 0,
-      reverse: DEFAULT_MODE_SETTINGS.reverseGemCount ?? 0,
-    };
-    const fallback = Object.prototype.hasOwnProperty.call(fallbackMap, gemKey)
-      ? fallbackMap[gemKey]
-      : 0;
-    if (!Number.isFinite(numeric)) return Math.round(fallback);
-    const clamped = Math.min(GEM_COUNT_MAX, Math.max(GEM_COUNT_MIN, numeric));
-    return Math.round(clamped);
-  }
-
-  function normalizeWinCondition(value) {
-    if (typeof value !== 'string') return 'dominate';
-    return value.trim().toLowerCase() === 'king' ? 'king' : 'dominate';
-  }
-
-  function normalizeResources(value) {
-    if (typeof value !== 'string') return 'standard';
-    return value.trim().toLowerCase() === 'gems' ? 'gems' : 'standard';
+  function normalizeWinCondition(_) {
+    return 'king';
   }
 
   function normalizeKingMovementMode(value) {
-    if (typeof value !== 'string') return 'basic';
+    if (typeof value !== 'string') return 'weak-smash';
     const normalized = value.trim().toLowerCase();
     if (normalized === 'smash') return 'smash';
     if (normalized === 'weak-smash' || normalized === 'weaksmash' || normalized === 'weak') return 'weak-smash';
-    if (normalized === 'standard') return 'basic';
-    return 'basic';
+    return 'weak-smash';
   }
 
   function normalizeLonelyNodeMode(value) {
@@ -884,8 +796,6 @@
     }
     const normalized = value.trim().toLowerCase();
     if (normalized === 'none') return 'none';
-    if (normalized === 'flowing') return 'flowing';
-    if (normalized === 'gem') return 'gem';
     if (normalized.startsWith('right')) return 'right-click';
     return 'cross';
   }
@@ -893,52 +803,17 @@
   function normalizeBreakMode(value) {
     if (typeof value !== 'string') return 'brass';
     const normalized = value.trim().toLowerCase();
-    if (normalized === 'any' || normalized === 'flowing' || normalized === 'double') return normalized;
+    if (normalized === 'any') return 'any';
     return 'brass';
-  }
-
-  function isFlowingBrassModeSelected(targetSettings = selectedSettings) {
-    if (!targetSettings || typeof targetSettings !== 'object') return false;
-    return normalizeBrassSetting(targetSettings.brass) === 'flowing';
   }
 
   function getEffectiveBreakMode(targetSettings = selectedSettings) {
     if (!targetSettings || typeof targetSettings !== 'object') return 'brass';
-    if (isFlowingBrassModeSelected(targetSettings)) return 'flowing';
     return normalizeBreakMode(targetSettings.breakMode);
   }
 
   function areBrassPipesDisabled() {
     return normalizeBrassSetting(selectedSettings?.brass) === 'none';
-  }
-
-  function isMagicResourceModeActive() {
-    return normalizeResources(currentResourceMode) === 'gems';
-  }
-
-  function setCurrentResourceMode(mode) {
-    currentResourceMode = normalizeResources(mode);
-    bridgePreviewWillBeBrass = computeInitialBrassPreviewState();
-    if (!isMagicResourceModeActive()) {
-      pendingBrassGemSpend = false;
-      setBrassGemModeActive(false);
-      pendingWarpGemSpend = false;
-      setWarpGemModeActive(false);
-    } else {
-      updateGemModeUi();
-      if (activeAbility === 'bridge1way' && bridgeFirstNode != null) {
-        const node = nodes.get(bridgeFirstNode);
-        const nextPreference = determineBridgeBrassPreference(node, bridgeIsBrass);
-        if (bridgeIsBrass !== nextPreference) {
-          bridgeIsBrass = nextPreference;
-        }
-        bridgePreviewWillBeBrass = computeInitialBrassPreviewState();
-        updateBrassPreviewIntersections();
-        redrawStatic();
-      }
-    }
-    updateModeOptionButtonStates();
-    updateTopUiBarDisplay();
   }
 
   function setCurrentBreakMode(mode) {
@@ -952,79 +827,22 @@
   }
 
   function doesBreakModeAllowNormalBreaks() {
-    return currentBreakMode === 'any'
-      || currentBreakMode === 'flowing'
-      || currentBreakMode === 'double';
-  }
-
-  function isFlowingBreakModeActive() {
-    return currentBreakMode === 'flowing';
-  }
-
-  function isDoubleBreakModeActive() {
-    return currentBreakMode === 'double';
+    return currentBreakMode === 'any';
   }
 
   function edgeBehavesAsBrass(edge) {
     if (!edge) return false;
     if (edge.pipeType === 'gold') return true;
-    return isFlowingBreakModeActive() && !edge.flowing;
-  }
-
-  function getMyGemCount(gemKey = 'brass') {
-    const normalized = normalizeGemKey(gemKey);
-    if (!normalized) return 0;
-    let targetId = Number.isFinite(myPlayerId) ? myPlayerId : null;
-    if (!Number.isFinite(targetId)) {
-      const storedRaw = localStorage.getItem('myPlayerId');
-      if (storedRaw != null) {
-        const storedValue = Number(storedRaw);
-        if (Number.isFinite(storedValue)) {
-          targetId = storedValue;
-        }
-      }
-    }
-    if (!Number.isFinite(targetId)) return 0;
-    const stats = ensurePlayerStats(targetId);
-    if (!stats || !stats.gems) return 0;
-    const value = Number(stats.gems[normalized]);
-    return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
-  }
-
-  function canActivateBrassGemMode() {
-    if (!isMagicResourceModeActive()) return false;
-    return getMyGemCount('brass') > 0;
-  }
-
-  function canActivateWarpGemMode() {
-    if (!isMagicResourceModeActive()) return false;
-    return getMyGemCount('warp') > 0;
-  }
-
-  function canActivateRageGemMode() {
-    if (!isMagicResourceModeActive()) return false;
-    return getMyGemCount('rage') > 0;
-  }
-
-  function canActivateReverseGemMode() {
-    if (!isMagicResourceModeActive()) return false;
-    return getMyGemCount('reverse') > 0;
+    return false;
   }
 
   function isWarpWrapUnlocked() {
-    if (!isMagicResourceModeActive()) return true;
-    if (warpGemModeActive && canActivateWarpGemMode()) {
-      return true;
-    }
-    return autoWarpUnlockStillValid();
+    return true;
   }
 
   function determineBridgeBrassPreference(startNode, useBrassHint = false) {
     if (areBrassPipesDisabled()) {
       return false;
-    }
-    if (isMagicResourceModeActive()) {
-      return brassGemModeActive && canActivateBrassGemMode();
     }
     if (isBrassModeActive()) {
       return !!(startNode && startNode.isBrass);
@@ -1039,333 +857,20 @@
     if (areBrassPipesDisabled()) return false;
     if (!bridgeIsBrass) return false;
     if (isXbModeActive()) return false;
-    if (isMagicResourceModeActive()) return true;
     return isCrossLikeModeActive();
   }
 
   function determinePipeTypeForBridge(useBrassPipe = false) {
-    if (isMagicResourceModeActive()) {
-      if (rageGemModeActive && canActivateRageGemMode()) return 'rage';
-      if (reverseGemModeActive && canActivateReverseGemMode()) return 'reverse';
-      if (brassGemModeActive && canActivateBrassGemMode()) return 'gold';
-    }
     return useBrassPipe ? 'gold' : 'normal';
-  }
-
-  function setBrassGemModeActive(enabled, options = {}) {
-    const desired = Boolean(enabled) && isMagicResourceModeActive() && canActivateBrassGemMode();
-    if (desired) {
-      activePipeGemKey = 'brass';
-      if (rageGemModeActive) {
-        rageGemModeActive = false;
-        pendingRageGemSpend = false;
-      }
-      if (reverseGemModeActive) {
-        reverseGemModeActive = false;
-        pendingReverseGemSpend = false;
-      }
-    } else if (activePipeGemKey === 'brass') {
-      activePipeGemKey = null;
-    }
-    if (brassGemModeActive === desired) {
-      if (isMagicResourceModeActive()) {
-        bridgeIsBrass = brassGemModeActive && canActivateBrassGemMode();
-      }
-      updateGemModeUi();
-      return;
-    }
-    brassGemModeActive = desired;
-    const shouldClearPending = options.clearPending !== false;
-    if (!desired && shouldClearPending) {
-      pendingBrassGemSpend = false;
-    }
-    if (!desired && activePipeGemKey === 'brass') {
-      activePipeGemKey = null;
-    }
-    updateGemModeUi();
-    if (isMagicResourceModeActive()) {
-      bridgeIsBrass = brassGemModeActive && canActivateBrassGemMode();
-    }
-    if (activeAbility === 'bridge1way' && bridgeFirstNode != null) {
-      const node = nodes.get(bridgeFirstNode);
-      const nextPreference = determineBridgeBrassPreference(node, bridgeIsBrass);
-      if (bridgeIsBrass !== nextPreference) {
-        bridgeIsBrass = nextPreference;
-      }
-      bridgePreviewWillBeBrass = computeInitialBrassPreviewState();
-      updateBrassPreviewIntersections();
-      redrawStatic();
-    }
-  }
-
-  function setWarpGemModeActive(enabled, options = {}) {
-    const desired = Boolean(enabled) && isMagicResourceModeActive() && canActivateWarpGemMode();
-    if (warpGemModeActive === desired) {
-      updateGemModeUi();
-      return;
-    }
-    warpGemModeActive = desired;
-    resetAutoWarpGemUnlock();
-    const shouldClearPending = options.clearPending !== false;
-    if (!desired && shouldClearPending) {
-      pendingWarpGemSpend = false;
-    }
-    if (!desired) {
-      warpWrapUsed = false;
-      lastWarpAxis = null;
-      lastWarpDirection = null;
-    }
-    updateGemModeUi();
-    if (activeAbility === 'bridge1way') {
-      redrawStatic();
-    }
-  }
-
-  function setRageGemModeActive(enabled, options = {}) {
-    const desired = Boolean(enabled) && isMagicResourceModeActive() && canActivateRageGemMode();
-    if (desired) {
-      activePipeGemKey = 'rage';
-      if (brassGemModeActive) {
-        brassGemModeActive = false;
-        pendingBrassGemSpend = false;
-      }
-      if (reverseGemModeActive) {
-        reverseGemModeActive = false;
-        pendingReverseGemSpend = false;
-      }
-    } else if (activePipeGemKey === 'rage') {
-      activePipeGemKey = null;
-    }
-    if (rageGemModeActive === desired) {
-      if (desired) {
-        bridgeIsBrass = false;
-      } else if (isMagicResourceModeActive()) {
-        bridgeIsBrass = brassGemModeActive && canActivateBrassGemMode();
-      }
-      updateGemModeUi();
-      return;
-    }
-    rageGemModeActive = desired;
-    const shouldClearPending = options.clearPending !== false;
-    if (!desired && shouldClearPending) {
-      pendingRageGemSpend = false;
-    }
-    if (desired) {
-      bridgeIsBrass = false;
-    } else if (activePipeGemKey !== 'brass') {
-      bridgeIsBrass = brassGemModeActive && canActivateBrassGemMode();
-    }
-    updateGemModeUi();
-    if (activeAbility === 'bridge1way') {
-      bridgePreviewWillBeBrass = computeInitialBrassPreviewState();
-      updateBrassPreviewIntersections();
-      redrawStatic();
-    }
-  }
-
-  function setReverseGemModeActive(enabled, options = {}) {
-    const desired = Boolean(enabled) && isMagicResourceModeActive() && canActivateReverseGemMode();
-    if (desired) {
-      activePipeGemKey = 'reverse';
-      if (brassGemModeActive) {
-        brassGemModeActive = false;
-        pendingBrassGemSpend = false;
-      }
-      if (rageGemModeActive) {
-        rageGemModeActive = false;
-        pendingRageGemSpend = false;
-      }
-    } else if (activePipeGemKey === 'reverse') {
-      activePipeGemKey = null;
-    }
-    if (reverseGemModeActive === desired) {
-      if (desired) {
-        bridgeIsBrass = false;
-      } else if (isMagicResourceModeActive()) {
-        bridgeIsBrass = brassGemModeActive && canActivateBrassGemMode();
-      }
-      updateGemModeUi();
-      return;
-    }
-    reverseGemModeActive = desired;
-    const shouldClearPending = options.clearPending !== false;
-    if (!desired && shouldClearPending) {
-      pendingReverseGemSpend = false;
-    }
-    if (desired) {
-      bridgeIsBrass = false;
-    } else if (activePipeGemKey !== 'brass') {
-      bridgeIsBrass = brassGemModeActive && canActivateBrassGemMode();
-    }
-    updateGemModeUi();
-    if (activeAbility === 'bridge1way') {
-      bridgePreviewWillBeBrass = computeInitialBrassPreviewState();
-      updateBrassPreviewIntersections();
-      redrawStatic();
-    }
-  }
-
-  function updateGemModeUi() {
-    if (!gemCountsDisplay || !gemCountsDisplay.isConnected) return;
-    const interactive = isMagicResourceModeActive();
-    gemCountsDisplay.classList.toggle('interactive', interactive);
-
-    const brassContainer = gemCountsDisplay.querySelector('[data-gem="brass"]');
-    if (brassContainer) {
-      const canUseBrass = canActivateBrassGemMode();
-      brassContainer.classList.toggle('disabled', !canUseBrass);
-      brassContainer.classList.toggle('active', canUseBrass && brassGemModeActive);
-      brassContainer.setAttribute('aria-disabled', canUseBrass ? 'false' : 'true');
-    }
-
-    const rageContainer = gemCountsDisplay.querySelector('[data-gem="rage"]');
-    if (rageContainer) {
-      const canUseRage = canActivateRageGemMode();
-      rageContainer.classList.toggle('disabled', !canUseRage);
-      rageContainer.classList.toggle('active', canUseRage && rageGemModeActive);
-      rageContainer.setAttribute('aria-disabled', canUseRage ? 'false' : 'true');
-    }
-
-    const reverseContainer = gemCountsDisplay.querySelector('[data-gem="reverse"]');
-    if (reverseContainer) {
-      const canUseReverse = canActivateReverseGemMode();
-      reverseContainer.classList.toggle('disabled', !canUseReverse);
-      reverseContainer.classList.toggle('active', canUseReverse && reverseGemModeActive);
-      reverseContainer.setAttribute('aria-disabled', canUseReverse ? 'false' : 'true');
-    }
-
-    const warpContainer = gemCountsDisplay.querySelector('[data-gem="warp"]');
-    if (warpContainer) {
-      const canUseWarp = canActivateWarpGemMode();
-      warpContainer.classList.toggle('disabled', !canUseWarp);
-      warpContainer.classList.toggle('active', canUseWarp && warpGemModeActive);
-      warpContainer.setAttribute('aria-disabled', canUseWarp ? 'false' : 'true');
-    }
-  }
-
-  function handleGemCountsClick(ev) {
-    if (!isMagicResourceModeActive()) return;
-    const target = ev.target;
-    const container = target && typeof target.closest === 'function'
-      ? target.closest('.gem-count')
-      : null;
-    if (!container) return;
-    const gemData = container.dataset ? container.dataset.gem : null;
-    const gemKey = normalizeGemKey(gemData);
-    if (gemKey === 'brass') {
-      ev.preventDefault();
-      ev.stopPropagation();
-      if (!canActivateBrassGemMode()) {
-        showErrorMessage('No brass gems available', 'error');
-        return;
-      }
-      setBrassGemModeActive(!brassGemModeActive);
-      return;
-    }
-    if (gemKey === 'rage') {
-      ev.preventDefault();
-      ev.stopPropagation();
-      if (!canActivateRageGemMode()) {
-        showErrorMessage('No rage gems available', 'error');
-        return;
-      }
-      setRageGemModeActive(!rageGemModeActive);
-      return;
-    }
-    if (gemKey === 'reverse') {
-      ev.preventDefault();
-      ev.stopPropagation();
-      if (!canActivateReverseGemMode()) {
-        showErrorMessage('No reverse gems available', 'error');
-        return;
-      }
-      setReverseGemModeActive(!reverseGemModeActive);
-      return;
-    }
-    if (gemKey === 'warp') {
-      ev.preventDefault();
-      ev.stopPropagation();
-      if (!canActivateWarpGemMode()) {
-        showErrorMessage('No warp gems available', 'error');
-        return;
-      }
-      setWarpGemModeActive(!warpGemModeActive);
-    }
-  }
-
-  function notifyWarpGemRequired() {
-    const now = Date.now();
-    if (now - lastWarpGemErrorTime < 600) return;
-    lastWarpGemErrorTime = now;
-    showErrorMessage('Warp gem required to warp pipes', 'error');
-  }
-
-  function resetAutoWarpGemUnlock() {
-    warpGemAutoUnlockActive = false;
-  }
-
-  function autoWarpUnlockStillValid() {
-    if (!warpGemAutoUnlockActive) return false;
-    if (!canActivateWarpGemMode()) {
-      resetAutoWarpGemUnlock();
-      return false;
-    }
-    if (activeAbility !== 'bridge1way' || bridgeFirstNode == null) {
-      resetAutoWarpGemUnlock();
-      return false;
-    }
-    if (!isWarpFrontendActive()) {
-      resetAutoWarpGemUnlock();
-      return false;
-    }
-    return true;
-  }
-
-  function isPointerOutsideWarpBounds(screenX, screenY) {
-    if (!warpBoundsScreen) return false;
-    return (
-      screenX < warpBoundsScreen.minX
-      || screenX > warpBoundsScreen.maxX
-      || screenY < warpBoundsScreen.minY
-      || screenY > warpBoundsScreen.maxY
-    );
-  }
-
-  function maybeAutoUnlockWarpWrap(screenX, screenY) {
-    if (!isMagicResourceModeActive()) return false;
-    if (warpGemModeActive || warpGemAutoUnlockActive) return false;
-    // Allow for pipe building or king smash movement
-    const isBridgeMode = activeAbility === 'bridge1way' && bridgeFirstNode != null;
-    const isKingSmashMovement = kingSelectionActive && isKingSmashMode();
-    if (!isBridgeMode && !isKingSmashMovement) return false;
-    if (!canActivateWarpGemMode()) return false;
-    if (!isWarpFrontendActive()) return false;
-    if (!isPointerOutsideWarpBounds(screenX, screenY)) return false;
-    warpGemAutoUnlockActive = true;
-    return true;
   }
 
   function normalizeNodeResourceType(value) {
     if (typeof value !== 'string') return 'money';
-    return value.trim().toLowerCase() === 'gem' ? 'gem' : 'money';
+    return value.trim().toLowerCase() === 'money' ? 'money' : 'money';
   }
 
-  function normalizeNodeResourceKey(value) {
-    if (typeof value !== 'string') return null;
-    const trimmed = value.trim().toLowerCase();
-    return trimmed ? trimmed : null;
-  }
-
-  function getResourceEmoji(resourceType, resourceKey) {
-    const normalizedType = normalizeNodeResourceType(resourceType);
-    if (normalizedType === 'gem') {
-      const normalizedKey = normalizeNodeResourceKey(resourceKey);
-      if (normalizedKey && Object.prototype.hasOwnProperty.call(RESOURCE_EMOJIS.gem, normalizedKey)) {
-        return RESOURCE_EMOJIS.gem[normalizedKey];
-      }
-      return RESOURCE_EMOJIS.gem.default;
-    }
-    return RESOURCE_EMOJIS.money;
+  function getResourceEmoji() {
+    return '';
   }
 
   function deriveModeFromSettings(settings = selectedSettings) {
@@ -1375,11 +880,6 @@
     if (!settings || typeof settings !== 'object') return 'flat';
     const screen = typeof settings.screen === 'string' ? settings.screen.toLowerCase() : 'flat';
     const brassSetting = normalizeBrassSetting(settings.brass);
-    if (brassSetting === 'gem') {
-      if (screen === 'warp') return 'warp';
-      if (screen === 'semi') return 'semi';
-      return 'flat';
-    }
     const useIntentionalBrass = brassSetting === 'right-click';
     if (screen === 'warp') {
       return useIntentionalBrass ? 'i-warp' : 'warp';
@@ -1395,11 +895,7 @@
     const screenLabel = screenValue === 'warp' ? 'Warp' : (screenValue === 'semi' ? 'Semi' : 'Flat');
     const brassValue = normalizeBrassSetting(settings.brass);
     let brassLabel = 'Cross';
-    if (brassValue === 'gem') {
-      brassLabel = 'Gem';
-    } else if (brassValue === 'flowing') {
-      brassLabel = 'Flowing';
-    } else if (brassValue === 'right-click') {
+    if (brassValue === 'right-click') {
       brassLabel = 'Right-Click';
     } else if (brassValue === 'none') {
       brassLabel = 'None';
@@ -1408,10 +904,6 @@
     let breakLabel = 'Brass';
     if (normalizedBreak === 'any') {
       breakLabel = 'Any';
-    } else if (normalizedBreak === 'flowing') {
-      breakLabel = 'Flowing';
-    } else if (normalizedBreak === 'double') {
-      breakLabel = 'Double';
     }
     const startLabel = (settings.brassStart === 'anywhere') ? 'Anywhere' : 'Owned';
     const startModeLabel = (settings.gameStart === 'hidden-split') ? 'Hidden' : 'Open';
@@ -1421,9 +913,8 @@
     const ringRatioLabel = coerceRingRatio(settings.ringJuiceToGoldRatio);
     const ringPayoutLabel = coerceRingPayout(settings.ringPayoutGold);
     const startJuiceLabel = coerceStartingNodeJuice(settings.startingNodeJuice);
-    const winConLabel = normalizeWinCondition(settings.winCondition) === 'king' ? 'King' : 'Dominate';
-    const resourcesLabel = normalizeResources(settings.resources) === 'gems' ? 'Gems' : 'Standard';
-    return `Resources ${resourcesLabel} · Win-Con ${winConLabel} · ${screenLabel} · ${brassLabel} · Break ${breakLabel} · ${startLabel} · ${startModeLabel} · ${costLabel} · Passive ${passiveLabel} · Neutral ${neutralLabel} · Ring ${ringRatioLabel}:${ringPayoutLabel} · Start ${startJuiceLabel}`;
+    const winConLabel = 'King';
+    return `Win-Con ${winConLabel} · ${screenLabel} · ${brassLabel} · Break ${breakLabel} · ${startLabel} · ${startModeLabel} · ${costLabel} · Passive ${passiveLabel} · Neutral ${neutralLabel} · Ring ${ringRatioLabel}:${ringPayoutLabel} · Start ${startJuiceLabel}`;
   }
 
   function updateModeOptionButtonStates() {
@@ -1434,12 +925,7 @@
     const currentBreakMode = normalizeBreakMode(selectedSettings.breakMode || DEFAULT_MODE_SETTINGS.breakMode);
     const currentCost = Number(coercePipeCost(selectedSettings.pipeCost));
     const currentGameStart = (selectedSettings.gameStart || DEFAULT_MODE_SETTINGS.gameStart).toLowerCase();
-    const currentResources = normalizeResources(selectedSettings.resources);
     const hiddenAllowed = isHiddenStartAllowed();
-    const brassGroup = document.querySelector('.mode-option-group[data-setting-group="brass"]');
-    if (brassGroup) {
-      brassGroup.classList.toggle('gem-mode', currentResources === 'gems');
-    }
     modeOptionButtons.forEach((btn) => {
       const setting = btn?.dataset?.setting;
       const value = btn?.dataset?.value;
@@ -1453,34 +939,14 @@
       let isActive = false;
       if (setting === 'screen') {
         isActive = value.toLowerCase() === currentScreen;
-        if (currentResources === 'gems') {
-          btn.disabled = true;
-          btn.classList.add('disabled');
-          btn.title = 'Gem mode requires the Warp screen';
-        }
       } else if (setting === 'brass') {
         const normalizedValue = normalizeBrassSetting(value);
-        if (currentResources === 'gems') {
-          btn.disabled = true;
-          btn.classList.add('disabled');
-          btn.classList.remove('active');
-          btn.title = 'Brass selection handled by gems';
-          isActive = false;
-        } else {
-          const target = normalizeBrassSetting(currentBrass);
-          isActive = normalizedValue === target;
-        }
+        const target = normalizeBrassSetting(currentBrass);
+        isActive = normalizedValue === target;
       } else if (setting === 'brassStart') {
         const normalized = value.toLowerCase();
-        if (currentResources === 'gems') {
-          btn.disabled = true;
-          btn.classList.add('disabled');
-          btn.title = 'Gem mode requires starting from owned nodes';
-          isActive = normalized === 'owned';
-        } else {
-          const target = currentStart === 'anywhere' ? 'anywhere' : 'owned';
-          isActive = normalized === target;
-        }
+        const target = currentStart === 'anywhere' ? 'anywhere' : 'owned';
+        isActive = normalized === target;
       } else if (setting === 'breakMode') {
         const normalized = normalizeBreakMode(value);
         isActive = normalized === currentBreakMode;
@@ -1496,19 +962,11 @@
         } else {
           isActive = target === current;
         }
-      } else if (setting === 'winCondition') {
-        const normalized = normalizeWinCondition(value);
-        isActive = normalized === normalizeWinCondition(selectedSettings.winCondition);
-      } else if (setting === 'resources') {
-        isActive = normalizeResources(value) === currentResources;
       } else if (setting === 'kingMovementMode') {
         const normalized = normalizeKingMovementMode(value);
         isActive = normalized === normalizeKingMovementMode(selectedSettings.kingMovementMode);
       } else if (setting === 'bridgeCost') {
         isActive = Number(value) === currentCost;
-      } else if (setting === 'lonelyNode') {
-        const normalized = normalizeLonelyNodeMode(value);
-        isActive = normalized === normalizeLonelyNodeMode(selectedSettings.lonelyNode);
       }
       btn.classList.toggle('active', isActive);
     });
@@ -1623,66 +1081,21 @@
     } else {
       next.secondaryFlowRate = coerceSecondaryFlowRate(next.secondaryFlowRate);
     }
-    if (Object.prototype.hasOwnProperty.call(overrides, 'warpGemCount')) {
-      next.warpGemCount = coerceGemCount(overrides.warpGemCount, 'warp');
-    } else {
-      next.warpGemCount = coerceGemCount(next.warpGemCount, 'warp');
-    }
-    if (Object.prototype.hasOwnProperty.call(overrides, 'brassGemCount')) {
-      next.brassGemCount = coerceGemCount(overrides.brassGemCount, 'brass');
-    } else {
-      next.brassGemCount = coerceGemCount(next.brassGemCount, 'brass');
-    }
-    if (Object.prototype.hasOwnProperty.call(overrides, 'rageGemCount')) {
-      next.rageGemCount = coerceGemCount(overrides.rageGemCount, 'rage');
-    } else {
-      next.rageGemCount = coerceGemCount(next.rageGemCount, 'rage');
-    }
-    if (Object.prototype.hasOwnProperty.call(overrides, 'reverseGemCount')) {
-      next.reverseGemCount = coerceGemCount(overrides.reverseGemCount, 'reverse');
-    } else {
-      next.reverseGemCount = coerceGemCount(next.reverseGemCount, 'reverse');
-    }
-    if (Object.prototype.hasOwnProperty.call(overrides, 'winCondition')) {
-      next.winCondition = normalizeWinCondition(overrides.winCondition);
-    } else {
-      next.winCondition = normalizeWinCondition(next.winCondition);
-    }
-    if (Object.prototype.hasOwnProperty.call(overrides, 'resources')) {
-      next.resources = normalizeResources(overrides.resources);
-    } else {
-      next.resources = normalizeResources(next.resources);
-    }
     if (Object.prototype.hasOwnProperty.call(overrides, 'kingMovementMode')) {
       next.kingMovementMode = normalizeKingMovementMode(overrides.kingMovementMode);
     } else {
       next.kingMovementMode = normalizeKingMovementMode(next.kingMovementMode);
     }
-    if (Object.prototype.hasOwnProperty.call(overrides, 'lonelyNode')) {
-      next.lonelyNode = normalizeLonelyNodeMode(overrides.lonelyNode);
-    } else {
-      next.lonelyNode = normalizeLonelyNodeMode(next.lonelyNode);
-    }
+    next.winCondition = 'king';
+    next.lonelyNode = 'nothing';
 
-    if (next.resources === 'gems') {
-      next.brass = 'gem';
-      next.brassStart = 'owned';
-      next.screen = 'warp';
-    } else {
-      const normalizedBrass = normalizeBrassSetting(next.brass);
-      if (normalizedBrass === 'gem') {
-        next.brass = normalizeBrassSetting(DEFAULT_MODE_SETTINGS.brass);
-      } else {
-        next.brass = normalizedBrass;
-      }
-    }
+    next.brass = normalizeBrassSetting(next.brass);
 
     if (next.gameStart === 'hidden-split' && !isHiddenStartAllowed()) {
       next.gameStart = 'open';
     }
 
     selectedSettings = next;
-    setCurrentResourceMode(selectedSettings.resources);
     kingMovementMode = normalizeKingMovementMode(selectedSettings.kingMovementMode);
     kingCrownDefaultMax = coerceKingCrownHealth(selectedSettings.kingCrownHealth);
     selectedMode = deriveModeFromSettings(selectedSettings);
@@ -1699,16 +1112,13 @@
     syncSecondaryFlowSlider();
     syncStartingJuiceSlider();
     syncCrownHealthSlider();
-    syncGemCountSliders();
     updatePlayBotAvailability(true);
   }
 
   function buildModeSettingsPayload() {
     const normalizedBrass = normalizeBrassSetting(selectedSettings.brass);
-    const payloadBrass = normalizedBrass === 'flowing' ? 'cross' : normalizedBrass;
-    const payloadBreakMode = normalizedBrass === 'flowing'
-      ? 'flowing'
-      : normalizeBreakMode(selectedSettings.breakMode);
+    const payloadBrass = normalizedBrass;
+    const payloadBreakMode = normalizeBreakMode(selectedSettings.breakMode);
     return {
       screen: selectedSettings.screen,
       brass: payloadBrass,
@@ -1727,16 +1137,9 @@
       nodeGrowthRate: coerceNodeGrowthRate(selectedSettings.nodeGrowthRate),
       startingFlowRate: coerceStartingFlowRate(selectedSettings.startingFlowRate),
       secondaryFlowRate: coerceSecondaryFlowRate(selectedSettings.secondaryFlowRate),
-      warpGemCount: coerceGemCount(selectedSettings.warpGemCount, 'warp'),
-      brassGemCount: coerceGemCount(selectedSettings.brassGemCount, 'brass'),
-      rageGemCount: coerceGemCount(selectedSettings.rageGemCount, 'rage'),
-      reverseGemCount: coerceGemCount(selectedSettings.reverseGemCount, 'reverse'),
       baseMode: selectedMode,
       derivedMode: selectedMode,
-      winCondition: selectedSettings.winCondition || 'dominate',
-      resources: normalizeResources(selectedSettings.resources),
       kingMovementMode: normalizeKingMovementMode(selectedSettings.kingMovementMode),
-      lonelyNode: normalizeLonelyNodeMode(selectedSettings.lonelyNode),
     };
   }
 
@@ -1764,13 +1167,6 @@
     if (Object.prototype.hasOwnProperty.call(payload, 'nodeGrowthRate')) overrides.nodeGrowthRate = payload.nodeGrowthRate;
     if (Object.prototype.hasOwnProperty.call(payload, 'startingFlowRate')) overrides.startingFlowRate = payload.startingFlowRate;
     if (Object.prototype.hasOwnProperty.call(payload, 'secondaryFlowRate')) overrides.secondaryFlowRate = payload.secondaryFlowRate;
-    if (Object.prototype.hasOwnProperty.call(payload, 'warpGemCount')) overrides.warpGemCount = payload.warpGemCount;
-    if (Object.prototype.hasOwnProperty.call(payload, 'brassGemCount')) overrides.brassGemCount = payload.brassGemCount;
-    if (Object.prototype.hasOwnProperty.call(payload, 'rageGemCount')) overrides.rageGemCount = payload.rageGemCount;
-    if (Object.prototype.hasOwnProperty.call(payload, 'reverseGemCount')) overrides.reverseGemCount = payload.reverseGemCount;
-    if (typeof payload.lonelyNode === 'string') overrides.lonelyNode = payload.lonelyNode;
-    if (Object.prototype.hasOwnProperty.call(payload, 'winCondition')) overrides.winCondition = payload.winCondition;
-    if (Object.prototype.hasOwnProperty.call(payload, 'resources')) overrides.resources = payload.resources;
     if (Object.prototype.hasOwnProperty.call(payload, 'kingMovementMode')) overrides.kingMovementMode = payload.kingMovementMode;
     applySelectedSettings(overrides);
   }
@@ -1867,19 +1263,6 @@
     const value = coerceKingCrownHealth(selectedSettings.kingCrownHealth);
     crownHealthSlider.value = String(value);
     crownHealthValueLabel.textContent = String(value);
-  }
-
-  function syncGemCountSliderControl(sliderEl, labelEl, value) {
-    if (!sliderEl || !labelEl) return;
-    sliderEl.value = String(value);
-    labelEl.textContent = String(value);
-  }
-
-  function syncGemCountSliders() {
-    syncGemCountSliderControl(warpGemSlider, warpGemValueLabel, coerceGemCount(selectedSettings.warpGemCount, 'warp'));
-    syncGemCountSliderControl(brassGemSlider, brassGemValueLabel, coerceGemCount(selectedSettings.brassGemCount, 'brass'));
-    syncGemCountSliderControl(rageGemSlider, rageGemValueLabel, coerceGemCount(selectedSettings.rageGemCount, 'rage'));
-    syncGemCountSliderControl(reverseGemSlider, reverseGemValueLabel, coerceGemCount(selectedSettings.reverseGemCount, 'reverse'));
   }
 
   function pipeStartRequiresOwnership() {
@@ -3338,7 +2721,6 @@ function clearBridgeSelection() {
   lastDoubleWarpWarningTime = 0;
   lastWarpAxis = null;
   lastWarpDirection = null;
-  resetAutoWarpGemUnlock();
 }
 
 
@@ -3719,14 +3101,6 @@ function clearBridgeSelection() {
     startingJuiceValueLabel = document.getElementById('startingJuiceValue');
     crownHealthSlider = document.getElementById('crownHealthSlider');
     crownHealthValueLabel = document.getElementById('crownHealthValue');
-    warpGemSlider = document.getElementById('warpGemSlider');
-    warpGemValueLabel = document.getElementById('warpGemValue');
-    brassGemSlider = document.getElementById('brassGemSlider');
-    brassGemValueLabel = document.getElementById('brassGemValue');
-    rageGemSlider = document.getElementById('rageGemSlider');
-    rageGemValueLabel = document.getElementById('rageGemValue');
-    reverseGemSlider = document.getElementById('reverseGemSlider');
-    reverseGemValueLabel = document.getElementById('reverseGemValue');
 
     if (modeOptionButtons.length) {
       modeOptionButtons.forEach((btn) => {
@@ -3891,25 +3265,6 @@ function clearBridgeSelection() {
       crownHealthSlider.addEventListener('input', handler);
       crownHealthSlider.addEventListener('change', handler);
     }
-
-    const bindGemSlider = (sliderEl, changeKey) => {
-      if (!sliderEl) return null;
-      sliderEl.min = String(GEM_COUNT_MIN);
-      sliderEl.max = String(GEM_COUNT_MAX);
-      sliderEl.step = String(GEM_COUNT_STEP);
-      const handler = (event) => {
-        const sliderValue = Number(event.target.value);
-        applySelectedSettings({ [changeKey]: sliderValue });
-      };
-      sliderEl.addEventListener('input', handler);
-      sliderEl.addEventListener('change', handler);
-      return handler;
-    };
-
-    bindGemSlider(warpGemSlider, 'warpGemCount');
-    bindGemSlider(brassGemSlider, 'brassGemCount');
-    bindGemSlider(rageGemSlider, 'rageGemCount');
-    bindGemSlider(reverseGemSlider, 'reverseGemCount');
 
     const closeModePanel = () => {
       if (!modeOptionsPanel) return;
@@ -4440,24 +3795,6 @@ function clearBridgeSelection() {
     // Initialize UI background bars
     topUiBar = document.getElementById('topUiBar');
     bottomUiBar = document.getElementById('bottomUiBar');
-    gemCountsDisplay = document.getElementById('gemCountsDisplay');
-    if (gemCountsDisplay && !gemCountsClickHandlerBound) {
-      gemCountsDisplay.addEventListener('click', handleGemCountsClick);
-      gemCountsClickHandlerBound = true;
-    }
-    gemCountLabels.clear();
-    if (gemCountsDisplay) {
-      GEM_TYPE_ORDER.forEach((key) => {
-        const container = gemCountsDisplay.querySelector(`[data-gem="${key}"]`);
-        if (!container) return;
-        const numberEl = container.querySelector('.gem-number');
-        if (numberEl) {
-          gemCountLabels.set(key, numberEl);
-        }
-      });
-    }
-    updateGemModeUi();
-    updateGemCountsDisplay();
     
     // Initialize money progress bar elements
     moneyProgressContainer = document.getElementById('moneyProgressContainer');
@@ -5042,10 +4379,6 @@ function clearBridgeSelection() {
       if (text) text.destroy();
     });
     nodeJuiceTexts.clear();
-    nodeResourceTexts.forEach(text => {
-      if (text) text.destroy();
-    });
-    nodeResourceTexts.clear();
     
     // Clear crown health displays
     crownHealthDisplays.forEach(display => {
@@ -5055,7 +4388,7 @@ function clearBridgeSelection() {
 
     gameMode = normalizeMode(msg.mode || 'basic');
     const initWinCon = msg.winCondition ?? (msg.modeSettings && msg.modeSettings.winCondition);
-    winCondition = normalizeWinCondition(initWinCon || 'dominate');
+    winCondition = normalizeWinCondition(initWinCon || 'king');
     if (msg.modeSettings) {
       syncSelectedSettingsFromPayload(msg.modeSettings);
       selectedMode = deriveModeFromSettings(selectedSettings);
@@ -5083,9 +4416,6 @@ function clearBridgeSelection() {
     }
     const initBreakMode = (msg.modeSettings && msg.modeSettings.breakMode) || selectedSettings.breakMode;
     setCurrentBreakMode(initBreakMode);
-    const initResourceMode = (msg.modeSettings && msg.modeSettings.resources) || selectedSettings.resources;
-    setCurrentResourceMode(initResourceMode);
-
     // Clear any lingering edge flow labels between games
     edgeFlowTexts.forEach(text => {
       if (text) text.destroy();
@@ -5109,8 +4439,6 @@ function clearBridgeSelection() {
           kingOwnerRaw = null,
           crownHealthRaw = null,
           crownMaxRaw = null,
-          resourceTypeRaw = null,
-          resourceKeyRaw = null,
         ] = arr;
         const isBrass = Number(brassFlag) === 1;
         const parsedKingOwner = kingOwnerRaw == null ? null : Number(kingOwnerRaw);
@@ -5139,8 +4467,6 @@ function clearBridgeSelection() {
         }
         const normalizedCrownMax = Number.isFinite(crownMax) ? Math.max(0, crownMax) : 0;
         const normalizedCrownHealth = Number.isFinite(crownHealth) ? Math.max(0, crownHealth) : 0;
-        const resourceType = normalizeNodeResourceType(resourceTypeRaw);
-        const resourceKey = resourceType === 'gem' ? normalizeNodeResourceKey(resourceKeyRaw) : null;
         nodes.set(id, {
           x,
           y,
@@ -5161,8 +4487,6 @@ function clearBridgeSelection() {
           kingCrownFallen: false,
           kingCrownHealth: normalizedCrownHealth,
           kingCrownMax: normalizedCrownMax,
-          resourceType,
-          resourceKey,
         });
       }
     }
@@ -5306,9 +4630,6 @@ function clearBridgeSelection() {
         stats.nodes = Math.max(0, Number(count) || 0);
       });
     }
-
-    syncGemCountsFromPayload(msg.gemCounts);
-    updateGemCountsDisplay();
 
     myAutoExpand = persistentAutoExpand;
     if (Array.isArray(msg.autoExpand)) {
@@ -5751,8 +5072,6 @@ function clearBridgeSelection() {
           kingOwnerRaw = null,
           crownHealthRaw = null,
           crownMaxRaw = null,
-          resourceTypeRaw = null,
-          resourceKeyRaw = null,
         ] = entry;
         if (fallenKingMarkers.has(id)) {
           fallenKingMarkers.delete(id);
@@ -5770,9 +5089,6 @@ function clearBridgeSelection() {
           node.owner = owner;
           node.pendingGold = Number(pendingGold) || 0;
           node.isBrass = Number(brassFlag) === 1;
-          const resourceType = normalizeNodeResourceType(resourceTypeRaw);
-          node.resourceType = resourceType;
-          node.resourceKey = resourceType === 'gem' ? normalizeNodeResourceKey(resourceKeyRaw) : null;
           const parsedKingOwner = kingOwnerRaw == null ? null : Number(kingOwnerRaw);
           const kingOwnerId = Number.isFinite(parsedKingOwner) ? parsedKingOwner : null;
           node.kingOwnerId = kingOwnerId;
@@ -5958,9 +5274,6 @@ function clearBridgeSelection() {
       });
     }
 
-    syncGemCountsFromPayload(msg.gemCounts);
-    updateGemCountsDisplay();
-
     if (typeof msg.winThreshold === 'number') winThreshold = msg.winThreshold;
     if (typeof msg.totalNodes === 'number') totalNodes = msg.totalNodes;
 
@@ -6124,14 +5437,6 @@ function clearBridgeSelection() {
       activeAbility = null;
       clearBridgeSelection();
       hideBridgeCostDisplay();
-      pendingBrassGemSpend = false;
-      setBrassGemModeActive(false);
-      pendingWarpGemSpend = false;
-      setWarpGemModeActive(false);
-      pendingRageGemSpend = false;
-      setRageGemModeActive(false);
-      pendingReverseGemSpend = false;
-      setReverseGemModeActive(false);
     }
   }
 
@@ -6203,38 +5508,6 @@ function clearBridgeSelection() {
     const mapped = translateErrorMessage(msg.message, 'bridge');
     const variant = mapped.toLowerCase().includes('money') ? 'money' : 'error';
     showErrorMessage(mapped, variant);
-    if (pendingWarpGemSpend) {
-      pendingWarpGemSpend = false;
-      if (isMagicResourceModeActive()) {
-        setWarpGemModeActive(true);
-      } else {
-        setWarpGemModeActive(false);
-      }
-    }
-    if (pendingBrassGemSpend) {
-      pendingBrassGemSpend = false;
-      if (isMagicResourceModeActive()) {
-        setBrassGemModeActive(true);
-      } else {
-        setBrassGemModeActive(false);
-      }
-    }
-    if (pendingRageGemSpend) {
-      pendingRageGemSpend = false;
-      if (isMagicResourceModeActive()) {
-        setRageGemModeActive(true);
-      } else {
-        setRageGemModeActive(false);
-      }
-    }
-    if (pendingReverseGemSpend) {
-      pendingReverseGemSpend = false;
-      if (isMagicResourceModeActive()) {
-        setReverseGemModeActive(true);
-      } else {
-        setReverseGemModeActive(false);
-      }
-    }
   }
 
   function handleReverseEdgeError(msg) {
@@ -6249,11 +5522,6 @@ function clearBridgeSelection() {
     if (juiceText) {
       juiceText.destroy();
       nodeJuiceTexts.delete(nodeId);
-    }
-    const emojiText = nodeResourceTexts.get(nodeId);
-    if (emojiText) {
-      emojiText.destroy();
-      nodeResourceTexts.delete(nodeId);
     }
   }
 
@@ -6718,8 +5986,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
       y: Number(snapshot.y) || 0,
       size: Number(snapshot.size ?? snapshot.juice ?? 0) || 0,
       owner: Number.isFinite(normalizedOwner) ? normalizedOwner : null,
-      resourceType: normalizeNodeResourceType(snapshot.resourceType),
-      resourceKey: snapshot.resourceKey,
       isBrass: snapshot.isBrass === true || (typeof snapshot.nodeType === 'string' && snapshot.nodeType.toLowerCase() === 'brass'),
       startTime: animationTime,
       duration: NODE_SINK_DURATION_SEC,
@@ -6767,18 +6033,10 @@ function fallbackRemoveEdgesForNode(nodeId) {
     const pendingGold = Number(data.pendingGold) || 0;
     const owner = (data.owner == null) ? null : Number(data.owner);
     const isBrass = data.isBrass === true || Number(data.isBrass) === 1;
-    const resourceType = normalizeNodeResourceType(data.resourceType);
-    const resourceKey = resourceType === 'gem' ? normalizeNodeResourceKey(data.resourceKey) : null;
-
     const existingText = nodeJuiceTexts.get(id);
     if (existingText) {
       existingText.destroy();
       nodeJuiceTexts.delete(id);
-    }
-    const existingEmoji = nodeResourceTexts.get(id);
-    if (existingEmoji) {
-      existingEmoji.destroy();
-      nodeResourceTexts.delete(id);
     }
 
     nodes.set(id, {
@@ -6801,8 +6059,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
       kingCrownFallen: false,
       kingCrownHealth: 0,
       kingCrownMax: 0,
-      resourceType,
-      resourceKey,
     });
 
     if (typeof msg.totalNodes === 'number') {
@@ -6822,17 +6078,13 @@ function fallbackRemoveEdgesForNode(nodeId) {
     if (typeof msg?.winCondition === 'string') {
       winCondition = normalizeWinCondition(msg.winCondition);
     } else {
-      winCondition = 'dominate';
+      winCondition = 'king';
     }
     clearKingSelection({ skipRedraw: true });
     nodeJuiceTexts.forEach((text) => {
       if (text) text.destroy();
     });
     nodeJuiceTexts.clear();
-    nodeResourceTexts.forEach((text) => {
-      if (text) text.destroy();
-    });
-    nodeResourceTexts.clear();
     edgeFlowTexts.forEach((text) => {
       if (text) text.destroy();
     });
@@ -6903,7 +6155,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
     lastDoubleWarpWarningTime = 0;
     lastWarpAxis = null;
     lastWarpDirection = null;
-    resetAutoWarpGemUnlock();
     hideBridgeCostDisplay();
     if (!skipRedraw) {
       redrawStatic();
@@ -7160,7 +6411,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
     lastDoubleWarpWarningTime = 0;
     lastWarpAxis = null;
     lastWarpDirection = null;
-    resetAutoWarpGemUnlock();
     hideBridgeCostDisplay();
     updateKingMovePreviewLine();
     redrawStatic();
@@ -7423,29 +6673,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
     const offsetX = 2;
     const offsetY = -2;
-    const rewardTypeRaw = typeof msg.rewardType === 'string' ? msg.rewardType.trim().toLowerCase() : null;
-    const rewardKeyRaw = typeof msg.rewardKey === 'string' ? msg.rewardKey : null;
-    const normalizedRewardType = normalizeNodeResourceType(rewardTypeRaw === 'gem' ? 'gem' : 'money');
     const neutralCaptureEnabled = coerceNeutralCaptureReward(selectedSettings.neutralCaptureGold) > 0;
-
-    if (normalizedRewardType === 'gem') {
-      const normalizedKey = normalizeNodeResourceKey(rewardKeyRaw);
-      const emoji = getResourceEmoji('gem', normalizedKey);
-      const keyLabel = normalizedKey
-        ? normalizedKey.charAt(0).toUpperCase() + normalizedKey.slice(1)
-        : 'Gem';
-      const indicatorText = emoji ? `+${emoji} ${keyLabel}` : `+${keyLabel}`;
-      createMoneyIndicator(
-        node.x + offsetX,
-        node.y + offsetY,
-        indicatorText,
-        MONEY_GAIN_COLOR,
-        2200,
-        { strokeColor: '#264a2a' }
-      );
-      playCaptureDing();
-      return;
-    }
 
     if (!neutralCaptureEnabled) {
       return;
@@ -7542,7 +6770,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
     if (lower.includes('intersect')) return 'No overlapping pipes';
     if (lower.includes('only golden pipes can cross')) return 'Only brass pipes can cross';
     if (lower.includes('cannot cross golden pipe')) return 'Brass pipes cannot be crossed';
-    if (lower.includes('warp gem')) return 'Warp gem required to warp pipes';
     if (
       lower.includes('must control brass pipes') ||
       lower.includes('must control pipe start') ||
@@ -8167,28 +7394,19 @@ function fallbackRemoveEdgesForNode(nodeId) {
       totalWorldDistance = Math.hypot(wx - selectedNode.x, wy - selectedNode.y);
     }
     
-    // Calculate validity differently for smash mode vs basic mode
     let lockedInvalid = false;
     let lockedValid = false;
     if (lockedTargetId != null) {
-      if (isKingSmashMode()) {
-        // In smash mode, check ownership and affordability dynamically
-        const lockedNode = nodes.get(lockedTargetId);
-        if (lockedNode) {
-          const isOwned = lockedNode.owner === myPlayerId;
-          const baseCost = calculateBridgeCost(selectedNode, lockedNode, false, warpPreference);
-          const cost = Math.max(1, Math.round(baseCost / getPipeCostMultiplier() * getCrownShotCostMultiplier()));
-          const canAfford = goldValue >= cost;
-          lockedInvalid = !isOwned || !canAfford;
-          lockedValid = isOwned && canAfford;
-        } else {
-          lockedInvalid = true;
-        }
+      const lockedNode = nodes.get(lockedTargetId);
+      if (lockedNode) {
+        const isOwned = lockedNode.owner === myPlayerId;
+        const baseCost = calculateBridgeCost(selectedNode, lockedNode, false, warpPreference);
+        const cost = Math.max(1, Math.round(baseCost / getPipeCostMultiplier() * getCrownShotCostMultiplier()));
+        const canAfford = goldValue >= cost;
+        lockedInvalid = !isOwned || !canAfford;
+        lockedValid = isOwned && canAfford;
       } else {
-        // Basic mode: use predetermined target list
-        const hasTargets = kingMoveTargets.size > 0;
-        lockedInvalid = hasTargets && !kingMoveTargets.has(lockedTargetId);
-        lockedValid = !lockedInvalid && hasTargets;
+        lockedInvalid = true;
       }
     }
     const next = {
@@ -8553,9 +7771,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
       nodeJuiceTexts.forEach((text) => {
         if (text) text.setVisible(false);
       });
-      nodeResourceTexts.forEach((text) => {
-        if (text) text.setVisible(false);
-      });
       reversePipeButtons.forEach((entry) => {
         if (entry?.text) entry.text.setVisible(false);
       });
@@ -8652,40 +7867,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
       const r = Math.max(1, radius);
       graphicsNodes.fillCircle(nx, ny, r);
 
-      const resourceType = normalizeNodeResourceType(n.resourceType);
-      const resourceKey = resourceType === 'gem' ? normalizeNodeResourceKey(n.resourceKey) : null;
-      const resourceEmoji = getResourceEmoji(resourceType, resourceKey);
-      const shouldShowEmoji = Boolean(resourceEmoji) && n.owner == null;
-      let emojiText = nodeResourceTexts.get(id);
-      const canShowEmoji = shouldShowEmoji && sceneRef;
-      if (canShowEmoji) {
-        const desiredFont = Math.round(Math.max(14, r * 1.25));
-        if (!emojiText) {
-          emojiText = sceneRef.add.text(nx, ny, resourceEmoji, {
-            fontFamily: 'sans-serif',
-            fontSize: `${desiredFont}px`,
-            color: '#ffffff',
-            align: 'center',
-          });
-          emojiText.setOrigin(0.5, 0.5);
-          emojiText.setDepth(4);
-          nodeResourceTexts.set(id, emojiText);
-        }
-        if (emojiText) {
-          if (emojiText.text !== resourceEmoji) {
-            emojiText.setText(resourceEmoji);
-          }
-          if (emojiText.style && emojiText.style.fontSize !== `${desiredFont}px`) {
-            emojiText.setFontSize(desiredFont);
-          }
-          emojiText.setPosition(nx, ny);
-          if (!emojiText.visible) emojiText.setVisible(true);
-        }
-      } else if (emojiText) {
-        emojiText.setVisible(false);
-      }
-
-      const numberOffset = canShowEmoji ? -Math.min(r * 0.55, 12) : 0;
+      const numberOffset = 0;
 
       const shouldShowJuiceText = persistentNumbers && n.owner != null;
       if (shouldShowJuiceText) {
@@ -9687,18 +8869,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
   function applyWarpWrapToScreen(x, y) {
     if (!shouldWarpCursor()) return { x, y };
-    if (!isWarpWrapUnlocked()) {
-      maybeAutoUnlockWarpWrap(x, y);
-    }
-    if (!isWarpWrapUnlocked()) {
-      const clamped = clampCursorToWarpBounds(x, y);
-      const warpAttempted = Math.abs(clamped.x - x) > 1e-3 || Math.abs(clamped.y - y) > 1e-3;
-      const isBridgeOrKingMove = activeAbility === 'bridge1way' || (kingSelectionActive && isKingSmashMode());
-      if (isBridgeOrKingMove && warpAttempted) {
-        notifyWarpGemRequired();
-      }
-      return clamped;
-    }
     const bounds = warpBoundsScreen;
     const width = bounds.maxX - bounds.minX;
     const height = bounds.maxY - bounds.minY;
@@ -9844,13 +9014,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
     const toggle = element.closest ? element.closest('.toggle-switch') : null;
     if (toggle) return toggle;
 
-    if (element.closest) {
-      const gemTarget = element.closest('.gem-count');
-      if (gemTarget && gemCountsDisplay && gemCountsDisplay.contains(gemTarget)) {
-        return gemTarget;
-      }
-    }
-
     const button = element.closest ? element.closest('button') : null;
     if (button) return button;
 
@@ -9930,7 +9093,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
       lastDoubleWarpWarningTime = 0;
       lastWarpAxis = null;
       lastWarpDirection = null;
-      resetAutoWarpGemUnlock();
     }
     updateMouseWorldFromVirtualCursor();
   }
@@ -10023,22 +9185,9 @@ function fallbackRemoveEdgesForNode(nodeId) {
     const node = nodes.get(nodeId);
     if (!node) return false;
     brassActivationDenied = false;
-
-    const magicBrassMode = isMagicResourceModeActive();
     const brassDisabled = areBrassPipesDisabled();
 
     let wantBrass = brassDisabled ? false : determineBridgeBrassPreference(node, useBrass);
-    if (magicBrassMode) {
-      if (rageGemModeActive && canActivateRageGemMode()) {
-        wantBrass = false;
-      } else if (reverseGemModeActive && canActivateReverseGemMode()) {
-        wantBrass = false;
-      } else if (!brassDisabled && brassGemModeActive && canActivateBrassGemMode()) {
-        wantBrass = true;
-      } else if (!canActivateBrassGemMode()) {
-        wantBrass = false;
-      }
-    }
 
     const ownershipRequired = pipeStartRequiresOwnership();
     const lacksOwnership = ownershipRequired && node.owner !== myPlayerId;
@@ -10058,7 +9207,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
     lastDoubleWarpWarningTime = 0;
     lastWarpAxis = null;
     lastWarpDirection = null;
-    resetAutoWarpGemUnlock();
     hideBridgeCostDisplay();
     updateBrassPreviewIntersections();
     return true;
@@ -10086,7 +9234,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
           lastDoubleWarpWarningTime = 0;
           lastWarpAxis = null;
           lastWarpDirection = null;
-          resetAutoWarpGemUnlock();
           return true; // Handled
         } else if (bridgeFirstNode !== nodeId) {
           // Complete bridge building - second node can be any node
@@ -10097,22 +9244,14 @@ function fallbackRemoveEdgesForNode(nodeId) {
             return true;
           }
           const modeIsXb = isXbModeActive();
-          const useBrassPipe = bridgePreviewWillBeBrass && (isMagicResourceModeActive() || isCrossLikeModeActive());
+          const useBrassPipe = bridgePreviewWillBeBrass && isCrossLikeModeActive();
           const pipeType = determinePipeTypeForBridge(useBrassPipe);
           const applyBrassCost = pipeType === 'gold';
           if (modeIsXb && xbPreviewBlockReason) {
             showErrorMessage('Cannot cross brass pipe');
             return true;
           }
-          const doubleBreakModeActive = isDoubleBreakModeActive();
           const targetOwnerId = Number.isFinite(node.owner) ? node.owner : null;
-          if (doubleBreakModeActive && targetOwnerId !== myPlayerId) {
-            const breakingExisting = bridgePreviewWillBreakPipes || (brassPreviewIntersections && brassPreviewIntersections.size > 0);
-            if (breakingExisting) {
-              showErrorMessage('Double breaks must end on your nodes');
-              return true;
-            }
-          }
           const ownershipRequired = pipeStartRequiresOwnership();
           const firstOwner = firstNode.owner;
           const lacksOwnership = ownershipRequired && firstOwner !== myPlayerId;
@@ -10145,26 +9284,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
               token: token,
               pipeType,
             };
-
-            const usesWarpGem = isMagicResourceModeActive()
-              && warpInfoPayload
-              && typeof warpInfoPayload.axis === 'string'
-              && warpInfoPayload.axis !== 'none';
-
-            if (usesWarpGem) {
-              setWarpGemModeActive(false, { clearPending: false });
-              pendingWarpGemSpend = true;
-            }
-            if (isMagicResourceModeActive() && useBrassPipe) {
-              setBrassGemModeActive(false, { clearPending: false });
-              pendingBrassGemSpend = true;
-            } else if (isMagicResourceModeActive() && pipeType === 'rage' && rageGemModeActive) {
-              setRageGemModeActive(false, { clearPending: false });
-              pendingRageGemSpend = true;
-            } else if (isMagicResourceModeActive() && pipeType === 'reverse' && reverseGemModeActive) {
-              setReverseGemModeActive(false, { clearPending: false });
-              pendingReverseGemSpend = true;
-            }
             ws.send(JSON.stringify(buildBridgePayload));
             // Don't reset bridge building state here - wait for server response
             return true; // Handled
@@ -10664,22 +9783,8 @@ function fallbackRemoveEdgesForNode(nodeId) {
       return;
     }
 
-    // In smash modes, destination is handled via node clicks in the main click handler
-    // This mousedown handler only handles crown preview clicks (basic mode)
-    if (isKingSmashMode()) {
-      // Don't handle here - let the main click handler process node clicks
-      return;
-    }
-
-    const [pointerScreenX, pointerScreenY] = getPointerScreenCoords(ev);
-    const crownTargetId = pickKingMoveTargetFromScreen(pointerScreenX, pointerScreenY);
-    if (crownTargetId != null) {
-      sendKingMoveRequest(crownTargetId);
-      ev.preventDefault();
-      ev.stopPropagation();
-    } else {
-      clearKingSelection();
-    }
+    // Destination is handled via node clicks in the main click handler.
+    return;
   });
 
   function screenToWorld(px, py) {
@@ -10738,120 +9843,6 @@ function fallbackRemoveEdgesForNode(nodeId) {
 
 
 
-  function syncGemCountsFromPayload(payload) {
-    if (!Array.isArray(payload)) {
-      playerStats.forEach((stats) => {
-        if (stats) stats.gems = createEmptyGemCounts();
-      });
-      return;
-    }
-
-    const seen = new Set();
-    payload.forEach((entry) => {
-      let pid;
-      let rawCounts;
-      if (Array.isArray(entry)) {
-        [pid, rawCounts] = entry;
-      } else if (entry && typeof entry === 'object') {
-        pid = entry.playerId ?? entry.id ?? entry.pid ?? entry.player ?? entry[0];
-        rawCounts = entry.counts ?? entry.gems ?? entry.values ?? entry.data ?? entry[1];
-      } else {
-        return;
-      }
-      const id = Number(pid);
-      if (!Number.isFinite(id)) return;
-      seen.add(id);
-      const stats = ensurePlayerStats(id);
-      const nextCounts = createEmptyGemCounts();
-      if (rawCounts && typeof rawCounts === 'object') {
-        Object.entries(rawCounts).forEach(([key, value]) => {
-          const normalizedKey = normalizeGemKey(key);
-          if (!normalizedKey) return;
-          const numeric = Number(value);
-          nextCounts[normalizedKey] = Number.isFinite(numeric) && numeric > 0 ? Math.max(0, Math.floor(numeric)) : 0;
-        });
-      }
-      stats.gems = nextCounts;
-    });
-
-    playerStats.forEach((stats, id) => {
-      if (!stats) return;
-      if (seen.has(id)) return;
-      stats.gems = createEmptyGemCounts();
-    });
-  }
-
-  function updateGemCountsDisplay() {
-    if (!gemCountsDisplay || gemCountLabels.size === 0) {
-      gemCountsDisplay = document.getElementById('gemCountsDisplay');
-      if (gemCountsDisplay && !gemCountsClickHandlerBound) {
-        gemCountsDisplay.addEventListener('click', handleGemCountsClick);
-        gemCountsClickHandlerBound = true;
-      }
-      gemCountLabels.clear();
-      if (gemCountsDisplay) {
-        GEM_TYPE_ORDER.forEach((key) => {
-          const container = gemCountsDisplay.querySelector(`[data-gem="${key}"]`);
-          if (!container) return;
-          const numberEl = container.querySelector('.gem-number');
-          if (numberEl) gemCountLabels.set(key, numberEl);
-        });
-      }
-    }
-
-    if (!gemCountsDisplay || gemCountLabels.size === 0) {
-      return;
-    }
-
-    let targetId = Number.isFinite(myPlayerId) ? myPlayerId : NaN;
-    if (!Number.isFinite(targetId)) {
-      const storedRaw = localStorage.getItem('myPlayerId');
-      if (storedRaw != null) {
-        const storedValue = Number(storedRaw);
-        if (Number.isFinite(storedValue)) {
-          targetId = storedValue;
-        }
-      }
-    }
-
-    let counts = createEmptyGemCounts();
-    if (Number.isFinite(targetId) && (playerStats.has(targetId) || players.has(targetId))) {
-      const stats = ensurePlayerStats(targetId);
-      const maybeCounts = stats && stats.gems;
-      if (maybeCounts && typeof maybeCounts === 'object') {
-        counts = maybeCounts;
-      }
-    }
-
-    GEM_TYPE_ORDER.forEach((key) => {
-      const label = gemCountLabels.get(key);
-      if (!label) return;
-      const numeric = Number(counts[key]) || 0;
-      label.textContent = String(Math.max(0, Math.floor(numeric)));
-    });
-    let uiUpdated = false;
-    if (brassGemModeActive && !canActivateBrassGemMode()) {
-      setBrassGemModeActive(false);
-      uiUpdated = true;
-    }
-    if (rageGemModeActive && !canActivateRageGemMode()) {
-      setRageGemModeActive(false);
-      uiUpdated = true;
-    }
-    if (reverseGemModeActive && !canActivateReverseGemMode()) {
-      setReverseGemModeActive(false);
-      uiUpdated = true;
-    }
-    if (warpGemModeActive && !canActivateWarpGemMode()) {
-      setWarpGemModeActive(false);
-      uiUpdated = true;
-    }
-    if (!uiUpdated) {
-      updateGemModeUi();
-    }
-  }
-
-
   function updateGoldBar() {
     const val = Math.max(0, goldValue || 0);
     if (goldDisplay) {
@@ -10865,28 +9856,15 @@ function fallbackRemoveEdgesForNode(nodeId) {
   }
 
   function updateTopUiBarDisplay() {
-    // Show gem counts in gem mode, money progress bar in standard mode
-    const isGemMode = isMagicResourceModeActive();
-    
-    if (gemCountsDisplay) {
-      gemCountsDisplay.style.display = isGemMode ? 'flex' : 'none';
-    }
     if (moneyProgressContainer) {
-      moneyProgressContainer.style.display = isGemMode ? 'none' : 'flex';
+      moneyProgressContainer.style.display = 'flex';
     }
-    
-    // Also update the money progress bar if switching to standard mode
-    if (!isGemMode) {
-      updateMoneyProgressBar();
-    }
+    updateMoneyProgressBar();
   }
 
   function updateMoneyProgressBar() {
     if (!moneyProgressFill || !moneyProgressText) return;
-    
-    // Only show in non-gem mode
-    if (isMagicResourceModeActive()) return;
-    
+
     const currentGold = Math.max(0, goldValue || 0);
     const percentage = Math.min(100, (currentGold / MONEY_VICTORY_THRESHOLD) * 100);
     
@@ -10981,20 +9959,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     if (!playerStats.has(id)) {
       playerStats.set(id, createDefaultPlayerStats());
     }
-    const stats = playerStats.get(id);
-    if (!stats.gems || typeof stats.gems !== 'object') {
-      stats.gems = createEmptyGemCounts();
-    } else {
-      GEM_TYPE_ORDER.forEach((key) => {
-        if (!Object.prototype.hasOwnProperty.call(stats.gems, key)) {
-          stats.gems[key] = 0;
-          return;
-        }
-        const value = Number(stats.gems[key]) || 0;
-        stats.gems[key] = value >= 0 ? Math.floor(value) : 0;
-      });
-    }
-    return stats;
+    return playerStats.get(id);
   }
 
   function updateProgressBar() {
@@ -11019,31 +9984,29 @@ function fallbackRemoveEdgesForNode(nodeId) {
       return;
     }
 
-    if (winCondition !== 'dominate') {
-      progressBarInner.innerHTML = '';
-      progressSegments.clear();
-      const notice = document.createElement('div');
-      notice.className = 'winConNotice';
-      notice.textContent = 'Kill the enemy king or Max out Money';
-      notice.style.flex = '1';
-      notice.style.textAlign = 'center';
-      progressBarInner.appendChild(notice);
-      progressBarInner.style.justifyContent = 'center';
-      if (progressBar) {
-        progressBar.style.display = nodes.size > 0 ? 'block' : 'none';
-        progressBar.style.background = 'transparent';
-        progressBar.style.border = 'none';
-        progressBar.style.boxShadow = 'none';
-      }
-      if (progressMarkerLeft) progressMarkerLeft.style.display = 'none';
-      if (progressMarkerRight) progressMarkerRight.style.display = 'none';
-      if (progressNameContainer) {
-        progressNameContainer.innerHTML = '';
-        progressNameContainer.style.display = 'none';
-      }
-      progressNameSegments.clear();
-      return;
+    progressBarInner.innerHTML = '';
+    progressSegments.clear();
+    const notice = document.createElement('div');
+    notice.className = 'winConNotice';
+    notice.textContent = 'Kill the enemy king or Max out Money';
+    notice.style.flex = '1';
+    notice.style.textAlign = 'center';
+    progressBarInner.appendChild(notice);
+    progressBarInner.style.justifyContent = 'center';
+    if (progressBar) {
+      progressBar.style.display = nodes.size > 0 ? 'block' : 'none';
+      progressBar.style.background = 'transparent';
+      progressBar.style.border = 'none';
+      progressBar.style.boxShadow = 'none';
     }
+    if (progressMarkerLeft) progressMarkerLeft.style.display = 'none';
+    if (progressMarkerRight) progressMarkerRight.style.display = 'none';
+    if (progressNameContainer) {
+      progressNameContainer.innerHTML = '';
+      progressNameContainer.style.display = 'none';
+    }
+    progressNameSegments.clear();
+    return;
 
     const orderedIds = playerOrder.length ? playerOrder : Array.from(players.keys()).sort((a, b) => a - b);
     const activeIds = orderedIds.filter((id) => players.has(id) && !eliminatedPlayers.has(id));
@@ -11892,13 +10855,12 @@ function updateBrassPreviewIntersections() {
   xbPreviewBlockReason = null;
   bridgePreviewWillBreakPipes = false;
 
-  const gemMode = isMagicResourceModeActive();
   const modeIsXb = isXbModeActive();
   const modeIsCrossLike = isCrossLikeModeActive();
   const breakModeAllowsNormalBreaks = doesBreakModeAllowNormalBreaks();
 
   const setDefaultPreviewState = () => {
-    bridgePreviewWillBeBrass = gemMode ? bridgeIsBrass : (bridgeIsBrass && modeIsCrossLike);
+    bridgePreviewWillBeBrass = bridgeIsBrass && modeIsCrossLike;
     bridgePreviewWillBreakPipes = false;
   };
 
@@ -11911,7 +10873,7 @@ function updateBrassPreviewIntersections() {
   const firstNode = nodes.get(bridgeFirstNode);
   if (!firstNode) return;
 
-  const shouldCheck = modeIsXb || ((modeIsCrossLike || gemMode) && (bridgeIsBrass || breakModeAllowsNormalBreaks));
+  const shouldCheck = modeIsXb || (modeIsCrossLike && (bridgeIsBrass || breakModeAllowsNormalBreaks));
   if (!shouldCheck) return;
 
   let previewTarget = null;
@@ -11985,7 +10947,7 @@ function updateBrassPreviewIntersections() {
     if (blockedByBrass) {
       xbPreviewBlockReason = 'brass';
     }
-  } else if (gemMode || modeIsCrossLike) {
+  } else if (modeIsCrossLike) {
     bridgePreviewWillBreakPipes = willCross && (bridgeIsBrass || breakModeAllowsNormalBreaks);
     if (!bridgeIsBrass && !breakModeAllowsNormalBreaks) {
       brassPreviewIntersections.clear();
