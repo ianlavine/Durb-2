@@ -185,8 +185,6 @@ class GraphGenerator:
                     "x": round(n.x, 3),
                     "y": round(n.y, 3),
                     "nodeType": getattr(n, "node_type", "normal"),
-                    "resourceType": getattr(n, "resource_type", "money"),
-                    "resourceKey": getattr(n, "resource_key", None),
                 }
                 for n in nodes
             ],

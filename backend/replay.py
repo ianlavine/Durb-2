@@ -84,8 +84,6 @@ class GameReplayRecorder:
                     "attachedEdges": list(node.attached_edge_ids),
                     "pendingGold": getattr(node, "pending_gold", 0.0),
                     "nodeType": getattr(node, "node_type", "normal"),
-                    "resourceType": getattr(node, "resource_type", "money"),
-                    "resourceKey": getattr(node, "resource_key", None),
                 }
             )
 

@@ -90,10 +90,6 @@ def build_engine_from_replay(
             continue
         node_type_val = raw.get("nodeType") if isinstance(raw.get("nodeType"), str) else raw.get("node_type")
         node_type = "brass" if isinstance(node_type_val, str) and node_type_val.lower() == "brass" else "normal"
-        resource_type_val = raw.get("resourceType") if isinstance(raw, dict) else None
-        resource_key_val = raw.get("resourceKey") if isinstance(raw, dict) else None
-        resource_type = "gem" if isinstance(resource_type_val, str) and resource_type_val.lower() == "gem" else "money"
-        resource_key = resource_key_val if isinstance(resource_key_val, str) else None
         node = Node(
             id=_coerce_int(raw.get("id")),
             x=float(raw.get("x", 0.0)),
@@ -102,8 +98,6 @@ def build_engine_from_replay(
             owner=(raw.get("owner") if raw.get("owner") is not None else None),
             pending_gold=float(raw.get("pendingGold", 0.0) or 0.0),
             node_type=node_type,
-            resource_type=resource_type,
-            resource_key=resource_key,
         )
         nodes.append(node)
 
@@ -125,14 +119,6 @@ def build_engine_from_replay(
 
     # Build initial state
     state = GraphState(nodes, edges)
-    gem_nodes = {
-        node.id: getattr(node, "resource_key", None)
-        for node in nodes
-        if str(getattr(node, "resource_type", "money")).lower() == "gem"
-        and isinstance(getattr(node, "resource_key", None), str)
-    }
-    state.resource_mode = "gems" if gem_nodes else "standard"
-    state.gem_nodes = gem_nodes
     state.phase = "picking"
     state.tick_count = 0
     state.pending_eliminations = []

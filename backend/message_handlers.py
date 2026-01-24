@@ -8,7 +8,6 @@ from typing import Any, Dict, List, Optional, Tuple
 import websockets
 
 from .constants import (
-    DEFAULT_GEM_COUNTS,
     DEFAULT_GAME_MODE,
     DEFAULT_KING_MOVEMENT_MODE,
     GAME_MODES,
@@ -216,14 +215,9 @@ class MessageRouter:
             "neutralCaptureGold": 5.0,
             "ringJuiceToGoldRatio": 10.0,
             "ringPayoutGold": 3.0,
-            "warpGemCount": DEFAULT_GEM_COUNTS.get("warp", 3),
-            "brassGemCount": DEFAULT_GEM_COUNTS.get("brass", 7),
-            "rageGemCount": DEFAULT_GEM_COUNTS.get("rage", 4),
-            "reverseGemCount": DEFAULT_GEM_COUNTS.get("reverse", 6),
             "startingNodeJuice": 300.0,
             "winCondition": "king",
             "kingCrownHealth": KING_CROWN_MAX_HEALTH,
-            "resources": "standard",
             "lonelyNode": "sinks",
             "nodeGrowthRate": PRODUCTION_RATE_PER_NODE,
             "startingFlowRate": RESERVE_TRANSFER_RATIO,
@@ -233,18 +227,6 @@ class MessageRouter:
         if not isinstance(payload, dict):
             settings["pipeStart"] = settings["brassStart"]
             return settings
-
-        def sanitize_gem_count(raw_value: Any, fallback: float) -> int:
-            if isinstance(raw_value, str):
-                raw_value = raw_value.strip()
-            try:
-                parsed = float(raw_value)
-            except (TypeError, ValueError):
-                return int(round(fallback))
-            if math.isnan(parsed):
-                return int(round(fallback))
-            clamped = max(0.0, min(10.0, parsed))
-            return int(round(clamped))
 
         screen_option = str(payload.get("screen", settings["screen"])).strip().lower()
         if screen_option in {"warp", "semi", "flat"}:
@@ -410,32 +392,11 @@ class MessageRouter:
         if parsed_crown is not None and parsed_crown > 0:
             settings["kingCrownHealth"] = max(1.0, min(300.0, round(parsed_crown, 3)))
 
-        gem_field_map = (
-            ("warpGemCount", "warp"),
-            ("brassGemCount", "brass"),
-            ("rageGemCount", "rage"),
-            ("reverseGemCount", "reverse"),
-        )
-        for field_name, gem_key in gem_field_map:
-            current_value = settings[field_name]
-            if field_name in payload:
-                settings[field_name] = sanitize_gem_count(payload.get(field_name), current_value)
-            else:
-                settings[field_name] = int(round(current_value))
-
         win_condition_value = payload.get("winCondition", settings.get("winCondition"))
         if isinstance(win_condition_value, str) and win_condition_value.strip().lower() == "king":
             settings["winCondition"] = "king"
         else:
             settings["winCondition"] = "dominate"
-
-        resources_value = payload.get("resources", settings["resources"])
-        if isinstance(resources_value, str):
-            normalized_resources = resources_value.strip().lower()
-            if normalized_resources == "gems":
-                settings["resources"] = "gems"
-            else:
-                settings["resources"] = "standard"
 
         lonely_value = payload.get("lonelyNode", settings["lonelyNode"])
         if isinstance(lonely_value, str) and lonely_value.strip().lower() == "sinks":
@@ -809,14 +770,6 @@ class MessageRouter:
             )
             return
 
-        if engine.state:
-            try:
-                gem_counts_payload = engine.state._serialize_gem_counts()
-            except Exception:
-                gem_counts_payload = []
-        else:
-            gem_counts_payload = []
-
         if new_edge:
             # Send edge state update to all players (without cost)
             warp_payload = {
@@ -854,7 +807,6 @@ class MessageRouter:
                     continue
                 
                 message_to_send = edge_update_message.copy()
-                message_to_send["gemCounts"] = gem_counts_payload
                 # Only include cost for the player who built the bridge
                 if token_key == token:
                     message_to_send["cost"] = actual_cost
@@ -887,7 +839,6 @@ class MessageRouter:
                 event_payload["nodeMovements"] = movement_payloads
         if removed_edges:
             event_payload["removedEdges"] = removed_edges
-        event_payload["gemCounts"] = gem_counts_payload
         self._record_game_event(game_info, token, "buildBridge", event_payload)
 
     async def handle_redirect_energy(

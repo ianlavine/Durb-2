@@ -3,7 +3,6 @@ Game Engine - Core game logic separated from server implementation.
 Handles game state management, validation, and game rules.
 """
 import math
-import random
 import time
 from collections import deque
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -11,7 +10,6 @@ from .constants import (
     BRIDGE_BASE_COST,
     BRIDGE_COST_PER_UNIT_DISTANCE,
     BRIDGE_BUILD_TICKS_PER_UNIT_DISTANCE,
-    DEFAULT_GEM_COUNTS,
     DEFAULT_GAME_MODE,
     DEFAULT_KING_MOVEMENT_MODE,
     DEFAULT_PIPE_COST,
@@ -153,7 +151,6 @@ class GameEngine:
         self.state.starting_node_juice = STARTING_NODE_JUICE
         self.state.king_crown_max_health = KING_CROWN_MAX_HEALTH
 
-        resource_mode = "standard"
         growth_rate_value = PRODUCTION_RATE_PER_NODE
         growth_rate_overridden = False
         starting_flow_ratio = RESERVE_TRANSFER_RATIO
@@ -185,25 +182,7 @@ class GameEngine:
         starting_node_juice_overridden = False
         win_condition = "dominate"
         crown_health_value = KING_CROWN_MAX_HEALTH
-        gem_counts = {
-            "warp": int(DEFAULT_GEM_COUNTS.get("warp", 3)),
-            "brass": int(DEFAULT_GEM_COUNTS.get("brass", 7)),
-            "rage": int(DEFAULT_GEM_COUNTS.get("rage", 4)),
-            "reverse": int(DEFAULT_GEM_COUNTS.get("reverse", 6)),
-        }
         lonely_mode = "nothing"
-
-        def sanitize_gem_count(raw_value: Any, fallback: int) -> int:
-            if isinstance(raw_value, str):
-                raw_value = raw_value.strip()
-            try:
-                parsed = float(raw_value)
-            except (TypeError, ValueError):
-                return fallback
-            if math.isnan(parsed):
-                return fallback
-            clamped = max(0.0, min(10.0, parsed))
-            return int(round(clamped))
 
         if isinstance(options, dict):
             screen_option = str(options.get("screen", "")).strip().lower()
@@ -214,9 +193,6 @@ class GameEngine:
             if brass_option in {"cross", "right-click", "rightclick", "right_click"}:
                 manual_brass_selection = brass_option in {"right-click", "rightclick", "right_click"}
                 auto_brass_on_cross = brass_option == "cross"
-            elif brass_option == "gem":
-                manual_brass_selection = True
-                auto_brass_on_cross = False
 
             pipe_start_raw = options.get("pipeStart", options.get("brassStart", ""))
             pipe_start_option = str(pipe_start_raw).strip().lower()
@@ -343,20 +319,9 @@ class GameEngine:
             if isinstance(win_condition_option, str) and win_condition_option.strip().lower() == "king":
                 win_condition = "king"
 
-            resources_option = str(options.get("resources", "")).strip().lower()
-            if resources_option == "gems":
-                resource_mode = "gems"
-            elif resources_option == "standard":
-                resource_mode = "standard"
-
             lonely_option = options.get("lonelyNode")
             if isinstance(lonely_option, str) and lonely_option.strip().lower() == "sinks":
                 lonely_mode = "sinks"
-
-            gem_counts["warp"] = sanitize_gem_count(options.get("warpGemCount", gem_counts["warp"]), gem_counts["warp"])
-            gem_counts["brass"] = sanitize_gem_count(options.get("brassGemCount", gem_counts["brass"]), gem_counts["brass"])
-            gem_counts["rage"] = sanitize_gem_count(options.get("rageGemCount", gem_counts["rage"]), gem_counts["rage"])
-            gem_counts["reverse"] = sanitize_gem_count(options.get("reverseGemCount", gem_counts["reverse"]), gem_counts["reverse"])
 
             growth_rate_raw = options.get("nodeGrowthRate")
             if isinstance(growth_rate_raw, str):
@@ -391,11 +356,6 @@ class GameEngine:
                 secondary_flow_ratio = max(0.0, min(1.0, round(parsed_secondary_flow, 4)))
                 secondary_flow_overridden = True
 
-        if resource_mode == "gems":
-            auto_brass_on_cross = False
-            manual_brass_selection = True
-            screen_variant = "warp"
-
         if normalized_mode == "basic":
             auto_brass_on_cross = False
             manual_brass_selection = False
@@ -424,8 +384,6 @@ class GameEngine:
         self.state.brass_cost_multiplier = brass_cost_multiplier
         self.state.crown_shot_cost_multiplier = crown_shot_cost_multiplier
 
-        self._apply_resource_distribution(resource_mode, gem_counts)
-
         self.state.production_rate_per_node = growth_rate_value
         self.state.reserve_transfer_ratio = starting_flow_ratio
         self.state.intake_transfer_ratio = secondary_flow_ratio
@@ -452,22 +410,14 @@ class GameEngine:
             "neutralCaptureGold": neutral_capture_reward,
             "ringJuiceToGoldRatio": overflow_ratio,
             "ringPayoutGold": overflow_payout,
-            "warpGemCount": gem_counts["warp"],
-            "brassGemCount": gem_counts["brass"],
-            "rageGemCount": gem_counts["rage"],
-            "reverseGemCount": gem_counts["reverse"],
             "winCondition": win_condition,
             "kingCrownHealth": crown_health_value,
-            "resources": resource_mode,
             "lonelyNode": lonely_mode,
             "nodeGrowthRate": growth_rate_value,
             "startingFlowRate": starting_flow_ratio,
             "secondaryFlowRate": secondary_flow_ratio,
             "kingMovementMode": king_movement_mode,
         }
-        if resource_mode == "gems":
-            sanitized_options["brass"] = "gem"
-            sanitized_options["brassStart"] = "owned"
         sanitized_options["pipeStart"] = sanitized_options["brassStart"]
         if isinstance(options, dict):
             base_mode = options.get("baseMode")
@@ -492,78 +442,6 @@ class GameEngine:
             self.state.player_king_nodes.clear()
 
         return sanitized_options
-
-    def _apply_resource_distribution(self, resource_mode: str, gem_counts: Optional[Dict[str, int]] = None) -> None:
-        if not self.state:
-            return
-
-        normalized = "gems" if str(resource_mode).strip().lower() == "gems" else "standard"
-        nodes = list(self.state.nodes.values())
-
-        if not nodes:
-            self.state.resource_mode = normalized
-            self.state.gem_nodes = {}
-            return
-
-        self.state.resource_mode = normalized
-        self.state.gem_nodes = {}
-        self.state.reset_player_gem_counts()
-
-        for node in nodes:
-            node.resource_type = "money"
-            node.resource_key = None
-
-        if normalized != "gems":
-            return
-
-        plan_source: Dict[str, Any] = DEFAULT_GEM_COUNTS
-        if isinstance(gem_counts, dict):
-            plan_source = gem_counts
-
-        def resolve_gem_target(key: str) -> int:
-            raw_value = plan_source.get(key, DEFAULT_GEM_COUNTS.get(key, 0))
-            if isinstance(raw_value, str):
-                raw_value = raw_value.strip()
-            try:
-                numeric = float(raw_value)
-            except (TypeError, ValueError):
-                numeric = float(DEFAULT_GEM_COUNTS.get(key, 0))
-            if math.isnan(numeric):
-                numeric = float(DEFAULT_GEM_COUNTS.get(key, 0))
-            clamped = max(0.0, min(10.0, numeric))
-            return int(round(clamped))
-
-        gem_plan = [
-            ("warp", resolve_gem_target("warp")),
-            ("brass", resolve_gem_target("brass")),
-            ("rage", resolve_gem_target("rage")),
-            ("reverse", resolve_gem_target("reverse")),
-        ]
-
-        seed_basis = 0
-        for node in nodes:
-            seed_basis ^= (int(round(node.x * 1000)) + int(round(node.y * 1000)) + int(node.id))
-
-        rng = random.Random(seed_basis)
-        shuffled_nodes = nodes[:]
-        rng.shuffle(shuffled_nodes)
-
-        assigned: Dict[int, str] = {}
-        index = 0
-        total_nodes = len(shuffled_nodes)
-
-        for gem_key, desired_count in gem_plan:
-            if index >= total_nodes:
-                break
-            allocatable = min(desired_count, total_nodes - index)
-            for _ in range(allocatable):
-                node = shuffled_nodes[index]
-                index += 1
-                node.resource_type = "gem"
-                node.resource_key = gem_key
-                assigned[node.id] = gem_key
-
-        self.state.gem_nodes = assigned
 
     def _configure_hidden_start_mode(
         self,
@@ -870,28 +748,17 @@ class GameEngine:
 
             # Check if this is for picking a starting node (node is unowned and player hasn't picked yet)
             if node.owner is None and not self.state.players_who_picked.get(player_id):
-                resource_type = str(getattr(node, "resource_type", "money") or "money").lower()
                 reward_amount = 0.0
                 reward_type = "money"
                 reward_key: Optional[str] = None
 
-                if resource_type == "gem":
-                    reward_type = "gem"
-                    raw_key = getattr(node, "resource_key", None)
-                    if raw_key is not None:
-                        try:
-                            reward_key = str(raw_key).strip().lower() or None
-                        except Exception:
-                            reward_key = None
-                    self.state.record_gem_capture(player_id, reward_key)
-                else:
-                    reward_amount = getattr(
-                        self.state,
-                        "neutral_capture_reward",
-                        get_neutral_capture_reward(self.state.mode),
-                    )
-                    self.state.neutral_capture_reward = reward_amount
-                    self.state.player_gold[player_id] = self.state.player_gold.get(player_id, 0.0) + reward_amount
+                reward_amount = getattr(
+                    self.state,
+                    "neutral_capture_reward",
+                    get_neutral_capture_reward(self.state.mode),
+                )
+                self.state.neutral_capture_reward = reward_amount
+                self.state.player_gold[player_id] = self.state.player_gold.get(player_id, 0.0) + reward_amount
                 if self.state.hidden_start_active and not self.state.hidden_start_revealed:
                     self.state.hidden_start_original_sizes[node_id] = node.juice
                 node.juice = getattr(self.state, "starting_node_juice", STARTING_NODE_JUICE)
@@ -1653,12 +1520,8 @@ class GameEngine:
             from_node = self.validate_node_exists(from_node_id)
             to_node = self.validate_node_exists(to_node_id)
 
-            resource_mode = str(getattr(self.state, "resource_mode", "standard") or "standard").strip().lower()
-
             allowed_pipe_types = {"normal", "gold", "rage", "reverse"}
             requested_pipe_type = (pipe_type or "").strip().lower()
-            if resource_mode != "gems" and requested_pipe_type in {"rage", "reverse"}:
-                requested_pipe_type = "normal"
             if requested_pipe_type not in allowed_pipe_types:
                 requested_pipe_type = "normal"
 
@@ -1670,12 +1533,6 @@ class GameEngine:
                 normalized_pipe_type = "gold" if requested_pipe_type == "gold" else "normal"
             else:
                 normalized_pipe_type = "normal"
-
-            requires_brass_gem = resource_mode == "gems" and normalized_pipe_type == "gold"
-            requires_rage_gem = resource_mode == "gems" and normalized_pipe_type == "rage"
-            requires_reverse_gem = resource_mode == "gems" and normalized_pipe_type == "reverse"
-            requires_warp_gem = False
-
 
             allow_pipe_anywhere = bool(getattr(self.state, "allow_pipe_start_anywhere", False))
 
@@ -1711,12 +1568,6 @@ class GameEngine:
                 raise GameValidationError("No double warping")
             if warp_axis != "none" and len(candidate_segments) != 2:
                 raise GameValidationError("Warp bridges must include entry and exit segments")
-
-            if resource_mode == "gems" and warp_axis != "none":
-                requires_warp_gem = True
-                available_warp_gems = self.state.get_player_gem_count(player_id, "warp") if self.state else 0
-                if available_warp_gems <= 0:
-                    raise GameValidationError("Warp gem required to warp pipes")
 
             # Calculate and validate gold using server-side formula with cost multipliers
             base_cost = self.calculate_bridge_cost(from_node, to_node, segments_override=candidate_segments)
@@ -1842,23 +1693,6 @@ class GameEngine:
             if delayed_cross_removals:
                 destroyed_pipes_during_build = True
 
-            requires_brass_gem = resource_mode == "gems" and normalized_pipe_type == "gold"
-            requires_rage_gem = resource_mode == "gems" and normalized_pipe_type == "rage"
-            requires_reverse_gem = resource_mode == "gems" and normalized_pipe_type == "reverse"
-
-            if requires_rage_gem:
-                available_rage = self.state.get_player_gem_count(player_id, "rage") if self.state else 0
-                if available_rage <= 0:
-                    raise GameValidationError("No rage gems available")
-            if requires_reverse_gem:
-                available_reverse = self.state.get_player_gem_count(player_id, "reverse") if self.state else 0
-                if available_reverse <= 0:
-                    raise GameValidationError("No reverse gems available")
-            if requires_brass_gem:
-                available_brass = self.state.get_player_gem_count(player_id, "brass") if self.state else 0
-                if available_brass <= 0:
-                    raise GameValidationError("No brass gems available")
-
             if (
                 from_node.owner != player_id
                 and not allow_pipe_anywhere
@@ -1934,24 +1768,6 @@ class GameEngine:
             self.state.edges[new_edge_id] = new_edge
             from_node.attached_edge_ids.append(new_edge_id)
             to_node.attached_edge_ids.append(new_edge_id)
-
-            if requires_warp_gem and self.state:
-                gem_consumed = self.state.consume_player_gem(player_id, "warp")
-                if not gem_consumed:
-                    raise GameValidationError("Warp gem required to warp pipes")
-
-            if requires_brass_gem and self.state:
-                gem_consumed = self.state.consume_player_gem(player_id, "brass")
-                if not gem_consumed:
-                    raise GameValidationError("No brass gems available")
-            if requires_rage_gem and self.state:
-                gem_consumed = self.state.consume_player_gem(player_id, "rage")
-                if not gem_consumed:
-                    raise GameValidationError("No rage gems available")
-            if requires_reverse_gem and self.state:
-                gem_consumed = self.state.consume_player_gem(player_id, "reverse")
-                if not gem_consumed:
-                    raise GameValidationError("No reverse gems available")
 
             # Deduct gold using verified cost
             self.state.player_gold[player_id] = max(0.0, self.state.player_gold[player_id] - actual_cost)
@@ -2358,7 +2174,7 @@ class GameEngine:
                     self._end_game()
                     return winner_id
 
-            # Check for money victory (300 gold in non-gem mode)
+            # Check for money victory (300 gold)
             winner_id = self.state.check_money_victory()
             if winner_id is not None:
                 self._end_game()
@@ -2554,8 +2370,6 @@ class GameEngine:
                     "owner": node.owner,
                     "pendingGold": round(getattr(node, "pending_gold", 0.0), 3),
                     "isBrass": getattr(node, "node_type", "normal") == "brass",
-                    "resourceType": getattr(node, "resource_type", "money"),
-                    "resourceKey": getattr(node, "resource_key", None),
                 },
                 "totalNodes": len(self.state.nodes),
                 "winThreshold": self.state.calculate_win_threshold(),
@@ -2585,7 +2399,6 @@ class GameEngine:
             if hasattr(self.state, "pending_node_captures"):
                 self.state.pending_node_captures = []
             self.state.player_king_nodes.clear()
-            self.state.gem_nodes = {}
 
             return {
                 "removedNodes": removed_nodes,
