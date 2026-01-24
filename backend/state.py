@@ -92,8 +92,6 @@ class GraphState:
         self.pending_edge_removals: List[Dict[str, Any]] = []
         self.pending_auto_reversed_edge_ids: List[int] = []
         self.pending_edge_reversal_events: List[Dict[str, Any]] = []
-        self.lonely_node_mode: str = "nothing"
-        self.pending_lonely_sinks: List[Dict[str, Any]] = []
 
         # Economy overrides
         self.passive_income_per_second: float = 0.0
@@ -120,7 +118,6 @@ class GraphState:
         self.hidden_start_original_sizes: Dict[int, float] = {}
 
         # Win condition configuration
-        self.win_condition: str = "dominate"
         self.player_king_nodes: Dict[int, int] = {}
         
 
@@ -150,50 +147,16 @@ class GraphState:
 
 
     def calculate_win_threshold(self) -> int:
-        """Calculate the number of nodes needed to win based on total nodes (2/3 rule)."""
+        """Calculate the number of nodes needed to win (unused in king-only mode)."""
         total_nodes = len(self.nodes)
-        if getattr(self, "win_condition", "dominate") != "dominate":
-            return total_nodes
-        if total_nodes % 3 == 0:
-            # If divisible by 3, need exactly 2/3
-            return (total_nodes * 2) // 3
-        else:
-            # If not divisible by 3, get as close to 2/3 as possible
-            return (total_nodes * 2 + 2) // 3  # This rounds up to get closest to 2/3
+        return total_nodes
 
     def check_node_count_victory(self) -> Optional[int]:
-        """Check if any player has reached the win threshold. Returns winner ID or None."""
+        """Node-count victory is disabled in king-only mode."""
         if self.game_ended:
             return self.winner_id
 
-        if getattr(self, "win_condition", "dominate") != "dominate":
-            return None
-            
-        # Only check after picking phase is complete
-        if self.phase == "picking":
-            return None
-            
-        win_threshold = self.calculate_win_threshold()
-        node_counts = self.get_player_node_counts()
-
-        # Collect players meeting or exceeding the threshold who are still active
-        candidates = [
-            pid for pid, count in node_counts.items()
-            if pid not in self.eliminated_players and count >= win_threshold
-        ]
-
-        if not candidates:
-            return None
-
-        # Determine top candidate and ensure there is no tie on node count
-        best_pid = max(candidates, key=lambda pid: node_counts.get(pid, 0))
-        best_count = node_counts.get(best_pid, 0)
-        if sum(1 for pid in candidates if node_counts.get(pid, 0) == best_count) > 1:
-            return None
-
-        self.game_ended = True
-        self.winner_id = best_pid
-        return best_pid
+        return None
 
     def check_money_victory(self) -> Optional[int]:
         """Check if any player has reached the money victory threshold."""
@@ -405,41 +368,7 @@ class GraphState:
                     payload["reason"] = reason
                 self.pending_edge_removals.append(payload)
 
-        if getattr(self, "lonely_node_mode", "nothing") == "sinks" and candidate_nodes:
-            for node_id in list(candidate_nodes):
-                node = self.nodes.get(node_id)
-                if node and not node.attached_edge_ids:
-                    self._queue_lonely_sink(node)
-
         return removed_ids
-
-    def _queue_lonely_sink(self, node: Node) -> None:
-        if not node:
-            return
-
-        king_owner_id = getattr(node, "king_owner_id", None)
-        win_condition = str(getattr(self, "win_condition", "dominate") or "").strip().lower()
-
-        removal_info = self.remove_node_and_edges(node.id)
-        if not removal_info:
-            return
-        payload: Dict[str, Any] = {
-            "nodeId": node.id,
-            "node": removal_info.get("node"),
-            "removedEdges": removal_info.get("removedEdges", []),
-            "playerId": node.owner,
-        }
-        if king_owner_id is not None and win_condition == "king":
-            payload["kingGraveOwnerId"] = int(king_owner_id)
-            self._handle_king_elimination(king_owner_id, None)
-        self.pending_lonely_sinks.append(payload)
-
-    def pop_pending_lonely_sinks(self) -> List[Dict[str, Any]]:
-        if not self.pending_lonely_sinks:
-            return []
-        events = list(self.pending_lonely_sinks)
-        self.pending_lonely_sinks = []
-        return events
 
     def record_node_movement(self, node_id: int, x: float, y: float) -> None:
         """Queue a node position update for inclusion in the next tick."""
@@ -577,7 +506,6 @@ class GraphState:
             "mode": self.mode,
             "modeSettings": dict(self.mode_settings or {}),
             "edgeWarp": edge_warp,
-            "winCondition": self.win_condition,
             "kingNodes": king_nodes_payload,
         }
 
@@ -661,7 +589,6 @@ class GraphState:
             "timerRemaining": timer_remaining,
             "mode": self.mode,
             "modeSettings": dict(self.mode_settings or {}),
-            "winCondition": self.win_condition,
             "kingNodes": king_nodes_payload,
         }
 
@@ -1043,12 +970,11 @@ class GraphState:
 
                 node.owner = new_owner
 
-                if getattr(self, "win_condition", "dominate") == "king":
-                    king_owner_id = getattr(node, "king_owner_id", None)
-                    if king_owner_id is not None and king_owner_id != new_owner:
-                        if self._handle_king_elimination(king_owner_id, node):
-                            king_victory_triggered = True
-                        # Continue processing other pending ownership changes to keep state consistent
+                king_owner_id = getattr(node, "king_owner_id", None)
+                if king_owner_id is not None and king_owner_id != new_owner:
+                    if self._handle_king_elimination(king_owner_id, node):
+                        king_victory_triggered = True
+                    # Continue processing other pending ownership changes to keep state consistent
 
         # All edges are now one-way only - no auto-adjustment needed
         
