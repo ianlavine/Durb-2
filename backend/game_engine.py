@@ -2155,18 +2155,12 @@ class GameEngine:
                 self._end_game()
                 return winner_id
 
-            # Check for zero nodes loss condition
-            winner_id = self.state.check_zero_nodes_loss()
-            if winner_id is not None:
-                self._end_game()
-                return winner_id
-
         # Check for timer expiration
         winner_id = self.state.check_timer_expiration(time.time())
         if winner_id is not None:
             self._end_game()
             return winner_id
-        
+
         return None
     
     def handle_local_targeting(self, token: str, target_node_id: int) -> bool:
@@ -2346,8 +2340,6 @@ class GameEngine:
                     "pendingGold": round(getattr(node, "pending_gold", 0.0), 3),
                     "isBrass": getattr(node, "node_type", "normal") == "brass",
                 },
-                "totalNodes": len(self.state.nodes),
-                "winThreshold": self.state.calculate_win_threshold(),
             }
         except GameValidationError:
             return None
@@ -2377,8 +2369,6 @@ class GameEngine:
             return {
                 "removedNodes": removed_nodes,
                 "removedEdges": removed_edges,
-                "totalNodes": len(self.state.nodes),
-                "winThreshold": self.state.calculate_win_threshold(),
             }
         except GameValidationError:
             return None

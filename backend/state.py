@@ -132,31 +132,10 @@ class GraphState:
         self.player_auto_attack[player.id] = False
         self.eliminated_players.discard(player.id)
 
-    def get_player_node_counts(self) -> Dict[int, int]:
-        """Return a mapping of player id to number of nodes they currently own."""
-        counts: Dict[int, int] = {pid: 0 for pid in self.players.keys()}
-        for node in self.nodes.values():
-            if node.owner is not None:
-                counts[node.owner] = counts.get(node.owner, 0) + 1
-        return counts
-
     def get_active_player_ids(self) -> List[int]:
         """Return the list of players still alive in the match."""
         return [pid for pid in self.players.keys() if pid not in self.eliminated_players]
 
-
-
-    def calculate_win_threshold(self) -> int:
-        """Calculate the number of nodes needed to win (unused in king-only mode)."""
-        total_nodes = len(self.nodes)
-        return total_nodes
-
-    def check_node_count_victory(self) -> Optional[int]:
-        """Node-count victory is disabled in king-only mode."""
-        if self.game_ended:
-            return self.winner_id
-
-        return None
 
     def check_money_victory(self) -> Optional[int]:
         """Check if any player has reached the money victory threshold."""
@@ -188,63 +167,22 @@ class GraphState:
         """Check if the game timer has expired. Returns winner ID or None."""
         if self.game_ended:
             return self.winner_id
-            
+
         # Only check timer after picking phase is complete
         if self.phase == "picking":
             return None
-            
+
         if self.game_start_time is None:
             return None
-            
+
         elapsed_time = current_time - self.game_start_time
-        if elapsed_time >= self.game_duration:
-            # Timer expired - determine winner by node count
-            node_counts = self.get_player_node_counts()
-            active_players = [pid for pid in self.players.keys() if pid not in self.eliminated_players]
-
-            if not active_players:
-                return None
-
-            winner_id = max(active_players, key=lambda pid: node_counts.get(pid, 0))
-            max_nodes = node_counts.get(winner_id, 0)
-            if sum(1 for pid in active_players if node_counts.get(pid, 0) == max_nodes) > 1:
-                return None
-
-            self.game_ended = True
-            self.winner_id = winner_id
-            return winner_id
-                
-        return None
-
-    def check_zero_nodes_loss(self) -> Optional[int]:
-        """Eliminate players with zero nodes. Returns winner ID when only one remains."""
-        if self.game_ended:
-            return self.winner_id
-        
-        # Only check for zero nodes loss after picking phase is complete
-        if self.phase == "picking":
+        if elapsed_time < self.game_duration:
             return None
-            
-        node_counts = self.get_player_node_counts()
-        newly_eliminated: List[int] = []
 
-        for player_id in self.players.keys():
-            if player_id in self.eliminated_players:
-                continue
-            if node_counts.get(player_id, 0) == 0:
-                self.eliminated_players.add(player_id)
-                newly_eliminated.append(player_id)
-
-        if newly_eliminated:
-            self.pending_eliminations.extend(newly_eliminated)
-
-        active_players = [pid for pid in self.players.keys() if pid not in self.eliminated_players]
-        if len(active_players) == 1:
-            self.game_ended = True
-            self.winner_id = active_players[0]
-            return self.winner_id
-
-        return None
+        # Temporary behavior: assign player 1 as winner when timer expires.
+        self.game_ended = True
+        self.winner_id = 1
+        return self.winner_id
 
     def _handle_king_elimination(self, king_owner_id: Optional[int], node: Optional["Node"] = None) -> bool:
         """Remove a player's crown tracking and mark elimination. Returns True if a winner emerges."""
@@ -460,8 +398,6 @@ class GraphState:
             except (TypeError, ValueError):
                 continue
         
-        # Calculate win threshold for progress bar
-        win_threshold = self.calculate_win_threshold()
         timer_remaining = None
         if self.game_start_time is not None:
             elapsed = max(0.0, current_time - self.game_start_time)
@@ -496,8 +432,6 @@ class GraphState:
             "phase": self.phase,
             "gold": gold_arr,
             "picked": picked_arr,
-            "winThreshold": win_threshold,
-            "totalNodes": len(self.nodes),
             "autoExpand": auto_expand_arr,
             "autoAttack": auto_attack_arr,
             "eliminatedPlayers": sorted(self.eliminated_players),
@@ -542,14 +476,10 @@ class GraphState:
             ]
             for nid, n in self.nodes.items()
         ]
-        counts = self.get_player_node_counts()
         gold_arr = [[pid, round(self.player_gold.get(pid, 0.0), 4)] for pid in self.players.keys()]
         picked_arr = [[pid, bool(self.players_who_picked.get(pid, False))] for pid in self.players.keys()]
         auto_expand_arr = [[pid, bool(self.player_auto_expand.get(pid, False))] for pid in self.players.keys()]
         auto_attack_arr = [[pid, bool(self.player_auto_attack.get(pid, False))] for pid in self.players.keys()]
-        
-        # Calculate win threshold for progress bar
-        win_threshold = self.calculate_win_threshold()
         eliminated_players = sorted(self.eliminated_players)
         recent_eliminations = list(self.pending_eliminations)
         self.pending_eliminations = []
@@ -575,12 +505,9 @@ class GraphState:
             "type": "tick",
             "edges": edges_arr,
             "nodes": nodes_arr,
-            "counts": counts,
-            "totalNodes": len(self.nodes),
             "phase": self.phase,
             "gold": gold_arr,
             "picked": picked_arr,
-            "winThreshold": win_threshold,
             "autoExpand": auto_expand_arr,
             "autoAttack": auto_attack_arr,
             "eliminatedPlayers": eliminated_players,

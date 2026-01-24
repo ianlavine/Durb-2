@@ -1687,8 +1687,6 @@ class MessageRouter:
                 payload = {
                     "type": "sandboxNodeCreated",
                     "node": result.get("node", {}),
-                    "totalNodes": result.get("totalNodes", 0),
-                    "winThreshold": result.get("winThreshold", 0),
                 }
                 await self._send_safe(websocket, json.dumps(payload))
 
@@ -1704,8 +1702,6 @@ class MessageRouter:
                     "type": "sandboxBoardCleared",
                     "removedNodes": [int(nid) for nid in result.get("removedNodes", [])],
                     "removedEdges": [int(eid) for eid in result.get("removedEdges", [])],
-                    "totalNodes": result.get("totalNodes", 0),
-                    "winThreshold": result.get("winThreshold", 0),
                 }
                 await self._send_safe(websocket, json.dumps(payload))
 
