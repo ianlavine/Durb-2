@@ -162,7 +162,7 @@
   let progressNameSegments = new Map();
   let winThreshold = 40; // default, will be updated from backend
   let totalNodes = 60; // default, will be updated from backend
-  let winCondition = 'dominate';
+  let winCondition = 'king';
   const kingNodesByPlayer = new Map();
   let kingSelectionActive = false;
   let kingSelectedNodeId = null;
@@ -460,7 +460,7 @@
         winCondition: 'king',
         kingCrownHealth: KING_CROWN_DEFAULT_HEALTH,
         kingMovementMode: 'basic',
-        lonelyNode: 'sinks',
+        lonelyNode: 'nothing',
         nodeGrowthRate: 0.7,
         startingFlowRate: 0.01,
         secondaryFlowRate: 0.75,
@@ -762,9 +762,8 @@
     return Math.max(STARTING_FLOW_MIN, Math.min(STARTING_FLOW_MAX, ratio));
   }
 
-  function normalizeWinCondition(value) {
-    if (typeof value !== 'string') return 'dominate';
-    return value.trim().toLowerCase() === 'king' ? 'king' : 'dominate';
+  function normalizeWinCondition(_) {
+    return 'king';
   }
 
   function normalizeKingMovementMode(value) {
@@ -938,7 +937,7 @@
     const ringRatioLabel = coerceRingRatio(settings.ringJuiceToGoldRatio);
     const ringPayoutLabel = coerceRingPayout(settings.ringPayoutGold);
     const startJuiceLabel = coerceStartingNodeJuice(settings.startingNodeJuice);
-    const winConLabel = normalizeWinCondition(settings.winCondition) === 'king' ? 'King' : 'Dominate';
+    const winConLabel = 'King';
     return `Win-Con ${winConLabel} · ${screenLabel} · ${brassLabel} · Break ${breakLabel} · ${startLabel} · ${startModeLabel} · ${costLabel} · Passive ${passiveLabel} · Neutral ${neutralLabel} · Ring ${ringRatioLabel}:${ringPayoutLabel} · Start ${startJuiceLabel}`;
   }
 
@@ -987,17 +986,11 @@
         } else {
           isActive = target === current;
         }
-      } else if (setting === 'winCondition') {
-        const normalized = normalizeWinCondition(value);
-        isActive = normalized === normalizeWinCondition(selectedSettings.winCondition);
       } else if (setting === 'kingMovementMode') {
         const normalized = normalizeKingMovementMode(value);
         isActive = normalized === normalizeKingMovementMode(selectedSettings.kingMovementMode);
       } else if (setting === 'bridgeCost') {
         isActive = Number(value) === currentCost;
-      } else if (setting === 'lonelyNode') {
-        const normalized = normalizeLonelyNodeMode(value);
-        isActive = normalized === normalizeLonelyNodeMode(selectedSettings.lonelyNode);
       }
       btn.classList.toggle('active', isActive);
     });
@@ -1112,21 +1105,13 @@
     } else {
       next.secondaryFlowRate = coerceSecondaryFlowRate(next.secondaryFlowRate);
     }
-    if (Object.prototype.hasOwnProperty.call(overrides, 'winCondition')) {
-      next.winCondition = normalizeWinCondition(overrides.winCondition);
-    } else {
-      next.winCondition = normalizeWinCondition(next.winCondition);
-    }
     if (Object.prototype.hasOwnProperty.call(overrides, 'kingMovementMode')) {
       next.kingMovementMode = normalizeKingMovementMode(overrides.kingMovementMode);
     } else {
       next.kingMovementMode = normalizeKingMovementMode(next.kingMovementMode);
     }
-    if (Object.prototype.hasOwnProperty.call(overrides, 'lonelyNode')) {
-      next.lonelyNode = normalizeLonelyNodeMode(overrides.lonelyNode);
-    } else {
-      next.lonelyNode = normalizeLonelyNodeMode(next.lonelyNode);
-    }
+    next.winCondition = 'king';
+    next.lonelyNode = 'nothing';
 
     next.brass = normalizeBrassSetting(next.brass);
 
@@ -1180,9 +1165,7 @@
       secondaryFlowRate: coerceSecondaryFlowRate(selectedSettings.secondaryFlowRate),
       baseMode: selectedMode,
       derivedMode: selectedMode,
-      winCondition: selectedSettings.winCondition || 'dominate',
       kingMovementMode: normalizeKingMovementMode(selectedSettings.kingMovementMode),
-      lonelyNode: normalizeLonelyNodeMode(selectedSettings.lonelyNode),
     };
   }
 
@@ -1210,8 +1193,6 @@
     if (Object.prototype.hasOwnProperty.call(payload, 'nodeGrowthRate')) overrides.nodeGrowthRate = payload.nodeGrowthRate;
     if (Object.prototype.hasOwnProperty.call(payload, 'startingFlowRate')) overrides.startingFlowRate = payload.startingFlowRate;
     if (Object.prototype.hasOwnProperty.call(payload, 'secondaryFlowRate')) overrides.secondaryFlowRate = payload.secondaryFlowRate;
-    if (typeof payload.lonelyNode === 'string') overrides.lonelyNode = payload.lonelyNode;
-    if (Object.prototype.hasOwnProperty.call(payload, 'winCondition')) overrides.winCondition = payload.winCondition;
     if (Object.prototype.hasOwnProperty.call(payload, 'kingMovementMode')) overrides.kingMovementMode = payload.kingMovementMode;
     applySelectedSettings(overrides);
   }
@@ -4433,7 +4414,7 @@ function clearBridgeSelection() {
 
     gameMode = normalizeMode(msg.mode || 'basic');
     const initWinCon = msg.winCondition ?? (msg.modeSettings && msg.modeSettings.winCondition);
-    winCondition = normalizeWinCondition(initWinCon || 'dominate');
+    winCondition = normalizeWinCondition(initWinCon || 'king');
     if (msg.modeSettings) {
       syncSelectedSettingsFromPayload(msg.modeSettings);
       selectedMode = deriveModeFromSettings(selectedSettings);
@@ -6123,7 +6104,7 @@ function fallbackRemoveEdgesForNode(nodeId) {
     if (typeof msg?.winCondition === 'string') {
       winCondition = normalizeWinCondition(msg.winCondition);
     } else {
-      winCondition = 'dominate';
+      winCondition = 'king';
     }
     clearKingSelection({ skipRedraw: true });
     nodeJuiceTexts.forEach((text) => {
