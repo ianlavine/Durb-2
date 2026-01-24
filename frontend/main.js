@@ -9984,31 +9984,29 @@ function fallbackRemoveEdgesForNode(nodeId) {
       return;
     }
 
-    if (winCondition !== 'dominate') {
-      progressBarInner.innerHTML = '';
-      progressSegments.clear();
-      const notice = document.createElement('div');
-      notice.className = 'winConNotice';
-      notice.textContent = 'Kill the enemy king or Max out Money';
-      notice.style.flex = '1';
-      notice.style.textAlign = 'center';
-      progressBarInner.appendChild(notice);
-      progressBarInner.style.justifyContent = 'center';
-      if (progressBar) {
-        progressBar.style.display = nodes.size > 0 ? 'block' : 'none';
-        progressBar.style.background = 'transparent';
-        progressBar.style.border = 'none';
-        progressBar.style.boxShadow = 'none';
-      }
-      if (progressMarkerLeft) progressMarkerLeft.style.display = 'none';
-      if (progressMarkerRight) progressMarkerRight.style.display = 'none';
-      if (progressNameContainer) {
-        progressNameContainer.innerHTML = '';
-        progressNameContainer.style.display = 'none';
-      }
-      progressNameSegments.clear();
-      return;
+    progressBarInner.innerHTML = '';
+    progressSegments.clear();
+    const notice = document.createElement('div');
+    notice.className = 'winConNotice';
+    notice.textContent = 'Kill the enemy king or Max out Money';
+    notice.style.flex = '1';
+    notice.style.textAlign = 'center';
+    progressBarInner.appendChild(notice);
+    progressBarInner.style.justifyContent = 'center';
+    if (progressBar) {
+      progressBar.style.display = nodes.size > 0 ? 'block' : 'none';
+      progressBar.style.background = 'transparent';
+      progressBar.style.border = 'none';
+      progressBar.style.boxShadow = 'none';
     }
+    if (progressMarkerLeft) progressMarkerLeft.style.display = 'none';
+    if (progressMarkerRight) progressMarkerRight.style.display = 'none';
+    if (progressNameContainer) {
+      progressNameContainer.innerHTML = '';
+      progressNameContainer.style.display = 'none';
+    }
+    progressNameSegments.clear();
+    return;
 
     const orderedIds = playerOrder.length ? playerOrder : Array.from(players.keys()).sort((a, b) => a - b);
     const activeIds = orderedIds.filter((id) => players.has(id) && !eliminatedPlayers.has(id));
